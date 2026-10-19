@@ -64,3 +64,31 @@ def test_final_export_respects_requested_duration_with_valid_audio(tmp_path, sou
     assert audio["sample_rate"] == "48000"
     assert audio["channels"] == 2
     ffmpeg("-xerror", "-i", target, "-f", "null", "-")
+
+
+def test_mixed_sources_and_freeze_keep_narration_in_sync(tmp_path):
+    import numpy as np
+
+    from movie_pipeline.shots import get_frame
+
+    moving = tmp_path / "moving.mp4"
+    blue = tmp_path / "blue.mp4"
+    audio = tmp_path / "voice.wav"
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", 6, "-c:v", "libx264", "-preset", "ultrafast", moving)
+    ffmpeg("-f", "lavfi", "-i", "color=c=blue:size=640x360:rate=30", "-t", 3, "-c:v", "libx264", "-preset", "ultrafast", blue)
+    ffmpeg("-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000", "-t", 2.4, audio)
+    target = tmp_path / "montage.mp4"
+    speech_video(moving, audio, [
+        {"start": 3, "duration": 1.2, "freeze": 0.4},
+        {"source": str(blue), "start": 1, "duration": 1.2},
+    ], target, None, tmp_path / "render")
+    assert abs(duration(target)-duration(audio)) < 0.09
+    held_a = np.asarray(get_frame(target, 0.9), dtype=float)
+    held_b = np.asarray(get_frame(target, 1.1), dtype=float)
+    assert np.abs(held_a-held_b).mean() < 1.0
+    earlier = np.asarray(get_frame(target, 0.3), dtype=float)
+    assert np.abs(earlier-held_a).mean() > 2
+    next_film = np.asarray(get_frame(target, 1.6), dtype=float)
+    assert next_film[:, :, 2].mean() > 240
+    assert next_film[:, :, 0].mean() < 10
+    ffmpeg("-xerror", "-i", target, "-f", "null", "-")

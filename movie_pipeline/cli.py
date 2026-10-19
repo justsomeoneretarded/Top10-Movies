@@ -74,7 +74,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .render import finish, label_image, speech_video, thumbnails, trailer_video
     from .research import Research
     from .script import Writer
-    from .shots import ShotSelector, analyse
+    from .shots import ShotSelector, analyse, intro_montage
     from .voice import Narrator, captions, spoken_coverage
 
     if not title.strip() or len(title) > 200 or not brief.strip() or len(brief) > 4000:
@@ -189,18 +189,23 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         chapters.append({"start": offset, "title": chapter})
         label = work / f"label-{section_index}.png"
         label_image(label, film["title"] if is_film else title, film_index+1 if is_film else None, film["year"] if is_film else None)
+        montage = None
+        if section["kind"] == "intro":
+            montage = intro_montage(selector, trailers, shot_sets,
+                                    [duration(speech[(section_index, p)]) for p in range(len(section["paragraphs"]))],
+                                    title + ". " + brief, action)
         midpoint = max(1, len(section["paragraphs"]) // 2)
         beat = choose_beat(trailer_cues[film_index], shot_sets[film_index], duration(trailer), action, maximum=max_beat) if is_film and max_beat else None
         for paragraph_index, text in enumerate(section["paragraphs"]):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
-            chosen = selector.choose(trailer, shot_sets[film_index], text, duration(audio), action)
+            chosen = montage[paragraph_index] if montage is not None else selector.choose(trailer, shot_sets[film_index], text, duration(audio), action)
             path = work / f"part-{len(parts):03}.mp4"
             speech_video(trailer, audio, chosen, path, label if paragraph_index == 0 else None, work / f"render-{len(parts):03}")
             seconds = duration(path)
             for cue in aligned[(section_index, paragraph_index)]:
                 all_cues.append({"start": offset + cue["start"], "end": offset + min(cue["end"], seconds), "text": cue["text"]})
-            timeline.append({"start": offset, "duration": seconds, "type": "narration", "film": film["title"], "text": text, "shots": chosen})
+            timeline.append({"start": offset, "duration": seconds, "type": "narration", "film": "Intro montage" if montage is not None else film["title"], "films": sorted({films[cut.get("film_index", film_index)]["title"] for cut in chosen}), "text": text, "shots": chosen})
             parts.append(path)
             offset += seconds
             if beat and paragraph_index + 1 == midpoint:

@@ -70,7 +70,10 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
             continue
         out = work / f"shot-{index:03}.mp4"
         filters = f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},setsar=1,fps={FPS}"
-        inputs = ["-ss", shot["start"], "-i", source]
+        hold_frames = min(max(0, round(shot.get("freeze", 0)*FPS)), max(0, frames-1))
+        if hold_frames:
+            filters += f",trim=end_frame={frames-hold_frames},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={(hold_frames+1)/FPS}"
+        inputs = ["-ss", shot["start"], "-i", shot.get("source", source)]
         if label and index == 0:
             inputs += ["-i", label]
             filters = f"[0:v]{filters}[v];[v][1:v]overlay=0:0:enable='lt(t,3.5)'[out]"
