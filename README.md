@@ -155,3 +155,19 @@ Editing is for pacing and original commentary. Cuts, shuffling, frame holds, ove
 Speaking-rate measurements are now logged as diagnostics. A fast or slow delivery alone does not reject a segment: the transcription stage checks whether the words were actually spoken, and final duration control handles overall pacing. Voice synthesis still rejects empty, silent, non-finite, or extremely long/runaway output after bounded retries.
 
 A new workflow run can restore the latest earlier production checkpoint cache, including footage and completed narration, when GitHub retains it. Each job's research/script/audio paths are keyed by its inputs and selected voice; different inputs do not reuse the wrong script or narrator. Reuse is best effort, depends on the restored cache containing the matching job, and does not guarantee zero repeated work. Neither cookies nor voice secrets are included in this cache.
+
+## Telegram completion reminder
+
+After the video is generated, validated, and successfully uploaded to GitHub Artifacts, the workflow can send one plain-text Telegram reminder with the recommended title and GitHub run link. It does not upload the video or other files to Telegram. Failed video runs do not send a success reminder. Missing credentials or a Telegram delivery error do not fail an otherwise successful video job.
+
+One-time setup:
+
+1. In Telegram, open the official **@BotFather** and send `/newbot`. Choose a name and a unique bot username. Copy the bot token privately.
+2. Open your new bot's chat and press **Start**, or send `/start`. Bots cannot initiate a private conversation until you do this.
+3. Get your chat ID: in a private browser session open `https://api.telegram.org/botYOUR_TOKEN/getUpdates`, replacing `YOUR_TOKEN` locally with your token. Find `message` → `chat` → `id` for your own `/start` message. If the result is empty, send another message to your bot and refresh. Never share the token-bearing URL or response; it may contain private chat details. Close the private browser afterward.
+4. In repository **Settings → Secrets and variables → Actions**, add:
+   - `TELEGRAM_BOT_TOKEN`: the token from BotFather.
+   - `TELEGRAM_CHAT_ID`: your numeric chat ID.
+5. Start a new Generate Video run on **main**. A reminder is sent only after its finished package uploads successfully.
+
+If getUpdates reports a webhook conflict, use a dedicated new bot for this workflow instead of changing another application's bot. If a token is exposed, revoke it through BotFather and replace the GitHub secret. The linked artifacts retain the repository's GitHub access requirements and expire after seven days. Delivery is best effort: a network failure can prevent confirmation, and re-running a successful production job can send another reminder.
