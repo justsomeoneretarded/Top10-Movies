@@ -1,0 +1,105 @@
+name: Generate Video
+run-name: "Video — ${{ inputs.title }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "Video title / topic (ranking follows your list, best first)"
+        required: true
+        type: string
+      description:
+        description: "Creative brief: style, scenes, thumbnail, narrator (Warguy / Kit Laser / Female)"
+        required: true
+        type: string
+      movies:
+        description: "Titles and years, separated by semicolons: Arrival (2016); Inception (2010)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: video-production
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    env:
+      VIDEO_TITLE: ${{ inputs.title }}
+      VIDEO_BRIEF: ${{ inputs.description }}
+      MOVIE_LIST: ${{ inputs.movies }}
+      TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
+      VOICE_WARGUY_B64: ${{ secrets.VOICE_WARGUY_B64 }}
+      VOICE_KIT_LASER_B64: ${{ secrets.VOICE_KIT_LASER_B64 }}
+      VOICE_FEMALE_B64: ${{ secrets.VOICE_FEMALE_B64 }}
+      # Turbo prioritizes narration quality. Set repository variable TTS_MODEL=nano for faster CPU runs.
+      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      SCRIPT_MODEL: qwen3:1.7b
+      OLLAMA_HOST: 127.0.0.1:11435
+      OLLAMA_URL: http://127.0.0.1:11435
+      HF_HOME: ${{ github.workspace }}/work/models/huggingface
+      OLLAMA_MODELS: ${{ github.workspace }}/work/models/ollama
+      TOKENIZERS_PARALLELISM: 'false'
+      OMP_NUM_THREADS: '4'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: System dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1 fonts-dejavu-core zstd
+      - name: Install light dependencies and validate inputs
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m scripts.preflight
+      - name: Restore model cache
+        uses: actions/cache@v4
+        with:
+          path: work/models
+          key: models-cpu-v1-${{ runner.os }}-${{ env.TTS_MODEL }}
+      - name: Restore job checkpoints and footage
+        uses: actions/cache@v4
+        with:
+          path: |
+            work/jobs
+            work/footage
+          key: production-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: production-v1-${{ github.run_id }}-
+      - name: Install CPU speech model and analysis dependencies
+        run: |
+          python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e '.[voice]'
+      - name: Prepare local script model
+        run: bash scripts/bootstrap_ollama.sh
+      - name: Produce the complete package
+        run: python -m movie_pipeline.cli
+      - name: Downloadable video package
+        uses: actions/upload-artifact@v4
+        with:
+          name: movie-video-${{ github.run_number }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save checkpoints after a failed run
+        if: failure()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            work/jobs
+            work/footage
+          key: production-v1-${{ github.run_id }}-${{ github.run_attempt }}-failed
+      - name: Remove private voice references
+        if: always()
+        run: rm -rf assets/voices
