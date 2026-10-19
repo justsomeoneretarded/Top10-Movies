@@ -89,12 +89,13 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
     narrator = narrator_from_brief(brief)
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
-    # Job-specific paths prevent a resumed job from mixing different input or narrator settings.
-    run_key = key("pipeline-v2-duration", title, brief, movies, narrator, os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    # Include the writing model so a model upgrade never reuses an old model's script.
+    script_model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
+    run_key = key("pipeline-v3-script-model", title, brief, movies, narrator, script_model, os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
-    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator, "duration": vars(spec)})
+    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator, "duration": vars(spec), "script_model": script_model})
     research = Research()
     facts_path = work / "research.json"
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
@@ -107,6 +108,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         shot_sets.append(analyse(trailer, trailer.with_suffix(".shots.json")))
 
     writer = Writer(cache_dir=work / "script-sections")
+    print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
     script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks)
     save_json(script_path, script)

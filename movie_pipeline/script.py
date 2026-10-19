@@ -16,7 +16,7 @@ class Writer:
     def __init__(self, cache_dir: Path | None = None):
         self.cache_dir = cache_dir
         self.url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-        self.model = os.getenv("SCRIPT_MODEL", "qwen3:1.7b")
+        self.model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
 
     def ask(self, prompt: str, schema: dict) -> dict:
         response = requests.post(self.url + "/api/chat", json={

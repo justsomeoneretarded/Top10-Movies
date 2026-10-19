@@ -8,7 +8,7 @@ fi
 ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
 for attempt in $(seq 1 60); do
   if curl --fail --silent "${OLLAMA_URL:-http://127.0.0.1:11434}/api/tags" >/dev/null; then
-    ollama pull "${SCRIPT_MODEL:-qwen3:1.7b}"
+    ollama pull "${SCRIPT_MODEL:-qwen3:4b}"
     exit 0
   fi
   sleep 1

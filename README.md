@@ -64,7 +64,7 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 2. Resolve title/year against TMDB movies and TV. If the search year differs, check dated festival/regional release records. If still unresolved, verify an exact title and publication year through Wikidata, then map its IMDb ID back to TMDB. Record the evidence; never accept a nearby year without a supporting date. Reject genuinely ambiguous matches.
 3. Discover TMDB-linked YouTube trailers/teasers. If TMDB has no candidates, search YouTube and require verified-channel metadata plus a matching title. Reject obvious fan/concept/reaction videos.
 4. Download with yt-dlp and FFmpeg, then cache footage. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
-5. Generate source-grounded, original recommendation scripts with `qwen3:1.7b` through local Ollama. Use word counts as planning guidance, not hard paragraph failure limits; no fabricated ratings, streaming availability, or awards are requested.
+5. Generate source-grounded, original recommendation scripts with `qwen3:4b` through local Ollama. Use word counts as planning guidance, not hard paragraph failure limits; no fabricated ratings, streaming availability, or awards are requested.
 6. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate speech in small chunks and retry faulty speech. Up to two overall script rewrites adapt the content to the requested runtime using measured narration pace.
 7. Transcribe narration and trailer dialogue with CPU/int8 faster-whisper. Reject substantially missing/repeated narration and automatically regenerate bad segments, with bounded retries.
 8. Sample scene changes and motion, embed frames/text with CLIP, and choose relevant shots with reuse and original-sequence penalties. Build the intro from multiple titles, covering at least half (rounded up). Action-oriented intros favor action-related imagery and short cuts.
@@ -100,7 +100,7 @@ pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.
 pip install -e '.[voice]'
 ollama serve
 # In another terminal:
-ollama pull qwen3:1.7b
+ollama pull qwen3:4b
 export TMDB_READ_TOKEN='your-read-token'
 # Narrator reference clips are already included in assets/voices/.
 movie-pipeline --title 'Top 2 Sci-Fi Movies' \
