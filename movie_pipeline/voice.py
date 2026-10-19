@@ -22,6 +22,7 @@ class Narrator:
         self.cache.mkdir(parents=True, exist_ok=True)
 
     def speak(self, text: str, attempt_offset: int = 0) -> Path:
+        import numpy as np
         import soundfile as sf
         import torch
         token = key("voice-v1", text, self.reference_hash, self.model_name)
@@ -33,15 +34,22 @@ class Narrator:
             with torch.inference_mode():
                 wave = self.model.generate(text)
             raw = self.cache / f"{token}.raw.wav"
-            sf.write(raw, wave.squeeze().detach().cpu().numpy(), self.model.sr)
+            samples = wave.squeeze().detach().cpu().numpy()
+            if not np.isfinite(samples).all() or not samples.size or np.max(np.abs(samples)) < 1e-5:
+                print(f"Voice attempt {attempt+1}: empty, silent, or invalid audio; retrying.", flush=True)
+                continue
+            sf.write(raw, samples, self.model.sr)
             ffmpeg("-i", raw, "-af", "loudnorm=I=-18:TP=-2:LRA=9", "-ar", "48000", "-ac", "1", output)
             raw.unlink(missing_ok=True)
             seconds = duration(output)
-            wpm = len(text.split()) * 60 / seconds
-            if 80 <= wpm <= 230:
+            # Rate is diagnostic only. Actual missing/repeated speech is checked by transcription.
+            if 0.15 <= seconds <= max(30, len(text.split())*2+10):
+                wpm = len(text.split()) * 60 / seconds
+                print(f"Voice generated: {len(text.split())} words, {seconds:.1f}s, {wpm:.0f} words/min; transcript verification follows.", flush=True)
                 return output
+            print(f"Voice attempt {attempt+1}: unusable audio duration {seconds:.1f}s; retrying.", flush=True)
             output.unlink(missing_ok=True)
-        raise PipelineError("Narration duration is implausible after three attempts; stopped rather than shipping broken speech.")
+        raise PipelineError("Voice generation returned empty, silent, invalid, or runaway audio after three attempts. Speaking speed alone does not cause this failure.")
 
     def close(self):
         del self.model

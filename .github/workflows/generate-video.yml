@@ -77,7 +77,9 @@ jobs:
             work/jobs
             work/footage
           key: production-v1-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: production-v1-${{ github.run_id }}-
+          restore-keys: |
+            production-v1-${{ github.run_id }}-
+            production-v1-
       - name: Install CPU speech model and analysis dependencies
         run: |
           python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu

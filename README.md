@@ -149,3 +149,9 @@ The opening is a montage drawn from at least half the supplied movies/shows, rou
 Movie sections also use selected shots in a new order, with penalties against repeating a shot or continuing the trailer's original sequence when alternatives exist. Brief freeze-frame accents appear occasionally. Freeze holds replace part of a visual slot rather than extending it, so narration, subtitles, chapter times, and requested runtime remain synchronized. Intelligible trailer-dialogue inserts retain their selected short audio/video context.
 
 Editing is for pacing and original commentary. Cuts, shuffling, frame holds, overlays, or music do not by themselves establish fair use, prevent Content ID claims, or guarantee YouTube monetization. Rights and YouTube's reused-content assessment are separate from the edit effects.
+
+### Voice speed and failed-run recovery
+
+Speaking-rate measurements are now logged as diagnostics. A fast or slow delivery alone does not reject a segment: the transcription stage checks whether the words were actually spoken, and final duration control handles overall pacing. Voice synthesis still rejects empty, silent, non-finite, or extremely long/runaway output after bounded retries.
+
+A new workflow run can restore the latest earlier production checkpoint cache, including footage and completed narration, when GitHub retains it. Each job's research/script/audio paths are keyed by its inputs and selected voice; different inputs do not reuse the wrong script or narrator. Reuse is best effort, depends on the restored cache containing the matching job, and does not guarantee zero repeated work. Neither cookies nor voice secrets are included in this cache.
