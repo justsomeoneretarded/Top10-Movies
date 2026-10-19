@@ -61,7 +61,7 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 ## Production stages
 
 1. Validate inputs and the selected voice before downloading models.
-2. Resolve title/year against TMDB movies and TV; reject ambiguous matches.
+2. Resolve title/year against TMDB movies and TV. If the search year differs, check dated festival/regional release records. If still unresolved, verify an exact title and publication year through Wikidata, then map its IMDb ID back to TMDB. Record the evidence; never accept a nearby year without a supporting date. Reject genuinely ambiguous matches.
 3. Discover TMDB-linked YouTube trailers/teasers. If TMDB has no candidates, search YouTube and require verified-channel metadata plus a matching title. Reject obvious fan/concept/reaction videos.
 4. Download with yt-dlp and FFmpeg, then cache footage. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
 5. Generate source-grounded, original recommendation scripts with `qwen3:1.7b` through local Ollama. Validate word counts; no fabricated ratings, streaming availability, or awards are requested.
@@ -123,3 +123,7 @@ Optional authenticated access:
 The workflow writes cookies to a permission-restricted file under `RUNNER_TEMP`, outside footage/model caches and output artifacts, and removes the file afterward. Cookies remain private even though narrator reference clips are public. Use authenticated downloads only where permitted by the source's terms and applicable rights.
 
 **This is an authentication option, not a guaranteed fix or CAPTCHA bypass.** Sessions expire, and GitHub-hosted IP addresses may remain blocked even with valid cookies. In that case a self-hosted runner on a network where normal permitted access works, or another authorized footage source, is required. There is no dependable promise of unattended, free YouTube downloading forever from GitHub-hosted runners.
+
+### Release-year differences and independent identity lookup
+
+A title may premiere at a festival in one year and reach theaters in the next. The resolver preserves the year you entered and checks supporting release dates before rejecting it. If needed, a keyless Wikidata lookup checks the English label/aliases, publication-year claims, and IMDb identifier. TMDB's IMDb-ID lookup then retrieves the same film's metadata and trailer references. This is an independent **identity/year check**, not scraping IMDb reviews or plots. Synopses and trailer references still come from TMDB. Source outages and incomplete claims can still prevent verification; logs report that without assuming the input is wrong. No additional account or API secret is required.
