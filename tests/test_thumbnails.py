@@ -13,7 +13,6 @@ from movie_pipeline.thumbnails import (
     Cutouts,
     Pollinations,
     build_thumbnails,
-    netflix_requested,
     normalize_concepts,
 )
 
@@ -82,11 +81,6 @@ def test_bad_concepts_cannot_pick_nonexistent_film_indices():
     assert all(0 <= n < 2 for c in concepts for n in c["subject_indices"])
 
 
-@pytest.mark.parametrize("title, brief, expected", [("Top Netflix Movies", "Action", True), ("Top Movies", "Do not use Netflix branding", False), ("Top Movies", "Cinematic", False)])
-def test_netflix_badge_requires_relevant_brief(title, brief, expected):
-    assert netflix_requested(title, brief) == expected
-
-
 def test_three_redesigned_outputs_with_one_netflix_variant(monkeypatch, tmp_path):
     frame = Image.new("RGB", (640,360), "blue")
     ImageDraw.Draw(frame).ellipse((210,40,430,340), fill="#e3af87")
@@ -97,7 +91,7 @@ def test_three_redesigned_outputs_with_one_netflix_variant(monkeypatch, tmp_path
     monkeypatch.setattr("movie_pipeline.thumbnails.Pollinations", lambda cache: provider)
     build_thumbnails([Path("a.mp4"),Path("b.mp4")], [[{"motion":10}]]*2,
                      ["ACTION PICKS", "WATCH THESE", "THE NEXT WATCH"], tmp_path/"output",
-                     title="Top Netflix Action Movies", work=tmp_path/"work", use_api=True)
+                     title="Top Action Movies", work=tmp_path/"work", use_api=True)
     report = json.loads((tmp_path/"work/thumbnail-report.json").read_text())
     assert [r["netflix_badge"] for r in report] == [False,False,True]
     assert [r["style"] for r in report] == ["cinematic-minimal","bold-text","cinematic-minimal"]

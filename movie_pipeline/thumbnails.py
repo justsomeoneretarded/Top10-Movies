@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import random
-import re
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -47,13 +46,6 @@ def normalize_concepts(concepts, title: str, brief: str, count: int) -> list[dic
         if concept.get("layout") in ("hero", "duo", "diagonal"):
             defaults[i]["layout"] = concept["layout"]
     return defaults
-
-
-def netflix_requested(title: str, brief: str) -> bool:
-    text = (title + " " + brief).casefold().replace("’", "'")
-    if re.search(r"(?:no|without|avoid|don't use|do not use)\s+(?:the\s+)?netflix", text):
-        return False
-    return bool(re.search(r"\bnetflix\b", text))
 
 
 def netflix_badge(canvas: Image.Image):
@@ -274,7 +266,7 @@ def build_thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: lis
                 y += size+8
             draw.rounded_rectangle((40, 30, 225, 100), radius=12, fill="#e50914")
             draw.text((60, 42), f"TOP {len(trailers)}", font=font(32), fill="white")
-        branded = variant == 2 and netflix_requested(title, brief)
+        branded = variant == 2
         if branded:
             netflix_badge(canvas)
         if corner is not None:
