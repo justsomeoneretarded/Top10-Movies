@@ -9,7 +9,7 @@ on:
         required: true
         type: string
       description:
-        description: "Creative brief: style, scenes, thumbnail, narrator (Warguy / Kit Laser / Female)"
+        description: "Creative brief: duration (e.g. 5-minute video), style, scenes, thumbnail, narrator"
         required: true
         type: string
       movies:

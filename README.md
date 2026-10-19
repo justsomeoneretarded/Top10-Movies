@@ -1,6 +1,6 @@
 # Top10 Movies
 
-An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive an 8–10 minute 720p countdown, uploadable subtitles, description, recommended title, and three thumbnails.
+An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive a 720p countdown at your requested duration (8–10 minutes by default), uploadable subtitles, description, recommended title, and three thumbnails.
 
 **No paid inference APIs.** Scriptwriting uses a local Ollama model; narration uses Chatterbox; shot matching uses CLIP; captions use faster-whisper. GitHub account usage/storage limits still apply. This is an initial implementation, not a guarantee of editorial quality or successful downloads for every title. End-to-end production must be verified on your runner with your configured secrets.
 
@@ -64,12 +64,12 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 2. Resolve title/year against TMDB movies and TV. If the search year differs, check dated festival/regional release records. If still unresolved, verify an exact title and publication year through Wikidata, then map its IMDb ID back to TMDB. Record the evidence; never accept a nearby year without a supporting date. Reject genuinely ambiguous matches.
 3. Discover TMDB-linked YouTube trailers/teasers. If TMDB has no candidates, search YouTube and require verified-channel metadata plus a matching title. Reject obvious fan/concept/reaction videos.
 4. Download with yt-dlp and FFmpeg, then cache footage. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
-5. Generate source-grounded, original recommendation scripts with `qwen3:1.7b` through local Ollama. Validate word counts; no fabricated ratings, streaming availability, or awards are requested.
-6. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate paragraph-sized audio, check duration, and automatically retry faulty speech. One bounded script rewrite adapts length to measured narration pace if needed.
+5. Generate source-grounded, original recommendation scripts with `qwen3:1.7b` through local Ollama. Use word counts as planning guidance, not hard paragraph failure limits; no fabricated ratings, streaming availability, or awards are requested.
+6. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate speech in small chunks and retry faulty speech. Up to two overall script rewrites adapt the content to the requested runtime using measured narration pace.
 7. Transcribe narration and trailer dialogue with CPU/int8 faster-whisper. Reject substantially missing/repeated narration and automatically regenerate bad segments, with bounded retries.
 8. Sample scene changes and motion, embed frames/text with CLIP, and choose relevant shots with reuse penalties. An action-oriented brief favors motion and faster cuts.
 9. Render clean cuts, rank graphics, short trailer-audio breaks, and an original procedural instrumental bed. Narration stops during trailer breaks; source audio is removed under narration. Music ducks under speech.
-10. Export H.264/AAC at 1280×720/30fps with normalized audio. If needed, use modest pitch-preserving tempo adjustment; stop if natural correction cannot reach 8–10 minutes.
+10. Export H.264/AAC at 1280×720/30fps with normalized audio. If needed, use modest pitch-preserving tempo adjustment; stop if the requested duration still cannot be reached naturally after automatic rewrites.
 11. Render three distinct frame-based thumbnail layouts with readable typography. There is no paid image generation; no diffusion model is required.
 12. Validate required outputs, media streams, duration, thumbnail dimensions/size, and a full FFmpeg decode before uploading the package.
 
@@ -127,3 +127,17 @@ The workflow writes cookies to a permission-restricted file under `RUNNER_TEMP`,
 ### Release-year differences and independent identity lookup
 
 A title may premiere at a festival in one year and reach theaters in the next. The resolver preserves the year you entered and checks supporting release dates before rejecting it. If needed, a keyless Wikidata lookup checks the English label/aliases, publication-year claims, and IMDb identifier. TMDB's IMDb-ID lookup then retrieves the same film's metadata and trailer references. This is an independent **identity/year check**, not scraping IMDb reviews or plots. Synopses and trailer references still come from TMDB. Source outages and incomplete claims can still prevent verification; logs report that without assuming the input is wrong. No additional account or API secret is required.
+
+## Request a different video length
+
+Include one runtime instruction in the description/creative brief:
+
+- `Make a 5-minute video. Use Warguy.`
+- `Aim for 12–15 minutes. Use Kit Laser.`
+- `Duration: 90 seconds. Use the female voice.`
+
+No code changes or additional workflow input is required. If duration is omitted, the default remains 8–10 minutes. Single durations allow about 5% variation; explicit ranges use their stated bounds. Use one duration instruction and remove conflicting old instructions. Durations below 30 seconds are not supported by this countdown format.
+
+The script budget scales with runtime, movie count, and planned trailer-audio pauses. Individual narration sections can vary in word count without aborting the job. Only empty/unusable narration is rejected after retries. Oversized paragraphs are split into smaller TTS chunks without deleting words. After narration, actual speech duration drives up to two whole-script adjustments; final modest tempo correction and duration validation use the requested runtime. Chapter and subtitle timing follow any final tempo change.
+
+This does not promise unlimited video lengths on free hardware: longer videos require more generation/render time and storage, and the GitHub job timeout and account quotas still apply. No live model run has yet verified this duration feature; automated tests cover parsing, script-budget scaling, and real media exports.

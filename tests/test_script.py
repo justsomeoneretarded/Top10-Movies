@@ -26,11 +26,10 @@ def test_invalid_closing_uses_bounded_fallback(draft):
     assert "countdown" in result[0]
 
 
-def test_movie_sections_still_require_substantial_narration():
+def test_movie_length_variation_uses_best_draft_without_aborting():
     writer = Writer()
     writer.ask = Mock(return_value={"paragraphs": ["A short recommendation."]})
-    with pytest.raises(PipelineError):
-        writer.narration("Top 5", "Action", "rank 1: Example", {}, 216)
+    assert writer.narration("Top 5", "Action", "rank 1: Example", {}, 216) == ["A short recommendation."]
     assert writer.ask.call_count == 3
 
 
@@ -59,5 +58,13 @@ def test_opening_can_be_natural_length():
     text = " ".join(["word"] * 90) + "."
     writer.ask = Mock(return_value={"paragraphs": [text]})
     result = writer.narration("Top 5", "Action", "a punchy opening hook, without listing every title", {}, 65)
-    assert result == [text]
+    assert " ".join(result) == text
+    assert all(len(p.split()) <= 65 for p in result)
     assert writer.ask.call_count == 1
+
+
+def test_empty_movie_text_is_still_an_error():
+    writer = Writer()
+    writer.ask = Mock(return_value={"paragraphs": []})
+    with pytest.raises(PipelineError, match="No usable narration text"):
+        writer.narration("Top 5", "Action", "rank 1: Example", {}, 216)

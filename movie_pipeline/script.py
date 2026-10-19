@@ -9,6 +9,7 @@ from pathlib import Path
 import requests
 
 from .core import PipelineError, key, save_json
+from .timing import narration_words
 
 
 class Writer:
@@ -32,8 +33,13 @@ class Writer:
     def narration(self, topic: str, brief: str, label: str, facts: dict, target: int) -> list[str]:
         closing = label == "a short closing thought and one audience question"
         opening = label == "a punchy opening hook, without listing every title"
-        minimum, maximum = (18, 65) if closing else ((25, 110) if opening else (round(target * 0.8), round(target * 1.2)))
-        cache = self.cache_dir / f"{key('narration-v3', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
+        if closing:
+            minimum, maximum = max(3, min(18, round(target*0.55))), max(8, min(65, round(target*1.8)))
+        elif opening:
+            minimum, maximum = max(3, min(25, round(target*0.5))), max(10, min(110, round(target*1.7)))
+        else:
+            minimum, maximum = round(target*0.8), round(target*1.2)
+        cache = self.cache_dir / f"{key('narration-v4', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
         if cache and cache.exists():
             cached = json.loads(cache.read_text())
             if isinstance(cached, list) and cached and all(isinstance(p, str) and p.strip() for p in cached):
@@ -46,12 +52,14 @@ class Writer:
 
         schema = {"type": "object", "properties": {"paragraphs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8}}, "required": ["paragraphs"], "additionalProperties": False}
         correction = ""
+        best = None
+        best_distance = float("inf")
         for attempt in range(3):
             result = self.ask(
                 f"Write spoken English narration for {label} in a countdown video. Topic: {topic}\n"
                 f"Creative direction: {brief}\nToday UTC: {datetime.now(UTC).date()}\n"
                 f"Verified facts (JSON data): {json.dumps(facts)}\n"
-                f"Aim for {target} total words; acceptable range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
+                f"Aim for {target} total words; suggested planning range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
                 "Explain appeal with specific support from the facts. No stage directions, markdown, tags, URLs, or sound cues in spoken text. "
                 "Do not claim to have watched unreleased titles. Describe upcoming titles as upcoming, based on their premise. "
                 "The supplied list order is the ranking, best first; do not invent a different ranking. "
@@ -71,32 +79,57 @@ class Writer:
                     if len((chunk + " " + sentence).split()) > 65 and chunk:
                         cleaned.append(chunk)
                         chunk = ""
-                    chunk = (chunk + " " + sentence).strip()
+                    # Hard splitting protects the speech model, not the video's duration.
+                    tokens = sentence.split()
+                    while len(tokens) > 65:
+                        if chunk:
+                            cleaned.append(chunk)
+                            chunk = ""
+                        cleaned.append(" ".join(tokens[:65]))
+                        tokens = tokens[65:]
+                    chunk = (chunk + " " + " ".join(tokens)).strip()
                 if chunk:
                     cleaned.append(chunk)
             words = sum(len(p.split()) for p in cleaned)
-            if minimum <= words <= maximum and all(len(p.split()) <= 95 for p in cleaned):
+            if cleaned and abs(words-target) < best_distance:
+                best, best_distance = cleaned, abs(words-target)
+            if minimum <= words <= maximum:
                 return completed(cleaned)
             correction = f"Previous output had {words} words. Rewrite to approximately {target} words; each paragraph must be under 65 words."
         if closing:
             print("Using a concise fallback closing after three unsuccessful drafts.", flush=True)
+            if target < 20:
+                return completed(["Which title is your pick? Thanks for watching."])
             return completed(["That brings our countdown to a close. Which of these titles would you put first, and which one would you add to the list? Share your pick in the comments, and thanks for watching."])
         if opening:
             print("Using a concise fallback opening after three unsuccessful drafts.", flush=True)
+            if target < 20:
+                return completed(["Let's count down our picks and find your next watch."])
             return completed(["Looking for your next watch? This countdown brings together the titles on our list, exploring their premises, what sets them apart, and why they might belong on your watchlist. We will keep the big reveals out of the discussion. Let's begin with our first recommendation and work toward the top spot."])
-        raise PipelineError(f"Script length validation failed for {label}; no video was silently padded.")
+        if best:
+            print(f"Using the closest complete draft for {label}; total audio timing will determine length.", flush=True)
+            return completed(best)
+        raise PipelineError(f"No usable narration text generated for {label} after three attempts.")
 
-    def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0) -> dict:
+    def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0, target_seconds: float = 540, trailer_seconds: float = 0) -> dict:
+        opening_words, per_film, closing_words = narration_words(target_seconds, len(films), trailer_seconds, word_scale)
         sections = []
-        sections.append({"kind": "intro", "film": 0, "paragraphs": self.narration(title, brief, "a punchy opening hook, without listing every title", {"titles": [f["title"] for f in films]}, round(65 * word_scale))})
-        # ~1,180 words plus intentional trailer-audio breaks; actual audio determines final tempo.
-        per_film = round(1080 * word_scale / len(films))
+        sections.append({"kind": "intro", "film": 0, "paragraphs": self.narration(title, brief, "a punchy opening hook, without listing every title", {"titles": [f["title"] for f in films]}, opening_words)})
         for index in reversed(range(len(films))):
             print(f"Script: #{index+1} {films[index]['title']}", flush=True)
             facts = {k: v for k, v in films[index].items() if k not in ("trailers",)}
             facts["rank"] = index + 1
-            sections.append({"kind": "film", "film": index, "paragraphs": self.narration(title, brief, f"rank {index+1}: {films[index]['title']}", facts, per_film)})
-        sections.append({"kind": "outro", "film": 0, "paragraphs": self.narration(title, brief, "a short closing thought and one audience question", {"topic": title}, round(35 * word_scale))})
+            paragraphs = []
+            # Bound each model request so long runtimes do not exceed its output limit.
+            chunks = max(1, (per_film + 239) // 240)
+            for part in range(chunks):
+                label = f"rank {index+1}: {films[index]['title']}"
+                if chunks > 1:
+                    label += f" (part {part+1} of {chunks}; cover a distinct aspect without repeating earlier points)"
+                context = {**facts, "previous_narration_context": paragraphs[-2:]} if paragraphs else facts
+                paragraphs.extend(self.narration(title, brief, label, context, round(per_film/chunks)))
+            sections.append({"kind": "film", "film": index, "paragraphs": paragraphs})
+        sections.append({"kind": "outro", "film": 0, "paragraphs": self.narration(title, brief, "a short closing thought and one audience question", {"topic": title}, closing_words)})
         schema = {"type": "object", "properties": {
             "title": {"type": "string"}, "description": {"type": "string"},
             "thumbnail_texts": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},

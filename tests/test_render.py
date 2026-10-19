@@ -42,17 +42,23 @@ def test_render_preserves_speech_duration_and_produces_thumbnails(tmp_path):
     assert abs(duration(tmp_path / "music.wav") - 3.125) < 0.001
 
 
-def test_final_export_is_eight_minutes_with_valid_audio(tmp_path):
+@pytest.mark.parametrize("source_seconds, brief", [(480, ""), (330, "Make a 5-minute video")])
+def test_final_export_respects_requested_duration_with_valid_audio(tmp_path, source_seconds, brief):
     from movie_pipeline.render import finish
-    # A repeated one-second synthetic scene exercises the real eight-minute encoder,
+    from movie_pipeline.timing import requested_duration
+    spec = requested_duration(brief)
+    # A repeated one-second synthetic scene exercises both default and five-minute exports,
     # sidechain music mix, loudness conversion, and final duration policy.
     seed = tmp_path / "seed.mp4"
     ffmpeg("-f", "lavfi", "-i", "color=c=0x16243a:size=1280x720:rate=30", "-f", "lavfi", "-i", "sine=frequency=180:sample_rate=48000", "-t", 1, "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", seed)
     long_source = tmp_path / "long.mp4"
-    ffmpeg("-stream_loop", 479, "-i", seed, "-t", 480, "-c", "copy", long_source)
+    ffmpeg("-stream_loop", source_seconds-1, "-i", seed, "-t", source_seconds, "-c", "copy", long_source)
     target = tmp_path / "final.mp4"
-    seconds, _speed = finish([long_source], target, tmp_path, False)
-    assert 479.5 <= seconds <= 600.5
+    seconds, _speed = finish([long_source], target, tmp_path, False, spec=spec)
+    assert spec.minimum-0.5 <= seconds <= spec.maximum+0.5
+    if brief:
+        assert abs(seconds-spec.target) < 0.1
+        assert abs(_speed-1.1) < 0.01
     metadata = probe(target)
     audio = next(s for s in metadata["streams"] if s["codec_type"] == "audio")
     assert audio["sample_rate"] == "48000"

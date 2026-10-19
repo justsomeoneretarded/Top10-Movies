@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 from .core import PipelineError, duration, ffmpeg
 from .shots import get_frame
+from .timing import DurationSpec
 
 WIDTH, HEIGHT, FPS = 1280, 720, 30
 
@@ -123,16 +124,17 @@ def music_bed(path: Path, seconds: float, action: bool):
             stream.writeframes((np.clip(stereo, -1, 1) * 32767).astype("<i2").tobytes())
 
 
-def finish(parts: list[Path], output: Path, work: Path, action: bool) -> tuple[float, float]:
+def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: DurationSpec | None = None) -> tuple[float, float]:
+    spec = spec or DurationSpec()
     listing = work / "final-concat.txt"
     concat_file(parts, listing)
     combined = work / "combined.mp4"
     ffmpeg("-f", "concat", "-safe", "0", "-i", listing, "-c", "copy", combined)
     original = duration(combined)
     # Keep natural speed when the video already falls within the requested range.
-    speed = 1.0 if 480 <= original <= 600 else original / 540
+    speed = 1.0 if spec.minimum <= original <= spec.maximum else original / spec.target
     if not 0.85 <= speed <= 1.18:
-        raise PipelineError(f"Narration produced {original/60:.1f} minutes; too far from 8–10 minutes for natural tempo adjustment. Tune the script word target or voice rate.")
+        raise PipelineError(f"Narration produced {original/60:.1f} minutes; too far from the requested {spec.target/60:.1f} minutes for natural tempo adjustment after automatic rewriting.")
     final_duration = original / speed
     music = work / "music.wav"
     music_bed(music, final_duration + 1, action)

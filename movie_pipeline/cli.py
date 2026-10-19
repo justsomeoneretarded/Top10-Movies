@@ -20,6 +20,7 @@ from .core import (
     voice_reference,
     write_srt,
 )
+from .timing import DurationSpec, requested_duration, trailer_budget
 
 
 def chapter_time(seconds):
@@ -27,14 +28,14 @@ def chapter_time(seconds):
     return f"{seconds // 3600}:{seconds // 60 % 60:02}:{seconds % 60:02}" if seconds >= 3600 else f"{seconds // 60}:{seconds % 60:02}"
 
 
-def choose_beat(cues: list[dict], shots: list[dict], trailer_duration: float, action: bool) -> dict | None:
+def choose_beat(cues: list[dict], shots: list[dict], trailer_duration: float, action: bool, maximum: float = 4.5) -> dict | None:
     candidates = []
     for cue in cues:
         start = max(0, cue["start"] - 0.08)
         end = cue["end"] + 0.12
         if start < trailer_duration * 0.08 or end > trailer_duration * 0.85:
             continue
-        if not 1.5 <= end - start <= 4.5 or len(cue["text"].split()) < 3:
+        if not 1.5 <= end - start <= maximum or len(cue["text"].split()) < 3:
             continue
         if re.search(r"subscribe|in theaters|coming soon|rated |thank you for watching", cue["text"], re.IGNORECASE):
             continue
@@ -44,7 +45,8 @@ def choose_beat(cues: list[dict], shots: list[dict], trailer_duration: float, ac
     return max(candidates, key=lambda x: x[0])[1] if candidates else None
 
 
-def validate_package(output: Path):
+def validate_package(output: Path, spec: DurationSpec | None = None):
+    spec = spec or DurationSpec()
     required = ["final-video.mp4", "subtitles.srt", "description.txt", "recommended-title.txt", *[f"thumbnail-{n:02}.jpg" for n in range(1, 4)]]
     for name in required:
         path = output / name
@@ -52,8 +54,8 @@ def validate_package(output: Path):
             raise PipelineError(f"Missing deliverable: {name}")
     metadata = probe(output / "final-video.mp4")
     seconds = float(metadata["format"]["duration"])
-    if not 479.5 <= seconds <= 600.5:
-        raise PipelineError(f"Final video duration {seconds:.1f}s is outside 8–10 minutes.")
+    if not spec.minimum-0.5 <= seconds <= spec.maximum+0.5:
+        raise PipelineError(f"Final video duration {seconds:.1f}s is outside the requested {spec.minimum/60:.1f}–{spec.maximum/60:.1f} minutes.")
     streams = metadata["streams"]
     video = next((s for s in streams if s["codec_type"] == "video"), None)
     if not video or (video["width"], video["height"]) != (1280, 720) or not any(s["codec_type"] == "audio" for s in streams):
@@ -81,14 +83,18 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     count_match = re.search(r"\btop\s*(\d+)\b", title, re.IGNORECASE)
     if count_match and int(count_match[1]) != len(items):
         raise PipelineError("The title's countdown number must match the number of movies/shows.")
+    spec = requested_duration(brief)
+    max_beat = trailer_budget(spec, len(items))
+    expected_breaks = min(3, max_beat) * len(items)
+    print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
     narrator = narrator_from_brief(brief)
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Job-specific paths prevent a resumed job from mixing different input or narrator settings.
-    run_key = key("pipeline-v1", title, brief, movies, narrator, os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v2-duration", title, brief, movies, narrator, os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
-    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator})
+    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator, "duration": vars(spec)})
     research = Research()
     facts_path = work / "research.json"
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
@@ -102,31 +108,29 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
 
     writer = Writer(cache_dir=work / "script-sections")
     script_path = work / "script.json"
-    script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films)
+    script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks)
     save_json(script_path, script)
     writer.unload()
 
     print(f"Narration: {narrator} / {os.getenv('TTS_MODEL', 'turbo')} on CPU", flush=True)
-    speaker = Narrator(reference, work / "speech")
-    speech = {}
-    for section_index, section in enumerate(script["sections"]):
-        for paragraph_index, text in enumerate(section["paragraphs"]):
-            print(f"Narrating section {section_index+1}, paragraph {paragraph_index+1}", flush=True)
-            speech[(section_index, paragraph_index)] = speaker.speak(text)
-    speaker.close()
-    estimated = sum(duration(path) for path in speech.values()) + 3 * len(films)
-    if not 470 <= estimated <= 610:
-        # One bounded rewrite adapts word count to this voice's measured delivery rate.
-        print(f"Adapting script length to measured voice pace ({estimated/60:.1f} min)", flush=True)
-        script = writer.write(title, brief, films, word_scale=max(0.65, min(1.6, 540 / estimated)))
-        save_json(script_path, script)
-        writer.unload()
+    word_scale = 1.0
+    for revision in range(3):
         speaker = Narrator(reference, work / "speech")
         speech = {}
         for section_index, section in enumerate(script["sections"]):
             for paragraph_index, text in enumerate(section["paragraphs"]):
+                print(f"Narrating section {section_index+1}, paragraph {paragraph_index+1}", flush=True)
                 speech[(section_index, paragraph_index)] = speaker.speak(text)
         speaker.close()
+        spoken_seconds = sum(duration(path) for path in speech.values())
+        estimated = spoken_seconds + expected_breaks
+        if spec.minimum*0.98 <= estimated <= spec.maximum*1.02 or revision == 2:
+            break
+        print(f"Adjusting overall script to requested runtime; measured {estimated/60:.1f} minutes", flush=True)
+        word_scale *= max(0.2, min(5.0, (spec.target-expected_breaks)/max(1, spoken_seconds)))
+        script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks)
+        save_json(script_path, script)
+        writer.unload()
 
     print("Aligning speech and analysing trailer dialogue", flush=True)
     from faster_whisper import WhisperModel
@@ -186,7 +190,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         label = work / f"label-{section_index}.png"
         label_image(label, film["title"] if is_film else title, film_index+1 if is_film else None, film["year"] if is_film else None)
         midpoint = max(1, len(section["paragraphs"]) // 2)
-        beat = choose_beat(trailer_cues[film_index], shot_sets[film_index], duration(trailer), action) if is_film else None
+        beat = choose_beat(trailer_cues[film_index], shot_sets[film_index], duration(trailer), action, maximum=max_beat) if is_film and max_beat else None
         for paragraph_index, text in enumerate(section["paragraphs"]):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
@@ -215,7 +219,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     del selector
     gc.collect()
     print("Mixing and exporting final video", flush=True)
-    final_duration, speed = finish(parts, output / "final-video.mp4", work, action)
+    final_duration, speed = finish(parts, output / "final-video.mp4", work, action, spec=spec)
     for cue in all_cues:
         cue["start"] /= speed
         cue["end"] = min(cue["end"] / speed, final_duration)
@@ -232,14 +236,14 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     (output / "description.txt").write_text(description + "\n")
     thumbnails(trailers, shot_sets, package["thumbnail_texts"], output)
     save_json(work / "timeline.json", {"speed": speed, "events": timeline, "chapters": chapters})
-    validate_package(output)
+    validate_package(output, spec=spec)
     # Full decode checks catch corrupt/truncated exports. Audio normalization is handled in render.finish.
     ffmpeg("-xerror", "-i", output / "final-video.mp4", "-f", "null", "-")
     print(f"Complete: {final_duration/60:.2f} minutes. Package: {output}", flush=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Produce an unattended 8–10 minute movie countdown.")
+    parser = argparse.ArgumentParser(description="Produce an unattended movie countdown; request duration in the creative brief.")
     parser.add_argument("--title", default=os.getenv("VIDEO_TITLE", ""))
     parser.add_argument("--brief", default=os.getenv("VIDEO_BRIEF", ""))
     parser.add_argument("--movies", default=os.getenv("MOVIE_LIST", ""))
