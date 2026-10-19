@@ -31,8 +31,9 @@ class Writer:
 
     def narration(self, topic: str, brief: str, label: str, facts: dict, target: int) -> list[str]:
         closing = label == "a short closing thought and one audience question"
-        minimum, maximum = (18, 65) if closing else (round(target * 0.8), round(target * 1.2))
-        cache = self.cache_dir / f"{key('narration-v2', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
+        opening = label == "a punchy opening hook, without listing every title"
+        minimum, maximum = (18, 65) if closing else ((25, 110) if opening else (round(target * 0.8), round(target * 1.2)))
+        cache = self.cache_dir / f"{key('narration-v3', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
         if cache and cache.exists():
             cached = json.loads(cache.read_text())
             if isinstance(cached, list) and cached and all(isinstance(p, str) and p.strip() for p in cached):
@@ -80,6 +81,9 @@ class Writer:
         if closing:
             print("Using a concise fallback closing after three unsuccessful drafts.", flush=True)
             return completed(["That brings our countdown to a close. Which of these titles would you put first, and which one would you add to the list? Share your pick in the comments, and thanks for watching."])
+        if opening:
+            print("Using a concise fallback opening after three unsuccessful drafts.", flush=True)
+            return completed(["Looking for your next watch? This countdown brings together the titles on our list, exploring their premises, what sets them apart, and why they might belong on your watchlist. We will keep the big reveals out of the discussion. Let's begin with our first recommendation and work toward the top spot."])
         raise PipelineError(f"Script length validation failed for {label}; no video was silently padded.")
 
     def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0) -> dict:
