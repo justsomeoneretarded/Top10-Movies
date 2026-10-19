@@ -59,6 +59,17 @@ def download(film: dict, root: Path) -> Path:
             save_json(path.with_suffix(".json"), {"source": url, "title": info.get("title"), "channel": info.get("channel"), "curated": curated})
             return path
         except (yt_dlp.utils.DownloadError, PipelineError, OSError, ValueError) as exc:
+            message = str(exc).casefold().replace("’", "'")
+            if "confirm you're not a bot" in message or "confirm you’re not a bot" in message:
+                raise PipelineError(
+                    "YouTube blocked this runner with a sign-in/bot check. "
+                    "Trying more video IDs will not resolve a runner-wide block. "
+                    "Optionally configure the private YOUTUBE_COOKIES Actions secret with a valid "
+                    "Netscape cookies.txt export and start a new run from main. "
+                    "Cookies may expire or still be rejected on GitHub-hosted runners; "
+                    "use a self-hosted runner or a permitted alternative footage source if access remains blocked. "
+                    "See README: YouTube sign-in/bot errors."
+                ) from None
             errors.append(type(exc).__name__)
             path.unlink(missing_ok=True)
     raise PipelineError(f"No usable trailer for {film['title']} ({film['year']}). Tried {len(candidates)} candidates. YouTube access restrictions, unavailable trailers or format changes may be responsible. No movie was substituted. Failures: {', '.join(errors)}")
