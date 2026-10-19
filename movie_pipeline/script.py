@@ -111,6 +111,30 @@ class Writer:
             return completed(best)
         raise PipelineError(f"No usable narration text generated for {label} after three attempts.")
 
+    def thumbnail_concepts(self, title: str, brief: str, films: list[dict], sections: list[dict]) -> list[dict]:
+        from .thumbnails import normalize_concepts
+        cache = self.cache_dir / "thumbnail-concepts-v1.json" if self.cache_dir else None
+        if cache and cache.exists():
+            return normalize_concepts(json.loads(cache.read_text()), title, brief, len(films))
+        schema = {"type": "object", "properties": {"concepts": {"type": "array", "minItems": 3, "maxItems": 3, "items": {
+            "type": "object", "properties": {
+                "background_prompt": {"type": "string"},
+                "subject_indices": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 2},
+                "layout": {"type": "string", "enum": ["hero", "duo", "diagonal"]},
+            }, "required": ["background_prompt", "subject_indices", "layout"], "additionalProperties": False,
+        }}}, "required": ["concepts"], "additionalProperties": False}
+        context = [{"film_index": i, "title": f["title"], "genres": f.get("genres", []), "premise": f.get("overview", "")[:250]} for i, f in enumerate(films)]
+        script_summary = " ".join(p for section in sections for p in section["paragraphs"])[:4500]
+        try:
+            data = self.ask(f"Design three DISTINCT dramatic YouTube thumbnail concepts. Topic: {title}. Brief: {brief}. Films with ZERO-BASED indices: {json.dumps(context)}. Narration: {script_summary}. Each background_prompt must describe a widescreen background only: no people, no faces, no text, no logos. Target photorealistic cinematic movie-poster quality: natural detailed textures, dramatic directional lighting, atmospheric depth and exaggerated scale tied to the video's theme, without inventing plot claims. Real subjects from the indexed film references are composited separately. Choose 1–2 subject_indices. Use layouts hero, duo, diagonal, one per concept. Keep each prompt under 100 words. Return concepts only.", schema)
+            concepts = normalize_concepts(data.get("concepts"), title, brief, len(films))
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            print("Thumbnail concept generation unavailable; using themed local concept plans.", flush=True)
+            concepts = normalize_concepts(None, title, brief, len(films))
+        if cache:
+            save_json(cache, concepts)
+        return concepts
+
     def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0, target_seconds: float = 540, trailer_seconds: float = 0) -> dict:
         opening_words, per_film, closing_words = narration_words(target_seconds, len(films), trailer_seconds, word_scale)
         sections = []
@@ -139,6 +163,7 @@ class Writer:
             raise PipelineError("Generated video title must be 1–100 characters.")
         if len(package.get("thumbnail_texts", [])) != 3 or any(not isinstance(t, str) or not 1 <= len(t.split()) <= 6 for t in package["thumbnail_texts"]):
             raise PipelineError("Invalid generated thumbnail text.")
+        package["thumbnail_concepts"] = self.thumbnail_concepts(title, brief, films, sections)
         return {"sections": sections, "package": package}
 
     def unload(self):

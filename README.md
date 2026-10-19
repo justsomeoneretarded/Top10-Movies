@@ -70,7 +70,7 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 8. Sample scene changes and motion, embed frames/text with CLIP, and choose relevant shots with reuse and original-sequence penalties. Build the intro from multiple titles, covering at least half (rounded up). Action-oriented intros favor action-related imagery and short cuts.
 9. Render reordered short clips, occasional brief freeze-frame accents, rank graphics, short trailer-audio breaks, and an original procedural instrumental bed. Narration stops during trailer breaks; source audio is removed under narration. Music ducks under speech.
 10. Export H.264/AAC at 1280×720/30fps with normalized audio. If needed, use modest pitch-preserving tempo adjustment; stop if the requested duration still cannot be reached naturally after automatic rewrites.
-11. Render three distinct frame-based thumbnail layouts with readable typography. There is no paid image generation; no diffusion model is required.
+11. Ask Qwen3 4B for three script-based visual concepts. Generate free Pollinations backgrounds where available, extract reference subjects with CPU rembg, and compose cinematic layouts with dramatic lighting/effects. Use local artwork and segmentation when remote services/models are unavailable. No paid inference fallback is used.
 12. Validate required outputs, media streams, duration, thumbnail dimensions/size, and a full FFmpeg decode before uploading the package.
 
 No approval or publication steps occur. Successful runs deliver downloadable files; this repository does not upload to YouTube.
@@ -175,3 +175,17 @@ If getUpdates reports a webhook conflict, use a dedicated new bot for this workf
 ### Channel pinning and spacing
 
 Completion reminders have bold labels and five empty lines between their three main sections. The bot pins the message it just sent; it does not delete posts or unpin other messages. For a channel, make the bot an administrator with **Post Messages** and **Edit Messages** rights (the Bot API requires edit rights to pin in channels). For a group/supergroup, enable **Pin Messages**. Pinning failure leaves the sent reminder intact and does not fail video production. Telegram clients control exact text spacing and notification behavior; pinned-message alerts in channels may be silent.
+
+## Redesigned thumbnail generation
+
+The thumbnail pipeline creates designed poster-style images instead of tiled, unchanged screenshots. Qwen3 4B uses the title, creative brief, film premises, and narration to propose three background/composition concepts. Recognizable subjects are extracted from sharp reference frames, enlarged, relit through contrast/color treatment, and composited with glow, depth, and layout effects.
+
+The three options follow the supplied visual direction: a cinematic hero composition, a bold-text editorial composition, and a minimal-text alternative. A red ribbon **N** appears on option 3 when the title or brief explicitly mentions Netflix, unless the brief says to avoid Netflix branding. This is an editorial branding choice; the workflow does not verify Netflix availability or imply endorsement. General movie lists are not automatically Netflix-branded. Match your topic and brief to the intended platform accurately.
+
+- **Audio stays Chatterbox Turbo** by default. Pocket TTS is not installed, configured, or integrated.
+- **Backgrounds:** Pollinations Classic is an anonymous, free, best-effort service. Only generated visual prompts are sent, not voice recordings, tokens, or the whole script. Prompts are public to that provider. Requests are sequential, at least 45 seconds apart, with a maximum 1024×576 requested image (then upscaled/composited to 1280×720). Provider corner branding is preserved. Quality, face-free instructions, uptime, and exact detail are not guaranteed.
+- **Cutouts:** pinned CPU rembg uses U2Net weights cached under `work/models/rembg`. If installation/weights/inference are unavailable, OpenCV foreground segmentation and a soft portrait mask provide a local fallback. Difficult source shots can still produce imperfect edges or subject selection.
+- **Local fallback:** original gradient/light-streak artwork plus subject extraction and typography. No paid API, payment wallet, unlimited cloud promise, or local diffusion runtime is added.
+- **Outputs:** still three 1280×720 JPEG files below 2 MB each. Provider/layout/extraction choices are recorded in the cached job's `thumbnail-work/thumbnail-report.json`, outside the downloadable package.
+
+For Netflix-style option 3, put `This is a Netflix-themed video; use the red N on one thumbnail` in the brief. For text-heavy thumbnails, the main text composition is option 2; options 1 and 3 intentionally prioritize imagery. The references set a direction, not a guarantee of identical photorealistic quality, recognizable generated backgrounds, or click-through performance. The free provider and actual model cutout quality still need verification on your runner.

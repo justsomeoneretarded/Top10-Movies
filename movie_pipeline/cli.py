@@ -111,6 +111,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
     script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks)
+    if not script["package"].get("thumbnail_concepts"):
+        script["package"]["thumbnail_concepts"] = writer.thumbnail_concepts(title, brief, films, script["sections"])
     save_json(script_path, script)
     writer.unload()
 
@@ -241,7 +243,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     description += "\n\nFilm information: TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.\n"
     description += "\nTrailer sources\n" + "\n".join(json.loads(t.with_suffix('.json').read_text())["source"] for t in trailers)
     (output / "description.txt").write_text(description + "\n")
-    thumbnails(trailers, shot_sets, package["thumbnail_texts"], output)
+    thumbnails(trailers, shot_sets, package["thumbnail_texts"], output,
+               concepts=package.get("thumbnail_concepts"), title=title, brief=brief,
+               work=work / "thumbnail-work", use_api=os.getenv("THUMBNAIL_AI", "true").lower() == "true",
+               use_cutouts=True)
     save_json(work / "timeline.json", {"speed": speed, "events": timeline, "chapters": chapters})
     validate_package(output, spec=spec)
     # Full decode checks catch corrupt/truncated exports. Audio normalization is handled in render.finish.

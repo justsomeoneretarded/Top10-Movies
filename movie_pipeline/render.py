@@ -6,10 +6,9 @@ import wave
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont
 
 from .core import PipelineError, duration, ffmpeg
-from .shots import get_frame
 from .timing import DurationSpec
 
 WIDTH, HEIGHT, FPS = 1280, 720, 30
@@ -156,39 +155,7 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
     return duration(output), speed
 
 
-def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str], output: Path):
-    """Three frame-based compositions with deterministic, readable typography."""
-    for variant in range(3):
-        canvas = Image.new("RGB", (WIDTH, HEIGHT), "#0b1020")
-        indices = [(variant + j) % len(trailers) for j in range(2 if variant != 1 else 3)]
-        panel_width = math.ceil(WIDTH / len(indices))
-        for panel, index in enumerate(indices):
-            ranked = sorted(shots[index], key=lambda s: s["motion"], reverse=True)
-            shot = ranked[min(variant, len(ranked)-1)]
-            frame = get_frame(trailers[index], (shot["start"] + shot["end"])/2)
-            frame = ImageOps.fit(frame, (panel_width, HEIGHT), method=Image.Resampling.LANCZOS)
-            frame = ImageEnhance.Contrast(frame).enhance(1.15)
-            canvas.paste(frame, (panel*panel_width, 0))
-        shade = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-        pixels = np.zeros((HEIGHT, WIDTH, 4), dtype=np.uint8)
-        pixels[:, :, 3] = np.linspace(0, 225, HEIGHT).astype(np.uint8)[:, None]
-        shade = Image.fromarray(pixels)
-        canvas = Image.alpha_composite(canvas.convert("RGBA"), shade)
-        draw = ImageDraw.Draw(canvas)
-        phrase = phrases[variant].upper()
-        size = 100
-        while size > 38:
-            lines = wrapped(draw, phrase, font(size), 1150)
-            if len(lines) <= 2:
-                break
-            size -= 2
-        y = HEIGHT - len(lines) * (size + 12) - 55
-        for line in lines:
-            draw.text((55, y), line, font=font(size), fill=(255, 215, 65) if variant != 1 else "white", stroke_width=5, stroke_fill="black")
-            y += size + 12
-        draw.rounded_rectangle((45, 35, 220, 100), radius=12, fill="#f5bd37")
-        draw.text((65, 43), f"TOP {len(trailers)}", font=font(32), fill="#111827")
-        target = output / f"thumbnail-{variant+1:02}.jpg"
-        canvas.convert("RGB").save(target, quality=91, optimize=True)
-        if target.stat().st_size >= 2_000_000:
-            canvas.convert("RGB").save(target, quality=80, optimize=True)
+def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str], output: Path, **options):
+    """Compose redesigned thumbnails; API use is explicitly enabled by the production caller."""
+    from .thumbnails import build_thumbnails
+    return build_thumbnails(trailers, shots, phrases, output, **options)
