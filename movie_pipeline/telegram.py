@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from html import escape
 from pathlib import Path
 
 import requests
@@ -17,11 +18,17 @@ def notify() -> bool:
     title = title_file.read_text(encoding="utf-8").strip() if title_file.exists() else os.getenv("VIDEO_TITLE", "Your video")
     title = " ".join(title.split())[:300]
     run_url = f"{os.getenv('GITHUB_SERVER_URL', 'https://github.com')}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-    message = f"✅ Your video is ready!\n\nTitle: {title}\n\nDownload: {run_url}\n\nOpen Artifacts on that page to download the video package. Downloads are retained for 7 days."
+    gap = "\n" * 6  # Six line breaks leave five empty lines between sections.
+    message = gap.join([
+        "✅ <b>Your video is ready!</b>",
+        f"<b>Title:</b> {escape(title)}",
+        f'<b>Download:</b> <a href="{escape(run_url, quote=True)}">GitHub run link</a>',
+    ]) + "\n\nOpen Artifacts to download. Available for 7 days."
     try:
         response = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
             "chat_id": chat_id,
             "text": message,
+            "parse_mode": "HTML",
             "link_preview_options": {"is_disabled": True},
         }, timeout=20)
         if response.status_code != 200:
@@ -36,6 +43,20 @@ def notify() -> bool:
         print("Telegram reminder could not be confirmed due to a network/response error. The video package remains in Artifacts.")
         return False
     print("Telegram completion reminder delivered.")
+    message_id = data.get("result", {}).get("message_id")
+    if not isinstance(message_id, int):
+        print("Reminder sent but pinning skipped: Telegram returned no message ID.")
+        return True
+    try:
+        pinned = requests.post(f"https://api.telegram.org/bot{token}/pinChatMessage", json={
+            "chat_id": chat_id, "message_id": message_id, "disable_notification": False,
+        }, timeout=20)
+        if pinned.status_code == 200 and pinned.json().get("ok"):
+            print("Telegram completion reminder pinned.")
+        else:
+            print("Reminder sent but could not be pinned. Give the bot Edit Messages rights in a channel, or Pin Messages rights in a group. The video package is unaffected.")
+    except (requests.RequestException, ValueError):
+        print("Reminder sent; pinning could not be confirmed. The video package is unaffected.")
     return True
 
 

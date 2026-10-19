@@ -158,7 +158,7 @@ A new workflow run can restore the latest earlier production checkpoint cache, i
 
 ## Telegram completion reminder
 
-After the video is generated, validated, and successfully uploaded to GitHub Artifacts, the workflow can send one plain-text Telegram reminder with the recommended title and GitHub run link. It does not upload the video or other files to Telegram. Failed video runs do not send a success reminder. Missing credentials or a Telegram delivery error do not fail an otherwise successful video job.
+After the video is generated, validated, and successfully uploaded to GitHub Artifacts, the workflow can send one formatted Telegram reminder with the recommended title and GitHub run link, then pin that same message. Five blank lines separate the heading, title, and download sections. It does not upload the video or other files to Telegram. Failed video runs do not send a success reminder. Missing credentials or a Telegram delivery error do not fail an otherwise successful video job.
 
 One-time setup:
 
@@ -171,3 +171,7 @@ One-time setup:
 5. Start a new Generate Video run on **main**. A reminder is sent only after its finished package uploads successfully.
 
 If getUpdates reports a webhook conflict, use a dedicated new bot for this workflow instead of changing another application's bot. If a token is exposed, revoke it through BotFather and replace the GitHub secret. The linked artifacts retain the repository's GitHub access requirements and expire after seven days. Delivery is best effort: a network failure can prevent confirmation, and re-running a successful production job can send another reminder.
+
+### Channel pinning and spacing
+
+Completion reminders have bold labels and five empty lines between their three main sections. The bot pins the message it just sent; it does not delete posts or unpin other messages. For a channel, make the bot an administrator with **Post Messages** and **Edit Messages** rights (the Bot API requires edit rights to pin in channels). For a group/supergroup, enable **Pin Messages**. Pinning failure leaves the sent reminder intact and does not fail video production. Telegram clients control exact text spacing and notification behavior; pinned-message alerts in channels may be silent.
