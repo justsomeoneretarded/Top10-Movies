@@ -7,24 +7,18 @@ An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative 
 ## One-time setup
 
 1. Obtain an **API Read Access Token** from [TMDB API settings](https://www.themoviedb.org/settings/api). Add it as repository Actions secret **`TMDB_READ_TOKEN`** in **Settings → Secrets and variables → Actions**. Use the long bearer/read token, not the short API key. TMDB attribution is included in descriptions; commercial use may require separate terms from TMDB.
-2. Add the three private voice secrets below. The repository deliberately contains **no uploaded reference recordings**. Only the selected narrator's reference is decoded on the runner.
+2. The three narrator reference clips are already included in `assets/voices/`. **No voice secrets or audio uploads are needed.**
 3. Enable Actions if GitHub asks. No paid LLM/TTS/image accounts are needed.
 
-| Narrator | Actions secret | Selection in creative brief |
+| Narrator | Included reference | Selection in creative brief |
 |---|---|---|
-| Warguy | `VOICE_WARGUY_B64` | Default, or “Use Warguy” / “Use male audio” |
-| Kit Laser | `VOICE_KIT_LASER_B64` | “Use Kit Laser” |
-| Female | `VOICE_FEMALE_B64` | “Use the female voice” |
+| Warguy | `assets/voices/warguy.ogg` | Default, or “Use Warguy” / “Use male audio” |
+| Kit Laser | `assets/voices/kit-laser.ogg` | “Use Kit Laser” |
+| Female | `assets/voices/female.ogg` | “Use the female voice” |
 
-Prepare references from the recordings you uploaded using FFmpeg, Python 3.11+, and an authenticated [GitHub CLI](https://cli.github.com/). The script keeps audio private and sets encrypted repository secrets:
+These are public 12-second reference excerpts starting five seconds into each of the three recordings supplied by the owner, published with their approval. The original full-length recordings are not required for production. The clips are mono Opus files, normalized for cloning. Voice similarity has not been subjectively auditioned here.
 
-```bash
-python scripts/prepare_voice.py warguy '/path/to/warguy- male2.mp3' --repo justsomeoneretarded/Top10-Movies
-python scripts/prepare_voice.py kit-laser '/path/to/Kit Laser audio- male1.mp3' --repo justsomeoneretarded/Top10-Movies
-python scripts/prepare_voice.py female '/path/to/female audio.mp3' --repo justsomeoneretarded/Top10-Movies
-```
-
-Use `--start 20 --seconds 12` to select a cleaner passage. References must contain one permitted speaker, clear speech, and no music. The script creates compact Opus references that fit within GitHub's encrypted-secret limit. Without `--repo`, it saves private `.secrets.env` files for manual setup; copy only the value after `=` into the corresponding Actions secret. Never commit these files. Voice cloning fidelity depends on the recording; the supplied samples have not been subjectively auditioned here. Use voices you are entitled to clone.
+To replace a reference, use `python scripts/prepare_voice.py NAME /path/to/audio.mp3 --start 20 --seconds 12`, then commit only the resulting `.ogg` file. Choose clear speech by one permitted speaker without music. Do not commit `.secrets.env` files or API tokens. Optional private base64 references remain supported when no local file exists; they are not needed for this repository.
 
 ## Generate a video
 
@@ -108,7 +102,7 @@ ollama serve
 # In another terminal:
 ollama pull qwen3:1.7b
 export TMDB_READ_TOKEN='your-read-token'
-# Private assets/voices/{warguy,kit-laser,female}.ogg can be used instead of voice secrets.
+# Narrator reference clips are already included in assets/voices/.
 movie-pipeline --title 'Top 2 Sci-Fi Movies' \
   --brief 'Cinematic and spoiler-light. Use Warguy.' \
   --movies 'Arrival (2016); Interstellar (2014)'

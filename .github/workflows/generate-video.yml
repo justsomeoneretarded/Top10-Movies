@@ -33,9 +33,6 @@ jobs:
       VIDEO_BRIEF: ${{ inputs.description }}
       MOVIE_LIST: ${{ inputs.movies }}
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
-      VOICE_WARGUY_B64: ${{ secrets.VOICE_WARGUY_B64 }}
-      VOICE_KIT_LASER_B64: ${{ secrets.VOICE_KIT_LASER_B64 }}
-      VOICE_FEMALE_B64: ${{ secrets.VOICE_FEMALE_B64 }}
       # Turbo prioritizes narration quality. Set repository variable TTS_MODEL=nano for faster CPU runs.
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: qwen3:1.7b
@@ -100,6 +97,3 @@ jobs:
             work/jobs
             work/footage
           key: production-v1-${{ github.run_id }}-${{ github.run_attempt }}-failed
-      - name: Remove private voice references
-        if: always()
-        run: rm -rf assets/voices

@@ -8,5 +8,6 @@ work/
 output/
 assets/voices/*
 !assets/voices/.gitkeep
+!assets/voices/*.ogg
 cookies.txt
 *.log
