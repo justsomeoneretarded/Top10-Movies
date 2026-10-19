@@ -38,12 +38,30 @@ class Research:
                 similarity = max(SequenceMatcher(None, normalized(item.title), normalized(t)).ratio() for t in (title, original))
                 if date[:4] == str(item.year) and similarity >= 0.88:
                     candidates.append((similarity, kind, found))
-        candidates.sort(key=lambda x: x[0], reverse=True)
+        # Search endpoints can return duplicate rows. A duplicate must never create ambiguity.
+        candidates = list({(kind, found["id"]): (score, kind, found) for score, kind, found in candidates}.values())
+        candidates.sort(key=lambda x: (x[0], x[2].get("vote_count", 0) or 0), reverse=True)
         if not candidates:
             raise PipelineError(f"No confident title/year match for {item.title} ({item.year}); correct the input.")
-        if len(candidates) > 1 and candidates[0][0] - candidates[1][0] < 0.025:
-            raise PipelineError(f"Ambiguous title/year: {item.title} ({item.year}). Use its full official title.")
-        _, kind, match = candidates[0]
+        contenders = [candidate for candidate in candidates if candidates[0][0] - candidate[0] < 0.025]
+        if len(contenders) > 1:
+            # Exact title/year matches outrank near matches; retain movie/TV neutrality.
+            exact = [candidate for candidate in contenders if candidate[0] == 1.0]
+            if exact:
+                contenders = exact
+        if len(contenders) > 1:
+            # Mainstream features often share a title/year with obscure shorts or TV entries.
+            # Require strong evidence, rather than choosing the API's first result or popularity alone.
+            contenders.sort(key=lambda c: c[2].get("vote_count", 0) or 0, reverse=True)
+            first_votes = contenders[0][2].get("vote_count", 0) or 0
+            second_votes = contenders[1][2].get("vote_count", 0) or 0
+            if first_votes < 50 or first_votes < 10 * max(1, second_votes):
+                raise PipelineError(
+                    f"Multiple similarly supported title/year matches for {item.title} ({item.year}). "
+                    "Unable to choose confidently; check the official title and first-release year."
+                )
+            print(f"Resolved competing matches for {item.title} using a dominant audience-vote count.", flush=True)
+        _, kind, match = contenders[0]
         details = self.get(f"{kind}/{match['id']}", append_to_response="videos,credits", language="en-US")
         videos = details.get("videos", {}).get("results", [])
         # Original-language trailers may exist when English-localized metadata has none.
