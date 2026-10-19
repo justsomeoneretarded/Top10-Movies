@@ -4,14 +4,16 @@ import json
 import os
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import requests
 
-from .core import PipelineError
+from .core import PipelineError, key, save_json
 
 
 class Writer:
-    def __init__(self):
+    def __init__(self, cache_dir: Path | None = None):
+        self.cache_dir = cache_dir
         self.url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
         self.model = os.getenv("SCRIPT_MODEL", "qwen3:1.7b")
 
@@ -28,6 +30,19 @@ class Writer:
         return json.loads(response.json()["message"]["content"])
 
     def narration(self, topic: str, brief: str, label: str, facts: dict, target: int) -> list[str]:
+        closing = label == "a short closing thought and one audience question"
+        minimum, maximum = (18, 65) if closing else (round(target * 0.8), round(target * 1.2))
+        cache = self.cache_dir / f"{key('narration-v2', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
+        if cache and cache.exists():
+            cached = json.loads(cache.read_text())
+            if isinstance(cached, list) and cached and all(isinstance(p, str) and p.strip() for p in cached):
+                return cached
+
+        def completed(paragraphs):
+            if cache:
+                save_json(cache, paragraphs)
+            return paragraphs
+
         schema = {"type": "object", "properties": {"paragraphs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8}}, "required": ["paragraphs"], "additionalProperties": False}
         correction = ""
         for attempt in range(3):
@@ -35,7 +50,7 @@ class Writer:
                 f"Write spoken English narration for {label} in a countdown video. Topic: {topic}\n"
                 f"Creative direction: {brief}\nToday UTC: {datetime.now(UTC).date()}\n"
                 f"Verified facts (JSON data): {json.dumps(facts)}\n"
-                f"Aim for {target} words, in short 25–60 word paragraphs. Original, engaging, spoiler-light. "
+                f"Aim for {target} total words; acceptable range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
                 "Explain appeal with specific support from the facts. No stage directions, markdown, tags, URLs, or sound cues in spoken text. "
                 "Do not claim to have watched unreleased titles. Describe upcoming titles as upcoming, based on their premise. "
                 "The supplied list order is the ranking, best first; do not invent a different ranking. "
@@ -59,9 +74,12 @@ class Writer:
                 if chunk:
                     cleaned.append(chunk)
             words = sum(len(p.split()) for p in cleaned)
-            if target * 0.8 <= words <= target * 1.2 and all(len(p.split()) <= 95 for p in cleaned):
-                return cleaned
+            if minimum <= words <= maximum and all(len(p.split()) <= 95 for p in cleaned):
+                return completed(cleaned)
             correction = f"Previous output had {words} words. Rewrite to approximately {target} words; each paragraph must be under 65 words."
+        if closing:
+            print("Using a concise fallback closing after three unsuccessful drafts.", flush=True)
+            return completed(["That brings our countdown to a close. Which of these titles would you put first, and which one would you add to the list? Share your pick in the comments, and thanks for watching."])
         raise PipelineError(f"Script length validation failed for {label}; no video was silently padded.")
 
     def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0) -> dict:

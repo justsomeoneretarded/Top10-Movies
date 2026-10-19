@@ -100,7 +100,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         trailers.append(trailer)
         shot_sets.append(analyse(trailer, trailer.with_suffix(".shots.json")))
 
-    writer = Writer()
+    writer = Writer(cache_dir=work / "script-sections")
     script_path = work / "script.json"
     script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films)
     save_json(script_path, script)
