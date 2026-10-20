@@ -3,10 +3,19 @@ from pathlib import Path
 import yaml
 
 
-def test_workflow_has_three_inputs_and_never_interpolates_inputs_in_shell():
+def test_workflow_has_checked_4k_option_and_never_interpolates_inputs_in_shell():
     # BaseLoader preserves GitHub's YAML 'on' key instead of interpreting it as a boolean.
     data = yaml.load(Path(".github/workflows/generate-video.yml").read_text(), Loader=yaml.BaseLoader)
-    assert set(data["on"]["workflow_dispatch"]["inputs"]) == {"title", "description", "movies"}
+    inputs = data["on"]["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"title", "description", "movies", "try_4k"}
+    assert inputs["try_4k"]["type"] == "boolean"
+    assert inputs["try_4k"]["default"] == "true"
+    assert inputs["try_4k"]["required"] == "true"
+    env = data["jobs"]["produce"]["env"]
+    assert env["TRY_4K"] == "${{ inputs.try_4k }}"
+    # No truthy fallback may turn an explicitly unchecked value back on.
+    assert "||" not in env["TRY_4K"]
+    assert "VIDEO_RESOLUTION" not in env
     steps = data["jobs"]["produce"]["steps"]
     for step in steps:
         assert "${{ inputs." not in step.get("run", "")

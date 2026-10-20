@@ -16,6 +16,11 @@ on:
         description: "Titles and years, separated by semicolons: Arrival (2016); Inception (2010)"
         required: true
         type: string
+      try_4k:
+        description: "Try 4K when every trailer supports it (otherwise choose best shared quality)"
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -36,7 +41,7 @@ jobs:
       # Turbo prioritizes narration quality. Set repository variable TTS_MODEL=nano for faster CPU runs.
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: qwen3:4b
-      VIDEO_RESOLUTION: ${{ vars.VIDEO_RESOLUTION || '1080' }}
+      TRY_4K: "${{ inputs.try_4k }}"
       THUMBNAIL_AI: 'true'
       U2NET_HOME: ${{ github.workspace }}/work/models/rembg
       OLLAMA_HOST: 127.0.0.1:11435

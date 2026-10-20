@@ -1,6 +1,6 @@
 # Top10 Movies
 
-An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive a 1080p countdown (with optional 1440p or 4K export) at your requested duration (8–10 minutes by default), uploadable subtitles, description, recommended title, and three thumbnails.
+An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive a countdown with automatically chosen source-matched resolution, up to 4K at your requested duration (8–10 minutes by default), uploadable subtitles, description, recommended title, and three thumbnails.
 
 **No paid inference APIs.** Scriptwriting uses a local Ollama model; narration uses Chatterbox; shot matching uses CLIP; captions use faster-whisper. GitHub account usage/storage limits still apply. This is an initial implementation, not a guarantee of editorial quality or successful downloads for every title. End-to-end production must be verified on your runner with your configured secrets.
 
@@ -24,7 +24,7 @@ To replace a reference, use `python scripts/prepare_voice.py NAME /path/to/audio
 
 Open **[Actions → Generate Video](https://github.com/justsomeoneretarded/Top10-Movies/actions/workflows/generate-video.yml) → Run workflow**.
 
-There are exactly three inputs:
+There are four inputs: title, description / creative brief, movies, and a **Try 4K** checkbox. The checkbox is checked by default; no resolution instruction is needed in the brief.
 
 ```text
 Title:
@@ -38,6 +38,9 @@ about mystery and impossible worlds. Avoid exaggerated claims.
 
 Movies:
 Arrival (2016); Inception (2010); Coherence (2013); Interstellar (2014); Predestination (2014)
+
+Try 4K:
+Checked (default)
 ```
 
 List titles **best first** (#1 first); the rendered countdown plays from #5 down to #1. Use semicolons or newlines. Both movies and shows are resolved automatically; provide a show's first-release year. Supports 2–15 titles. A “Top N” title must match the list length. Upcoming titles work when TMDB has their release year, synopsis, and a usable trailer; the writer is instructed to avoid presenting them as watched/released.
@@ -61,17 +64,17 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 
 ## Production stages
 
-1. Validate inputs, export resolution, and the selected voice before downloading models.
+1. Validate inputs, the Try 4K setting, and the selected voice before downloading models.
 2. Resolve title/year against TMDB movies and TV. If the search year differs, check dated festival/regional release records. If still unresolved, verify an exact title and publication year through Wikidata, then map its IMDb ID back to TMDB. Record the evidence; never accept a nearby year without a supporting date. Reject genuinely ambiguous matches.
 3. Discover TMDB-linked YouTube trailers/teasers. If TMDB has no candidates, search YouTube and require verified-channel metadata plus a matching title. Reject obvious fan/concept/reaction videos.
-4. Download one successful trailer per title with yt-dlp and FFmpeg, requesting quality up to the selected export resolution. Store it temporarily in `work/footage/`. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
+4. Inspect candidate trailers and prefer better available source quality before downloading. Download one retained trailer per title with yt-dlp and FFmpeg, up to the checkbox ceiling, and store it temporarily in `work/footage/`. Choose the highest export resolution every selected trailer supports. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
 5. Look up US streaming providers using TMDB's JustWatch-powered watch listings, with a 24-hour cache. Keep subscription, free, ads, rental, and purchase options distinct. Missing or unavailable listings are skipped without failing production.
 6. Generate original, factual recommendation scripts with `qwen3:4b` through local Ollama: casual language, a punchy genre-specific hook, clear movie premises, and an outro inviting likes, subscriptions, and other recommendations. Word counts guide planning rather than cause paragraph failures.
 7. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate speech in small chunks and retry faulty speech. Up to two overall script rewrites adapt the content to the requested runtime using measured narration pace.
 8. Transcribe narration and trailer dialogue with CPU/int8 faster-whisper. Verify that narration words were spoken. Place one funny like/subscribe break at a review boundary around 30–50% of measured runtime; shorten its audio to keep it below 10 seconds after final tempo adjustment.
 9. Match frames loosely to the current narration using CLIP. Prefer steadier, longer visual beats, with occasional face holds and a multi-title intro. Weak visual matches never cause a relevance-validation failure.
 10. Render rank graphics, the like/subscribe/bell card, short trailer-audio breaks, and an original instrumental bed that ducks under speech. Keep the final image for three seconds after speech, with a gentle fade rather than an abrupt cut.
-11. Export H.264/AAC at 1080p/30fps by default, or the requested 720p, 1440p, or 4K setting. Apply modest pitch-preserving tempo adjustment only when needed. Embed chapters and write synchronized SRT and description chapter timestamps.
+11. Export H.264/AAC at 30fps, using the highest source-matched resolution shared by all selected trailers, up to 4K when checked or 1080p when unchecked. Apply modest pitch-preserving tempo adjustment only when needed. Embed chapters and write synchronized SRT and description chapter timestamps.
 12. Ask Qwen3 4B for six thumbnail concepts, select three styles, and compare up to two generated image candidates per selected concept. Complete cinematic scenes are the main path; local artwork and trailer cutouts remain a fallback. No paid inference fallback is used.
 13. Validate output files, media streams, runtime, thumbnail dimensions/size, and a full FFmpeg decode. Upload the package for one day, remove downloaded trailers and render intermediates, and save bounded speech/script checkpoints.
 
@@ -91,9 +94,11 @@ Automated shot matching, trailer dialogue selection, factual accuracy, and narra
 
 ## Resolution, disk space, and downloaded footage
 
-The default export is **1920×1080 at 30 fps**. Add `Export in 4K` to the creative brief for **3840×2160**, or `Use 1440p` for **2560×1440**. A repository Actions variable `VIDEO_RESOLUTION` can set the default to `720`, `1080`, `1440`, or `2160`. A resolution in the brief overrides that default without adding another workflow input. Thumbnails remain 1280×720 JPEGs.
+The **Try 4K** checkbox is checked by default. Checked means “choose the best shared quality up to **3840×2160**”; unchecked caps the search and export at **1920×1080**. The brief no longer controls resolution, and no `VIDEO_RESOLUTION` repository variable is needed. Thumbnails remain 1280×720 JPEGs.
 
-The downloader requests the best available trailer up to the export height, with one successful trailer per title and an 800 MB per-trailer cap. If the trailer is only 1080p, a 4K export will upscale it; this cannot recover genuine 4K detail. Logs and trailer sidecar metadata record the actual source resolution. Streaming website access and native 4K trailer availability are not guaranteed.
+The pipeline downloads trailers, checks their actual dimensions, then chooses the highest export resolution all of them support. All-4K sources can produce 4K; a mix of 4K and 1080p produces 1080p; 1440p, 720p, or lower sources lower the shared export accordingly. A weaker source is not stretched to force a 4K-sized file. If a low-resolution candidate would lower the result, the downloader first checks other candidate trailers for that movie and prefers a better source when available. It retains one trailer per title rather than keeping every candidate download, with an 800 MB per-trailer cap.
+
+Missing 4K footage does not cause a resolution error: production continues at the available shared quality. Logs and the cached job's quality-report JSON record the source dimensions and selected export resolution. Website access and native 4K availability are not guaranteed.
 
 4K is supported but expensive on a standard CPU runner: it has four times as many pixels as 1080p, can take substantially longer to encode, and may reach the 350-minute job timeout. Standard runners have finite temporary disk, and models, dependencies, trailers, rendered parts, concatenated input, and final output can coexist during production. Conservative free-space checks stop with an explanation when the working reserve is insufficient. 1080p is the practical choice for more dependable free runs; no 4K completion-time guarantee is made.
 

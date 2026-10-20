@@ -21,7 +21,13 @@ from .core import (
     write_srt,
 )
 from .timing import DurationSpec, requested_duration, trailer_budget
-from .video_settings import export_size, require_disk, resolution_from_brief
+from .video_settings import (
+    choose_output_size,
+    download_ceiling,
+    export_size,
+    inspect_sources,
+    require_disk,
+)
 
 
 def chapter_time(seconds):
@@ -96,7 +102,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     count_match = re.search(r"\btop\s*(\d+)\b", title, re.IGNORECASE)
     if count_match and int(count_match[1]) != len(items):
         raise PipelineError("The title's countdown number must match the number of movies/shows.")
-    os.environ["VIDEO_RESOLUTION"] = str(resolution_from_brief(brief))
+    ceiling = download_ceiling()
+    os.environ["VIDEO_RESOLUTION"] = str(ceiling)
     spec = requested_duration(brief)
     max_beat = trailer_budget(spec, len(items))
     expected_breaks = min(3, max_beat) * len(items)
@@ -109,7 +116,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
-    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator, "duration": vars(spec), "script_model": script_model})
+    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
     research = Research()
     facts_path = work / "research.json"
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
@@ -121,6 +128,13 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         trailer = download(film, Path("work/footage"))
         trailers.append(trailer)
         shot_sets.append(analyse(trailer, trailer.with_suffix(".shots.json")))
+
+    sources = inspect_sources(trailers)
+    width, height = choose_output_size(sources, ceiling)
+    os.environ["VIDEO_RESOLUTION"] = f"{width}x{height}"
+    save_json(work / "quality-report.json", {"try_4k": ceiling == 2160, "ceiling_height": ceiling,
+              "sources": sources, "export_width": width, "export_height": height})
+    print(f"Auto quality: {width}x{height}; highest shared source resolution up to {ceiling}p. No source is forced up to 4K.", flush=True)
 
     writer = Writer(cache_dir=work / "script-sections")
     print(f"Script model: {writer.model}", flush=True)

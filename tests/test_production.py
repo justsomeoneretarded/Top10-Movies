@@ -28,10 +28,14 @@ from movie_pipeline.packaging import MIDROLLS
 from movie_pipeline.video_settings import export_size
 
 
-@pytest.mark.parametrize("count", [2, 5])
-def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count):
+@pytest.mark.parametrize("count,try_4k,source_height,expected_size", [
+    (2,"true",2160,(3840,2160)), (5,"true",1080,(1920,1080)),
+    (2,"false",2160,(1920,1080)), (5,"true",720,(1280,720)),
+])
+def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("VIDEO_RESOLUTION", "1080")
+    monkeypatch.setenv("TRY_4K", try_4k)
     monkeypatch.setenv("SCRIPT_MODEL", "qwen3:4b")
     records = {}
     durations = {}
@@ -162,6 +166,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         for i in range(1, 4):
             Image.new('RGB', (1280, 720), '#234567').save(output / f'thumbnail-{i:02}.jpg')
 
+    monkeypatch.setattr(cli, 'inspect_sources', lambda paths: [{"file": p.name, "width": round((source_height if i==0 else 2160)*16/9), "height": source_height if i==0 else 2160} for i,p in enumerate(paths)])
     monkeypatch.setattr(cli, 'voice_reference', lambda *args: reference)
     monkeypatch.setattr(cli, 'duration', lambda path: durations[str(path)])
     monkeypatch.setattr(cli, 'require_disk', Mock())
@@ -188,12 +193,15 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
     monkeypatch.setitem(sys.modules, 'faster_whisper', SimpleNamespace(WhisperModel=Mock()))
     output = tmp_path / 'output'
-    cli.produce(f'Top {count} Action Movies', 'Make a 5-minute video in 4K. Use male audio.',
+    cli.produce(f'Top {count} Action Movies', 'Make a 5-minute video. Use male audio.',
                 '; '.join(f"{film['title']} ({film['year']})" for film in films), tmp_path / 'jobs', output)
 
     assert 285 <= records['final_duration'] <= 315
     assert records['writes'] == 1
-    assert render_sizes and set(render_sizes) == {(3840, 2160)}
+    assert render_sizes and set(render_sizes) == {expected_size}
+    quality_report = json.loads(next((tmp_path / "jobs").glob("*/quality-report.json")).read_text())
+    assert quality_report["try_4k"] == (try_4k == "true")
+    assert (quality_report["export_width"], quality_report["export_height"]) == expected_size
     assert records['cta_plan'][0]['still'] is True
     assert len(records['cta_plan']) == 1
     timeline_file = next((tmp_path / 'jobs').glob('*/timeline.json'))
