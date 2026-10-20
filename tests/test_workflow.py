@@ -7,11 +7,18 @@ def test_workflow_has_checked_4k_option_and_never_interpolates_inputs_in_shell()
     # BaseLoader preserves GitHub's YAML 'on' key instead of interpreting it as a boolean.
     data = yaml.load(Path(".github/workflows/generate-video.yml").read_text(), Loader=yaml.BaseLoader)
     inputs = data["on"]["workflow_dispatch"]["inputs"]
-    assert set(inputs) == {"title", "description", "movies", "try_4k"}
+    assert set(inputs) == {"title", "description", "movies", "duration_minutes", "try_4k"}
     assert inputs["try_4k"]["type"] == "boolean"
     assert inputs["try_4k"]["default"] == "true"
     assert inputs["try_4k"]["required"] == "true"
+    minutes = inputs["duration_minutes"]
+    assert minutes["type"] == "choice"
+    assert minutes["default"] == "Auto"
+    assert minutes["required"] == "true"
+    assert minutes["options"] == ["Auto", *map(str, range(1,31))]
+    assert "100" not in minutes["options"]
     env = data["jobs"]["produce"]["env"]
+    assert env["VIDEO_MINUTES"] == "${{ inputs.duration_minutes }}"
     assert env["TRY_4K"] == "${{ inputs.try_4k }}"
     # No truthy fallback may turn an explicitly unchecked value back on.
     assert "||" not in env["TRY_4K"]

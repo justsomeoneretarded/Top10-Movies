@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .core import PipelineError, duration, ffmpeg
-from .timing import DurationSpec
+from .timing import DurationSpec, final_tempo
 from .video_settings import export_size
 
 WIDTH, HEIGHT, FPS = 1280, 720, 30
@@ -174,10 +174,9 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
     combined = work / "combined.mp4"
     ffmpeg("-f", "concat", "-safe", "0", "-i", listing, "-c", "copy", combined)
     original = duration(combined)
-    # Keep natural speed when the video already falls within the requested range.
-    speed = 1.0 if spec.minimum <= original+ending_hold <= spec.maximum else original / max(1, spec.target-ending_hold)
-    if not 0.85 <= speed <= 1.18:
-        raise PipelineError(f"Narration produced {original/60:.1f} minutes; too far from the requested {spec.target/60:.1f} minutes for natural tempo adjustment after automatic rewriting.")
+    speed = final_tempo(original, spec, ending_hold)
+    if not spec.automatic and not spec.minimum <= original/speed+ending_hold <= spec.maximum:
+        print("Keeping the complete video at a natural pace outside the soft runtime target.", flush=True)
     spoken_duration = original / speed
     final_duration = spoken_duration + ending_hold
     music = work / "music.wav"

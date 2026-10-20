@@ -33,12 +33,14 @@ from movie_pipeline.video_settings import export_size
     (2,"true",2160,(3840,2160),"found"), (5,"true",1080,(1920,1080),"missing"),
     (2,"false",2160,(1920,1080),"raises"), (5,"true",720,(1280,720),"found"),
     (2,"true",2160,(3840,2160),"render-fails"),
+    (2,"true",2160,(3840,2160),"rewrite-fails"),
 ])
 def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size, extra_mode):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("VIDEO_RESOLUTION", "1080")
     monkeypatch.setenv("TRY_4K", try_4k)
     monkeypatch.setenv("SCRIPT_MODEL", "qwen3:4b")
+    monkeypatch.setenv("VIDEO_MINUTES", "8" if extra_mode == "rewrite-fails" else "5")
     records = {}
     durations = {}
     text_for_audio = {}
@@ -78,6 +80,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
 
         def write(self, title, brief, values, **kwargs):
             records["writes"] = records.get("writes", 0)+1
+            if extra_mode == "rewrite-fails" and records["writes"] > 1:
+                raise RuntimeError("Optional timing rewrite unavailable")
             assert all(film['watch_availability']['region'] == 'US' for film in values)
             sections = [{"kind": "intro", "film": 0, "paragraphs": [first, second]}]
             sections += [{"kind": "film", "film": i, "paragraphs": [f"Review number {i+1} is easy to follow."]}
@@ -115,16 +119,19 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             pass
 
     def download(film, root):
+        records.setdefault("footage_order", []).append(("primary", film["id"]))
         path = make(root / f"movie-{film['id']}.mp4", 150)
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/trailer/{film['id']}"})
         return path
 
     def secondary(film, root, primary, minimum_size):
+        assert len([event for event in records["footage_order"] if event[0]=="primary"]) == count
+        records["footage_order"].append(("secondary", film["id"]))
         records['extra_attempts'] = records.get('extra_attempts', 0)+1
         assert minimum_size == expected_size
         if extra_mode == 'raises':
             raise RuntimeError('Optional source unavailable')
-        if extra_mode == 'missing':
+        if extra_mode in {'missing', 'rewrite-fails'}:
             return None
         path = make(root / f"movie-{film['id']}-extra.mp4", 150)
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/extra/{film['id']}"})
@@ -217,8 +224,9 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 '; '.join(f"{film['title']} ({film['year']})" for film in films), tmp_path / 'jobs', output)
 
     assert 285 <= records['final_duration'] <= 315
-    assert records['writes'] == 1
+    assert records['writes'] == (2 if extra_mode == "rewrite-fails" else 1)
     assert records['extra_attempts'] == count
+    assert records["footage_order"] == [("primary",film["id"]) for film in films]+[("secondary",film["id"]) for film in films]
     if extra_mode == "render-fails":
         assert records['render_fallbacks'] == count
     assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(2 if extra_mode == 'found' else 1)

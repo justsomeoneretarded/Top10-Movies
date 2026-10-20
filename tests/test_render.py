@@ -57,8 +57,8 @@ def test_final_export_respects_requested_duration_with_valid_audio(tmp_path, sou
     seconds, _speed = finish([long_source], target, tmp_path, False, spec=spec)
     assert spec.minimum-0.5 <= seconds <= spec.maximum+0.5
     if brief:
-        assert abs(seconds-spec.target) < 0.1
-        assert abs(_speed-source_seconds/(spec.target-3)) < 0.01
+        assert abs(seconds-(source_seconds+3)) < .1
+        assert _speed == 1
     metadata = probe(target)
     audio = next(s for s in metadata["streams"] if s["codec_type"] == "audio")
     assert audio["sample_rate"] == "48000"
@@ -133,4 +133,19 @@ def test_ending_holds_picture_three_seconds_after_speech(monkeypatch, tmp_path):
     a=np.asarray(get_frame(target,2.2),dtype=float)
     b=np.asarray(get_frame(target,3.4),dtype=float)
     assert np.abs(a-b).mean()<1
+    ffmpeg('-xerror','-i',target,'-f','null','-')
+
+
+def test_outside_runtime_window_still_exports_complete_video(monkeypatch,tmp_path):
+    from movie_pipeline.render import finish
+    from movie_pipeline.timing import DurationSpec
+    monkeypatch.setenv('VIDEO_RESOLUTION','720')
+    source=tmp_path/'source.mp4'
+    ffmpeg('-f','lavfi','-i','color=c=blue:size=1280x720:rate=30','-f','lavfi','-i',
+           'sine=frequency=220:sample_rate=48000','-t',2,'-c:v','libx264','-preset','ultrafast','-c:a','aac',source)
+    target=tmp_path/'final.mp4'
+    seconds,speed=finish([source],target,tmp_path,False,spec=DurationSpec(480,360,600))
+    assert speed == .85
+    assert 5 < seconds < 6
+    assert any(stream['codec_type']=='audio' for stream in probe(target)['streams'])
     ffmpeg('-xerror','-i',target,'-f','null','-')

@@ -9,13 +9,50 @@ on:
         required: true
         type: string
       description:
-        description: "Creative brief: duration (e.g. 5-minute video), style, scenes, thumbnail, narrator"
+        description: "Creative context, style, scenes, thumbnail, narrator (length is selected below)"
         required: true
         type: string
       movies:
         description: "Titles and years, separated by semicolons: Arrival (2016); Inception (2010)"
         required: true
         type: string
+      duration_minutes:
+        description: "Video length in minutes (±25%); Auto chooses a sensible length for this list"
+        required: true
+        type: choice
+        default: 'Auto'
+        options:
+          - 'Auto'
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+          - '6'
+          - '7'
+          - '8'
+          - '9'
+          - '10'
+          - '11'
+          - '12'
+          - '13'
+          - '14'
+          - '15'
+          - '16'
+          - '17'
+          - '18'
+          - '19'
+          - '20'
+          - '21'
+          - '22'
+          - '23'
+          - '24'
+          - '25'
+          - '26'
+          - '27'
+          - '28'
+          - '29'
+          - '30'
       try_4k:
         description: "Try 4K when every trailer supports it (otherwise choose best shared quality)"
         required: true
@@ -42,6 +79,7 @@ jobs:
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: qwen3:4b
       TRY_4K: "${{ inputs.try_4k }}"
+      VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       THUMBNAIL_AI: 'true'
       U2NET_HOME: ${{ github.workspace }}/work/models/rembg
       OLLAMA_HOST: 127.0.0.1:11435

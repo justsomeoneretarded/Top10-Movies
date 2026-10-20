@@ -1,7 +1,8 @@
-"""Requested runtime is independent of individual paragraph word counts."""
+"""Soft runtime planning independent of paragraph word counts."""
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass
 
@@ -13,9 +14,44 @@ class DurationSpec:
     target: float = 540
     minimum: float = 480
     maximum: float = 600
+    automatic: bool = False
+
+
+def _auto_duration(title: str, count: int, films: list[dict] | None = None) -> DurationSpec:
+    # Roughly 80 seconds per recommendation keeps small lists concise, while
+    # allowing a ten-title countdown to naturally run around fourteen minutes.
+    count = max(2, min(15, count))
+    shows = (sum(film.get("kind") == "tv" for film in films) > len(films)/2
+             if films else bool(re.search(r"\b(shows?|series|tv)\b", title, re.IGNORECASE)))
+    target = min(22*60, 30 + count*(85 if shows else 80))
+    return DurationSpec(target, target*.75, target*1.25, automatic=True)
+
+
+def workflow_duration(title: str, count: int, films: list[dict] | None = None) -> DurationSpec:
+    """Read the workflow selector; Auto uses content size and no hard deadline.
+
+    Invalid stale/API selections fall back to Auto rather than losing production.
+    Brief text is deliberately not parsed here: the workflow selector is the
+    authority for specified lengths, and Auto stays free of brief-based limits.
+    """
+    value = os.getenv("VIDEO_MINUTES", "Auto").strip()
+    if not value or value.casefold() == "auto":
+        return _auto_duration(title, count, films)
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)?", value, re.IGNORECASE)
+    minutes = float(match[1]) if match else float("nan")
+    if not math.isfinite(minutes) or not 1 <= minutes <= 30:
+        print("Duration selection is unavailable or outside 1–30 minutes; using Auto planning.", flush=True)
+        return _auto_duration(title, count, films)
+    seconds = minutes*60
+    return DurationSpec(seconds, seconds*.75, seconds*1.25)
 
 
 def requested_duration(brief: str) -> DurationSpec:
+    """Legacy local brief parser; production uses workflow_duration instead.
+
+    Single durations allow ±25%. Invalid or conflicting instructions no longer
+    cause a video failure; they fall back to the legacy default planning target.
+    """
     text = brief.casefold().replace("–", "-").replace("—", "-")
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
              "seven": 7, "eight": 8, "nine": 9, "ten": 10, "fifteen": 15,
@@ -33,13 +69,31 @@ def requested_duration(brief: str) -> DurationSpec:
         factor = 3600 if match[3].startswith(("hour", "hr")) else (1 if match[3].startswith(("second", "sec")) else 60)
         low, high = float(match[1])*factor, float(match[2] or match[1])*factor
         if not math.isfinite(low) or not math.isfinite(high) or low < 30 or high < low:
-            raise PipelineError("Request a video of at least 30 seconds, with the shorter duration first in a range.")
+            print("Invalid duration in brief; keeping the default planning length.", flush=True)
+            return DurationSpec()
         target = (low+high)/2
-        specs.append(DurationSpec(target, low if match[2] else target*0.95, high if match[2] else target*1.05))
-    unique = set(specs)
-    if len(unique) > 1:
-        raise PipelineError("The brief contains conflicting video durations. Specify one duration, such as 'Make a 5-minute video'.")
+        specs.append(DurationSpec(target, low if match[2] else target*.75, high if match[2] else target*1.25))
+    if len(set(specs)) > 1:
+        print("Conflicting durations in brief; keeping the default planning length.", flush=True)
+        return DurationSpec()
     return specs[0] if specs else DurationSpec()
+
+
+def final_tempo(original: float, spec: DurationSpec, ending_hold: float = 3) -> float:
+    """Use natural speech when possible and never fail solely over runtime.
+
+    For specified targets, only the smallest adjustment needed to reach the
+    allowed range is attempted. If that range cannot be reached naturally, the
+    bounded result is retained instead of padding, cutting, or rejecting speech.
+    """
+    if not math.isfinite(original) or original <= 0 or not math.isfinite(ending_hold) or ending_hold < 0:
+        raise PipelineError("Cannot time an empty or invalid media stream.")
+    total = original + ending_hold
+    if spec.automatic or spec.minimum <= total <= spec.maximum:
+        return 1.0
+    boundary = spec.minimum if total < spec.minimum else spec.maximum
+    speed = original/max(1, boundary-ending_hold)
+    return max(.85, min(1.18, speed))
 
 
 def trailer_budget(spec: DurationSpec, count: int) -> float:

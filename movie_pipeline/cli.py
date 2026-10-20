@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 import os
 import re
 import sys
@@ -20,7 +21,7 @@ from .core import (
     voice_reference,
     write_srt,
 )
-from .timing import DurationSpec, requested_duration, trailer_budget
+from .timing import DurationSpec, trailer_budget, workflow_duration
 from .video_settings import (
     choose_output_size,
     download_ceiling,
@@ -61,8 +62,10 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
             raise PipelineError(f"Missing deliverable: {name}")
     metadata = probe(output / "final-video.mp4")
     seconds = float(metadata["format"]["duration"])
-    if not spec.minimum-0.5 <= seconds <= spec.maximum+0.5:
-        raise PipelineError(f"Final video duration {seconds:.1f}s is outside the requested {spec.minimum/60:.1f}–{spec.maximum/60:.1f} minutes.")
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise PipelineError("Final export has no valid media duration.")
+    if not spec.automatic and not spec.minimum-.5 <= seconds <= spec.maximum+.5:
+        print(f"Complete video is {seconds/60:.1f} minutes; outside the soft target, retained without padding or cutting a review.", flush=True)
     streams = metadata["streams"]
     video = next((s for s in streams if s["codec_type"] == "video"), None)
     if not video or (video["width"], video["height"]) != export_size() or not any(s["codec_type"] == "audio" for s in streams):
@@ -110,7 +113,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         raise PipelineError("The title's countdown number must match the number of movies/shows.")
     ceiling = download_ceiling()
     os.environ["VIDEO_RESOLUTION"] = str(ceiling)
-    spec = requested_duration(brief)
+    spec = workflow_duration(title, len(items))
     max_beat = trailer_budget(spec, len(items))
     expected_breaks = min(3, max_beat) * len(items)
     print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
@@ -118,17 +121,22 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the writing model so a model upgrade never reuses an old model's script.
     script_model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
-    run_key = key("pipeline-v4-calm-casual", title, brief, movies, narrator, script_model, os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v5-adaptive-duration", title, brief, movies, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
-    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
     research = Research()
     facts_path = work / "research.json"
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
     films = enrich_availability(films, research, work / "availability")
+    spec = workflow_duration(title, len(items), films)
+    max_beat = trailer_budget(spec, len(items))
+    expected_breaks = min(3, max_beat)*len(items)
+    print(f"Runtime mode: {'Auto' if spec.automatic else 'selected minutes'}; soft plan {spec.target/60:.1f} minutes.", flush=True)
+    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
     trailers = []
     shot_sets = []
+    print("Footage round 1: fetch a primary trailer for every title.", flush=True)
     for film in films:
         print(f"Footage: {film['title']}", flush=True)
         trailer = download(film, Path("work/footage"))
@@ -142,6 +150,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     shot_lookup = {str(trailer): shots for trailer, shots in zip(trailers, shot_sets)}
     for i, source in enumerate(sources):
         source.update(film=films[i]["title"], role="primary")
+    print("Footage round 2: optional second trailers, after all primary trailers are ready.", flush=True)
     for i, (film, primary) in enumerate(zip(films, trailers)):
         extra = None
         try:
@@ -185,23 +194,42 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
 
     print(f"Narration: {narrator} / {os.getenv('TTS_MODEL', 'turbo')} on CPU", flush=True)
     word_scale = 1.0
+    best_draft = None
     for revision in range(3):
-        speaker = Narrator(reference, work / "speech")
-        speech = {}
-        for section_index, section in enumerate(script["sections"]):
-            for paragraph_index, text in enumerate(section["paragraphs"]):
-                print(f"Narrating section {section_index+1}, paragraph {paragraph_index+1}", flush=True)
-                speech[(section_index, paragraph_index)] = speaker.speak(text)
-        speaker.close()
-        spoken_seconds = sum(duration(path) for path in speech.values())
-        estimated = spoken_seconds + expected_breaks + 11
-        if spec.minimum*0.98 <= estimated <= spec.maximum*1.02 or revision == 2:
+        try:
+            speaker = Narrator(reference, work / "speech")
+            speech = {}
+            try:
+                for section_index, section in enumerate(script["sections"]):
+                    for paragraph_index, text in enumerate(section["paragraphs"]):
+                        print(f"Narrating section {section_index+1}, paragraph {paragraph_index+1}", flush=True)
+                        speech[(section_index, paragraph_index)] = speaker.speak(text)
+            finally:
+                speaker.close()
+            spoken_seconds = sum(duration(path) for path in speech.values())
+        except Exception:
+            if best_draft is None:
+                raise
+            print("Timing revision unavailable; retaining the earlier complete narration.", flush=True)
             break
-        print(f"Adjusting overall script to requested runtime; measured {estimated/60:.1f} minutes", flush=True)
-        word_scale *= max(0.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
-        script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks)
-        save_json(script_path, script)
-        writer.unload()
+        estimated = spoken_seconds+expected_breaks+11
+        # Auto uses a broad editorial guide, not a required runtime window.
+        comfortable = .5*spec.target <= estimated <= 1.6*spec.target if spec.automatic else spec.minimum <= estimated <= spec.maximum
+        distance = abs(estimated-spec.target)+(0 if comfortable else spec.target)
+        if best_draft is None or distance < best_draft[0]:
+            best_draft = (distance, script, speech)
+        if comfortable or revision == 2:
+            break
+        print(f"Refining an unusually {'long' if estimated > spec.target else 'short'} draft; measured {estimated/60:.1f} minutes.", flush=True)
+        word_scale *= max(.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
+        try:
+            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks)
+            writer.unload()
+        except Exception:  # noqa: BLE001 -- duration guidance is best effort; keep a complete usable draft.
+            print("Timing rewrite unavailable; retaining a complete draft.", flush=True)
+            break
+    _distance, script, speech = best_draft
+    save_json(script_path, script)
 
     # Generate the brief CTA separately so its measured length can determine placement.
     cta_text = midroll_text(title+brief+movies)
@@ -381,6 +409,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     gc.collect()
     print("Mixing and exporting final video", flush=True)
     final_duration, speed = finish(parts, output / "final-video.mp4", work, action, spec=spec)
+    save_json(work / "duration-report.json", {"automatic": spec.automatic, "target_seconds": spec.target,
+              "minimum_seconds": spec.minimum, "maximum_seconds": spec.maximum,
+              "actual_seconds": final_duration, "inside_soft_range": spec.minimum <= final_duration <= spec.maximum,
+              "tempo": speed})
     for cue in all_cues:
         cue["start"] /= speed
         cue["end"] = min(cue["end"] / speed, final_duration)

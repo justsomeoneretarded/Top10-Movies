@@ -1,6 +1,6 @@
 # Top10 Movies
 
-An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive a countdown with automatically chosen source-matched resolution, up to 4K at your requested duration (8–10 minutes by default), uploadable subtitles, description, recommended title, and three thumbnails.
+An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive a countdown with automatically chosen source-matched resolution, up to 4K, with an Auto or selected video length, uploadable subtitles, description, recommended title, and three thumbnails.
 
 **No paid inference APIs.** Scriptwriting uses a local Ollama model; narration uses Chatterbox; shot matching uses CLIP; captions use faster-whisper. GitHub account usage/storage limits still apply. This is an initial implementation, not a guarantee of editorial quality or successful downloads for every title. End-to-end production must be verified on your runner with your configured secrets.
 
@@ -24,7 +24,7 @@ To replace a reference, use `python scripts/prepare_voice.py NAME /path/to/audio
 
 Open **[Actions → Generate Video](https://github.com/justsomeoneretarded/Top10-Movies/actions/workflows/generate-video.yml) → Run workflow**.
 
-There are four inputs: title, description / creative brief, movies, and a **Try 4K** checkbox. The checkbox is checked by default; no resolution instruction is needed in the brief.
+There are five inputs: title, description / creative brief, movies, a **Video length in minutes** selector, and a **Try 4K** checkbox. Length defaults to **Auto**; Try 4K is checked by default. Timing and resolution are selected in the workflow rather than written into the brief.
 
 ```text
 Title:
@@ -38,6 +38,9 @@ about mystery and impossible worlds. Avoid exaggerated claims.
 
 Movies:
 Arrival (2016); Inception (2010); Coherence (2013); Interstellar (2014); Predestination (2014)
+
+Video length in minutes:
+Auto (default), or choose a number such as 8
 
 Try 4K:
 Checked (default)
@@ -64,19 +67,19 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 
 ## Production stages
 
-1. Validate inputs, the Try 4K setting, and the selected voice before downloading models.
+1. Validate inputs, the video-length selection, the Try 4K setting, and the selected voice before downloading models.
 2. Resolve title/year against TMDB movies and TV. If the search year differs, check dated festival/regional release records. If still unresolved, verify an exact title and publication year through Wikidata, then map its IMDb ID back to TMDB. Record the evidence; never accept a nearby year without a supporting date. Reject genuinely ambiguous matches.
 3. Discover TMDB-linked YouTube trailers/teasers and bounded YouTube search matches. Prefer an official primary trailer. A second source may be a fan edit of the same movie/show when its title/year checks match; concept, AI-generated, fake, reaction, and review videos are excluded.
-4. Inspect candidate quality, download the best primary trailer per title, and choose the highest shared export resolution up to the checkbox ceiling. Then try to add a second trailer with different scenes at that resolution. Discovery and retries are bounded; keep at most two trailers per title temporarily in `work/footage/`. One usable trailer is enough, and a missing or rejected second trailer never fails production. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
+4. Fetch primary footage in a first round: download one usable primary trailer for every title before looking for second trailers. Choose the highest shared export resolution up to the checkbox ceiling. In a separate second round, try to add a trailer with different scenes for each title at that resolution. Discovery and retries are bounded; keep at most two trailers per title temporarily in `work/footage/`. One usable trailer is enough, and a missing or rejected second trailer never fails production. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
 5. Look up US streaming providers using TMDB's JustWatch-powered watch listings, with a 24-hour cache. Keep subscription, free, ads, rental, and purchase options distinct. Missing or unavailable listings are skipped without failing production.
-6. Generate original, factual recommendation scripts with `qwen3:4b` through local Ollama: casual language, a punchy genre-specific hook, clear movie premises, and an outro inviting likes, subscriptions, and other recommendations. Word counts guide planning rather than cause paragraph failures.
-7. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate speech in small chunks and retry faulty speech. Up to two overall script rewrites adapt the content to the requested runtime using measured narration pace.
+6. Generate original, factual recommendation scripts with `qwen3:4b` through local Ollama: casual language, a punchy genre-specific hook, clear movie premises, and an outro inviting likes, subscriptions, and other recommendations. Auto length scales the planning budget to the number and kind of titles. Selected minutes allow ±25%; word counts and timing are guidance rather than reasons to discard a usable video.
+7. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate speech in small chunks and retry faulty speech. For a selected length, bounded overall script adjustments use measured narration pace. Auto mode avoids chasing a fixed runtime.
 8. Transcribe narration and primary-trailer dialogue with CPU/int8 faster-whisper. Verify that narration words were spoken. Place one funny like/subscribe break at a review boundary around 30–50% of measured runtime; shorten its audio to keep it below 10 seconds after final tempo adjustment.
 9. Match frames from the accepted source pool loosely to the current narration using CLIP. Use both trailers when useful, retaining steadier, longer visual beats, occasional face holds, and a multi-title intro. Extra footage does not require faster cutting. Weak visual matches never cause a relevance-validation failure.
 10. Render rank graphics, the like/subscribe/bell card, short trailer-audio breaks, and an original instrumental bed that ducks under speech. Keep the final image for three seconds after speech, with a gentle fade rather than an abrupt cut.
 11. Export H.264/AAC at 30fps, using the highest source-matched resolution shared by all selected trailers, up to 4K when checked or 1080p when unchecked. Apply modest pitch-preserving tempo adjustment only when needed. Embed chapters and write synchronized SRT and description chapter timestamps.
 12. Ask Qwen3 4B for six thumbnail concepts, select three styles, and compare up to two generated image candidates per selected concept. Complete cinematic scenes are the main path; local artwork and trailer cutouts remain a fallback. No paid inference fallback is used.
-13. Validate output files, media streams, runtime, thumbnail dimensions/size, and a full FFmpeg decode. Upload the package for one day, remove downloaded trailers and render intermediates, and save bounded speech/script checkpoints.
+13. Validate output files, usable media streams and duration, thumbnail dimensions/size, and a full FFmpeg decode. A healthy export is not rejected solely for missing the length goal. Upload the package for one day, remove downloaded trailers and render intermediates, and save bounded speech/script checkpoints.
 
 No approval or publication steps occur. Successful runs deliver downloadable files; this repository does not upload to YouTube.
 
@@ -98,7 +101,7 @@ The **Try 4K** checkbox is checked by default. Checked means “choose the best 
 
 The pipeline downloads the best primary trailer for each title, checks their actual dimensions, then chooses the highest export resolution all primary sources support. All-4K sources can produce 4K; a mix of 4K and 1080p produces 1080p; 1440p, 720p, or lower sources lower the shared export accordingly. A weaker source is not stretched to force a 4K-sized file. If a low-resolution candidate would lower the result, the downloader first checks other candidate trailers for that movie and prefers a better source when available. It retains at most two trailers per title, with an 800 MB cap for each file.
 
-The workflow always tries to enrich each movie/show with a second trailer, without requiring another input. The second source must meet the already-selected export resolution, so optional extra footage cannot lower the result or force upscaling. Sampled-frame perceptual hashes estimate whether it adds different imagery instead of repeating a reupload. This is a scene-diversity heuristic, not proof that every scene is new or that a fan edit contains only footage from the intended title. Metadata checks still tie candidates to the same movie/show. Missing, inaccessible, too-similar, low-resolution, or unusable second trailers are skipped; production continues with the primary source. A working-disk reserve also takes priority over keeping extra footage.
+After the first-trailer round has completed for every movie/show, the workflow starts a separate second-trailer round to enrich each title, without requiring another input. The second source must meet the already-selected export resolution, so optional extra footage cannot lower the result or force upscaling. Sampled-frame perceptual hashes estimate whether it adds different imagery instead of repeating a reupload. This is a scene-diversity heuristic, not proof that every scene is new or that a fan edit contains only footage from the intended title. Metadata checks still tie candidates to the same movie/show. Missing, inaccessible, too-similar, low-resolution, or unusable second trailers are skipped; production continues with the primary source. A working-disk reserve also takes priority over keeping extra footage.
 
 Missing 4K footage does not cause a resolution error: production continues at the available shared quality. Logs and the cached job's quality-report JSON record accepted source dimensions, including optional second trailers, and the selected export resolution. All accepted trailer source URLs are included in the description. Website access and native 4K availability are not guaranteed.
 
@@ -155,19 +158,16 @@ The workflow writes cookies to a permission-restricted file under `RUNNER_TEMP`,
 
 A title may premiere at a festival in one year and reach theaters in the next. The resolver preserves the year you entered and checks supporting release dates before rejecting it. If needed, a keyless Wikidata lookup checks the English label/aliases, publication-year claims, and IMDb identifier. TMDB's IMDb-ID lookup then retrieves the same film's metadata and trailer references. This is an independent **identity/year check**, not scraping IMDb reviews or plots. Synopses and trailer references still come from TMDB. Source outages and incomplete claims can still prevent verification; logs report that without assuming the input is wrong. No additional account or API secret is required.
 
-## Request a different video length
+## Choose a video length
 
-Include one runtime instruction in the description/creative brief:
+Use the workflow's **Video length in minutes** selector. The creative brief no longer controls runtime.
 
-- `Make a 5-minute video. Use Warguy.`
-- `Aim for 12–15 minutes. Use Kit Laser.`
-- `Duration: 90 seconds. Use the female voice.`
+- **Auto (default):** plan an appropriate amount of commentary for the list, then let complete reviews determine the result. A top-five shows video is usually planned around 7–9 minutes; a top-ten movies video can reasonably be around 13–15 minutes. Auto does not turn a small list into an arbitrary 100-minute video or stretch useful narration to fill a fixed quota.
+- **A selected number:** every minute option uses a **±25% soft target**. Selecting **8** means **6–10 minutes**; selecting **5** means **3:45–6:15**; selecting **15** means **11:15–18:45**. The selector offers every whole minute from 1 to 30.
 
-No code changes or additional workflow input is required. If duration is omitted, the default remains 8–10 minutes. Single durations allow about 5% variation; explicit ranges use their stated bounds. Use one duration instruction and remove conflicting old instructions. Durations below 30 seconds are not supported by this countdown format.
+The script budget scales with title count and the planned trailer pauses, subscribe break, and ending hold. Paragraph word counts stay flexible. Empty or unusable narration still gets retried; oversized paragraphs are split into smaller TTS chunks without deleting words. For selected minutes, measured speech can drive bounded script adjustments and a limited natural tempo correction. If those adjustments still miss the goal, the workflow keeps the healthy video rather than failing solely on length, cutting off a review, padding with filler, or forcing unnatural speech speed. Auto mode does not chase a fixed target after narration is generated. Chapters and subtitles follow the actual final timeline.
 
-The script budget scales with runtime, movie count, and planned trailer-audio pauses. Individual narration sections can vary in word count without aborting the job. Only empty/unusable narration is rejected after retries. Oversized paragraphs are split into smaller TTS chunks without deleting words. After narration, actual speech duration drives up to two whole-script adjustments; final modest tempo correction and duration validation use the requested runtime. Chapter and subtitle timing follow any final tempo change.
-
-This does not promise unlimited video lengths on free hardware: longer videos require more generation/render time and storage, and the GitHub job timeout and account quotas still apply. No live model run has yet verified this duration feature; automated tests cover parsing, script-budget scaling, and real media exports.
+This does not remove real resource or media failures: longer videos require more generation/render time and storage, and GitHub's 350-minute job timeout and account quotas still apply. Missing required footage, broken media, or failed narration can still stop production. Automated tests check timing selection, script-budget scaling, and media export; full live model output still needs verification on the runner.
 
 ## Steadier editing, hooks, and calls to action
 
