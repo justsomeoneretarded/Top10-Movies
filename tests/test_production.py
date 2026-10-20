@@ -20,19 +20,21 @@ from movie_pipeline import (
     render,
     research,
     script,
+    secondary_footage,
     shots,
     voice,
 )
-from movie_pipeline.core import key, save_json, write_srt
+from movie_pipeline.core import PipelineError, key, save_json, write_srt
 from movie_pipeline.packaging import MIDROLLS
 from movie_pipeline.video_settings import export_size
 
 
-@pytest.mark.parametrize("count,try_4k,source_height,expected_size", [
-    (2,"true",2160,(3840,2160)), (5,"true",1080,(1920,1080)),
-    (2,"false",2160,(1920,1080)), (5,"true",720,(1280,720)),
+@pytest.mark.parametrize("count,try_4k,source_height,expected_size,extra_mode", [
+    (2,"true",2160,(3840,2160),"found"), (5,"true",1080,(1920,1080),"missing"),
+    (2,"false",2160,(1920,1080),"raises"), (5,"true",720,(1280,720),"found"),
+    (2,"true",2160,(3840,2160),"render-fails"),
 ])
-def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size):
+def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size, extra_mode):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("VIDEO_RESOLUTION", "1080")
     monkeypatch.setenv("TRY_4K", try_4k)
@@ -117,6 +119,17 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/trailer/{film['id']}"})
         return path
 
+    def secondary(film, root, primary, minimum_size):
+        records['extra_attempts'] = records.get('extra_attempts', 0)+1
+        assert minimum_size == expected_size
+        if extra_mode == 'raises':
+            raise RuntimeError('Optional source unavailable')
+        if extra_mode == 'missing':
+            return None
+        path = make(root / f"movie-{film['id']}-extra.mp4", 150)
+        save_json(path.with_suffix('.json'), {'source': f"https://example.org/extra/{film['id']}"})
+        return path
+
     def captions(audio, recognizer):
         if str(audio) in text_for_audio:
             return [{"start": 0, "end": durations[str(audio)], "text": text_for_audio[str(audio)]}]
@@ -129,6 +142,9 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         def index(self, path, choices):
             pass
 
+        def hook_score(self, path, choices, text, action):
+            return .5
+
         def choose(self, path, choices, text, seconds, action, **kwargs):
             return [{"start": 40, "duration": seconds, "freeze": 0}]
 
@@ -138,6 +154,9 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 for i, seconds in enumerate(lengths)]
 
     def speech_video(source, audio, selected, target, label, work, **kwargs):
+        if extra_mode == 'render-fails' and any('-extra.mp4' in cut.get('source', '') for cut in selected):
+            records['render_fallbacks'] = records.get('render_fallbacks', 0)+1
+            raise PipelineError('Optional decoder failed')
         render_sizes.append(export_size())
         text = text_for_audio[str(audio)]
         if text in MIDROLLS:
@@ -176,6 +195,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(research, 'Research', FakeResearch)
     monkeypatch.setattr(availability, 'enrich_availability', enrich)
     monkeypatch.setattr(footage, 'download', download)
+    monkeypatch.setattr(secondary_footage, 'download_secondary', secondary)
     monkeypatch.setattr(script, 'Writer', FakeWriter)
     monkeypatch.setattr(voice, 'Narrator', FakeNarrator)
     monkeypatch.setattr(voice, 'captions', captions)
@@ -198,6 +218,10 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
 
     assert 285 <= records['final_duration'] <= 315
     assert records['writes'] == 1
+    assert records['extra_attempts'] == count
+    if extra_mode == "render-fails":
+        assert records['render_fallbacks'] == count
+    assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(2 if extra_mode == 'found' else 1)
     assert render_sizes and set(render_sizes) == {expected_size}
     quality_report = json.loads(next((tmp_path / "jobs").glob("*/quality-report.json")).read_text())
     assert quality_report["try_4k"] == (try_4k == "true")
@@ -228,6 +252,11 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     description = (output / 'description.txt').read_text()
     assert description.startswith(first+'\n\n'+second+'\n\n')
     assert '00:00 Intro' in description and '#ActionMovies' in description
+    if extra_mode == 'found':
+        assert 'https://example.org/extra/1' in description
+        assert any('-extra.mp4' in shot.get('source','') for event in events for shot in event.get('shots',[]))
+    else:
+        assert 'https://example.org/extra/' not in description
     assert 'Featured movies' in description and 'Stream: Netflix; Rent: Amazon Video' in description
     assert 'Film information: TMDB' not in description
     assert any('Netflix' in event.get('text', '') for event in events)

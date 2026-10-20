@@ -93,7 +93,13 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     )
     from .research import Research
     from .script import Writer
+    from .secondary_footage import download_secondary
     from .shots import ShotSelector, analyse, intro_montage
+    from .source_pool import (
+        best_intro_sources,
+        choose_from_sources,
+        primary_fallback_plan,
+    )
     from .voice import Narrator, captions, spoken_coverage
 
     if not title.strip() or len(title) > 200 or not brief.strip() or len(brief) > 4000:
@@ -132,9 +138,39 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     sources = inspect_sources(trailers)
     width, height = choose_output_size(sources, ceiling)
     os.environ["VIDEO_RESOLUTION"] = f"{width}x{height}"
-    save_json(work / "quality-report.json", {"try_4k": ceiling == 2160, "ceiling_height": ceiling,
-              "sources": sources, "export_width": width, "export_height": height})
-    print(f"Auto quality: {width}x{height}; highest shared source resolution up to {ceiling}p. No source is forced up to 4K.", flush=True)
+    pools = [[trailer] for trailer in trailers]
+    shot_lookup = {str(trailer): shots for trailer, shots in zip(trailers, shot_sets)}
+    for i, source in enumerate(sources):
+        source.update(film=films[i]["title"], role="primary")
+    for i, (film, primary) in enumerate(zip(films, trailers)):
+        extra = None
+        try:
+            # The extra source is optional and must leave space for the final render.
+            require_disk(work, spec.target)
+            extra = download_secondary(film, Path("work/footage"), primary, (width, height))
+            if extra is None:
+                print(f"Using one trailer for {film['title']}; no suitable second trailer was accepted.", flush=True)
+                continue
+            details = inspect_sources([extra])[0]
+            if details["width"] < width or details["height"] < height:
+                raise PipelineError("Optional trailer is below the selected export resolution.")
+            extra_shots = analyse(extra, extra.with_suffix(".shots.json"))
+            require_disk(work, spec.target)
+            pools[i].append(extra)
+            shot_lookup[str(extra)] = extra_shots
+            details.update(film=film["title"], role="secondary")
+            sources.append(details)
+            print(f"Using two trailers for {film['title']} to provide more scene variety.", flush=True)
+        except Exception:  # noqa: BLE001 -- an optional second trailer must never discard a usable first one.
+            if extra is not None and extra != primary:
+                for path in extra.parent.glob(extra.stem+".*"):
+                    if path.is_file():
+                        path.unlink(missing_ok=True)
+            print(f"Second trailer skipped for {film['title']}; continuing with the primary trailer.", flush=True)
+    quality_report = {"try_4k": ceiling == 2160, "ceiling_height": ceiling,
+                      "sources": sources, "export_width": width, "export_height": height}
+    save_json(work / "quality-report.json", quality_report)
+    print(f"Auto quality: {width}x{height}; highest shared primary-source resolution up to {ceiling}p. Optional extra trailers meet this quality.", flush=True)
 
     writer = Writer(cache_dir=work / "script-sections")
     print(f"Script model: {writer.model}", flush=True)
@@ -241,6 +277,17 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     for film, trailer, shots in zip(films, trailers, shot_sets):
         selector.index(trailer, shots)
         selector.people[str(trailer)] = film.get("cast", [])
+    for film, pool in zip(films, pools):
+        for extra in pool[1:]:
+            try:
+                selector.index(extra, shot_lookup[str(extra)])
+                selector.people[str(extra)] = film.get("cast", [])
+            except Exception:  # noqa: BLE001 -- optional analysis failure uses the primary source.
+                pool.remove(extra)
+                print(f"Optional trailer analysis skipped for {film['title']}.", flush=True)
+    active_files = {path.name for pool in pools for path in pool}
+    quality_report["sources"] = [source for source in sources if source["file"] in active_files]
+    save_json(work / "quality-report.json", quality_report)
     beats = {i: choose_beat(trailer_cues[section["film"]], shot_sets[section["film"]], duration(trailers[section["film"]]), action, maximum=max_beat)
              for i, section in enumerate(script["sections"]) if section["kind"] == "film" and max_beat}
     lengths = {coordinates: duration(audio) for coordinates, audio in speech.items()}
@@ -265,6 +312,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     all_cues = []
     chapters = []
     timeline = []
+    used_video_sources = set()
     offset = 0.0
     for section_index, section in enumerate(script["sections"]):
         film_index = section["film"]
@@ -281,7 +329,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             label_image(label, film["title"] if is_film else title, film_index+1 if is_film else None, film["year"] if is_film else None)
         montage = None
         if section["kind"] == "intro":
-            montage = intro_montage(selector, trailers, shot_sets,
+            intro_sources = best_intro_sources(selector, pools, shot_lookup, title+". "+brief, action)
+            montage = intro_montage(selector, intro_sources, [shot_lookup[str(path)] for path in intro_sources],
                                     [duration(speech[(section_index, p)]) for p in range(len(section["paragraphs"]))],
                                     title + ". " + brief, action)
         midpoint = max(1, len(section["paragraphs"]) // 2)
@@ -289,14 +338,26 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         for paragraph_index, text in enumerate(section["paragraphs"]):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
-            chosen = montage[paragraph_index] if montage is not None else selector.choose(trailer, shot_sets[film_index], text, duration(audio), action)
+            chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), action)
             if section["kind"] == "subscribe":
                 held = max(chosen, key=lambda cut: cut["duration"])
                 chosen = [{**held, "start": held["start"]+.2, "duration": duration(audio), "freeze": 0, "still": True}]
             if meme and montage is not None and not meme_used:
                 chosen, meme_used = place_intro_meme(chosen, text, aligned[(section_index, paragraph_index)], meme)
             path = work / f"part-{len(parts):03}.mp4"
-            speech_video(trailer, audio, chosen, path, label if paragraph_index == 0 else None, work / f"render-{len(parts):03}", label_seconds=duration(audio) if section["kind"] == "subscribe" else 3.5)
+            try:
+                speech_video(trailer, audio, chosen, path, label if paragraph_index == 0 else None, work / f"render-{len(parts):03}", label_seconds=duration(audio) if section["kind"] == "subscribe" else 3.5)
+            except (PipelineError, OSError, RuntimeError, ValueError):
+                optional = {str(extra) for pool in pools for extra in pool[1:]}
+                failed = {cut.get("source") for cut in chosen if cut.get("source") in optional}
+                if not failed:
+                    raise
+                print("Optional trailer could not render; retrying this paragraph with primary footage.", flush=True)
+                chosen = primary_fallback_plan(selector, chosen, trailers, shot_sets, text, action, film_index)
+                for pool in pools:
+                    pool[:] = [source for source in pool if str(source) not in failed]
+                speech_video(trailer, audio, chosen, path, label if paragraph_index == 0 else None, work / f"render-{len(parts):03}", label_seconds=duration(audio) if section["kind"] == "subscribe" else 3.5)
+            used_video_sources.update(str(cut.get("source", trailer)) for cut in chosen if not cut.get("image"))
             seconds = duration(path)
             for cue in aligned[(section_index, paragraph_index)]:
                 all_cues.append({"start": offset + cue["start"], "end": offset + min(cue["end"], seconds), "text": cue["text"]})
@@ -328,7 +389,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         chapter["start"] /= speed
     package = script["package"]
     (output / "recommended-title.txt").write_text(package["title"].strip() + "\n")
-    source_links = [json.loads(t.with_suffix('.json').read_text())["source"] for t in trailers]
+    credited_trailers = list(dict.fromkeys([path for pool in pools for path in pool]+[Path(source) for source in sorted(used_video_sources)]))
+    active_files = {path.name for path in credited_trailers}
+    quality_report["sources"] = [source for source in sources if source["file"] in active_files]
+    save_json(work / "quality-report.json", quality_report)
+    source_links = [json.loads(t.with_suffix('.json').read_text())["source"] for t in credited_trailers]
     (output / "description.txt").write_text(build_description(script, films, chapters, source_links))
     embed_chapters(output / "final-video.mp4", chapters, final_duration, work)
     credits = "Film metadata: TMDB — https://www.themoviedb.org/\nWatch listings: JustWatch via TMDB — https://www.justwatch.com/us\n"
