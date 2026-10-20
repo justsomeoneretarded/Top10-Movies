@@ -123,3 +123,40 @@ def test_qwen_failure_still_produces_three_usable_plans():
     writer.ask = Mock(side_effect=requests.ConnectionError())
     result = writer.thumbnail_concepts("Top movies", "Action", [{"title":"Example"}], [])
     assert len(result) == 3
+
+
+def test_complete_scenes_do_not_paste_cutouts_and_reject_duplicates(monkeypatch, tmp_path):
+    import numpy as np
+
+    from movie_pipeline.thumbnails import choose_scene
+    rng = np.random.default_rng(7)
+    good = Image.fromarray(rng.integers(20, 230, (360,640,3), dtype=np.uint8))
+    provider = Mock()
+    provider.generate.side_effect = [Image.new('RGB', (640,360), 'black'), good, good, good]
+    previous = []
+    plan = normalize_concepts(None, 'Horror', '', 1)[0]
+    selected, candidates, seed = choose_scene(provider, plan, 0, 10, previous)
+    assert selected is good and seed == 11
+    assert len(candidates) == 2
+    assert choose_scene(provider, plan, 1, 20, previous)[0] is None
+    provider.generate.side_effect = None
+    provider.generate.side_effect = [Image.fromarray(np.clip(rng.integers(0, 110, (360,640,3)) + np.array(color), 0, 255).astype(np.uint8)) for color in [(100,0,0),(110,0,0),(0,100,0),(0,110,0),(0,0,100),(0,0,110)]]
+    monkeypatch.setattr('movie_pipeline.thumbnails.Pollinations', lambda cache: provider)
+    cutouts = Mock(side_effect=AssertionError('Generated scene must not receive cutouts'))
+    monkeypatch.setattr('movie_pipeline.thumbnails.subject_frame', cutouts)
+    build_thumbnails([Path('a.mp4')], [[]], ['A','WATCH THESE','C'], tmp_path/'out',
+                     work=tmp_path/'work', use_api=True)
+    report = json.loads((tmp_path/'work/thumbnail-report.json').read_text())
+    assert report[0]['composition'] == 'complete-generated-scene'
+    assert report[0]['cutouts'] == []
+
+
+def test_horror_defaults_and_concept_pair_selection():
+    from movie_pipeline.thumbnails import select_concepts
+    plans = normalize_concepts(None, 'Top 10 Horror Movies', '', 2)
+    assert 'terrified' in plans[0]['background_prompt']
+    raw = [{'background_prompt': 'Unstructured scene'} for _ in range(6)]
+    raw[1] = {'background_prompt': 'Expressive close-up, dramatic lighting and depth'}
+    raw[3] = {'background_prompt': 'Subject right, empty left, dramatic lighting'}
+    raw[5] = {'background_prompt': 'Two subjects, empty upper-left, lighting and depth'}
+    assert select_concepts(raw) == [raw[1],raw[3],raw[5]]

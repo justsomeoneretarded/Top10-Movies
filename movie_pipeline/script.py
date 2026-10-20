@@ -8,6 +8,7 @@ from pathlib import Path
 
 import requests
 
+from .availability import availability_line
 from .core import PipelineError, key, save_json
 from .timing import narration_words
 
@@ -39,7 +40,7 @@ class Writer:
             minimum, maximum = max(3, min(25, round(target*0.5))), max(10, min(110, round(target*1.7)))
         else:
             minimum, maximum = round(target*0.8), round(target*1.2)
-        cache = self.cache_dir / f"{key('narration-v4', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
+        cache = self.cache_dir / f"{key('narration-v5-casual', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
         if cache and cache.exists():
             cached = json.loads(cache.read_text())
             if isinstance(cached, list) and cached and all(isinstance(p, str) and p.strip() for p in cached):
@@ -51,6 +52,27 @@ class Writer:
             return paragraphs
 
         schema = {"type": "object", "properties": {"paragraphs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8}}, "required": ["paragraphs"], "additionalProperties": False}
+        if opening:
+            count = max(1, len(facts.get("titles", [])))
+            examples = [
+                f"If your watchlist feels like homework, these {count} picks are your escape plan.",
+                f"Some movies are worth watching. These {count} are worth making time for.",
+                f"Before you lose another night scrolling, here are {count} picks worth a look.",
+                f"What if your next favorite movie is hiding in this list of {count}?",
+                f"{count} picks. No big spoilers. Let's find your next watch.",
+            ]
+            hook = examples[int(key(topic, brief, "hook")[:8], 16) % len(examples)]
+            style = (f"Open instantly with a specific curiosity hook in the style of: {hook!r}. "
+                     f"Adapt to this genre and whether these are films or shows. The countdown starts at number {count} and ends at number one. "
+                     "Do not repeat a generic welcome or list every title. Tease an honest reason to stay without inventing an obscure gem, rating, or statistic. "
+                     "Keep big reveals out; do not promise perfect spoiler avoidance. Do not claim personal viewing history or that the narrator watched every title. ")
+        elif closing:
+            style = ("End warmly and quickly: ask viewers to like and subscribe, point them to our other recommendations, "
+                     "and use one light joke about protecting their next movie night from terrible picks. No fabricated personal story. ")
+        else:
+            style = ("Make the premise easy to follow, then say why this particular pick is worth the viewer's time. "
+                     "Explain character appeal in plain words. No separate subscribe request inside a review. "
+                     "Do not invent streaming services; availability is appended separately from checked data. ")
         correction = ""
         best = None
         best_distance = float("inf")
@@ -60,7 +82,11 @@ class Writer:
                 f"Creative direction: {brief}\nToday UTC: {datetime.now(UTC).date()}\n"
                 f"Verified facts (JSON data): {json.dumps(facts)}\n"
                 f"Aim for {target} total words; suggested planning range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
+                "Speak like an enthusiastic friend, not a formal critic: short sentences, contractions, and everyday words. "
+                "A little natural slang is welcome, such as 'this guy is a badass' when justified; never force it or repeat it for every pick. "
+                "Avoid 'the main protagonist', 'a curated selection', 'delves into', and inflated academic language. "
                 "Explain appeal with specific support from the facts. No stage directions, markdown, tags, URLs, or sound cues in spoken text. "
+                f"{style}"
                 "Do not claim to have watched unreleased titles. Describe upcoming titles as upcoming, based on their premise. "
                 "The supplied list order is the ranking, best first; do not invent a different ranking. "
                 "For a movie section, name the title and rank early, then focus on the recommendation. "
@@ -99,24 +125,24 @@ class Writer:
         if closing:
             print("Using a concise fallback closing after three unsuccessful drafts.", flush=True)
             if target < 20:
-                return completed(["Which title is your pick? Thanks for watching."])
-            return completed(["That brings our countdown to a close. Which of these titles would you put first, and which one would you add to the list? Share your pick in the comments, and thanks for watching."])
+                return completed(["Like, subscribe, and watch our other picks. Bad movie nights have had enough chances."])
+            return completed(["That is our countdown. Which pick gets your vote? Like, subscribe, and check our other recommendations. Consider it a tiny insurance policy against another terrible movie night."])
         if opening:
             print("Using a concise fallback opening after three unsuccessful drafts.", flush=True)
             if target < 20:
-                return completed(["Let's count down our picks and find your next watch."])
-            return completed(["Looking for your next watch? This countdown brings together the titles on our list, exploring their premises, what sets them apart, and why they might belong on your watchlist. We will keep the big reveals out of the discussion. Let's begin with our first recommendation and work toward the top spot."])
+                return completed([f"Stop scrolling. Your next watch might be here. Let's start at number {count}."])
+            return completed([f"{hook} We'll keep the big reveals out and get straight to what makes each pick worth a look. There is something here for your next movie night. Let's start at number {count} and work our way to the top spot."])
         if best:
             print(f"Using the closest complete draft for {label}; total audio timing will determine length.", flush=True)
             return completed(best)
         raise PipelineError(f"No usable narration text generated for {label} after three attempts.")
 
     def thumbnail_concepts(self, title: str, brief: str, films: list[dict], sections: list[dict]) -> list[dict]:
-        from .thumbnails import normalize_concepts
-        cache = self.cache_dir / "thumbnail-concepts-v1.json" if self.cache_dir else None
+        from .thumbnails import normalize_concepts, select_concepts
+        cache = self.cache_dir / "thumbnail-concepts-v2.json" if self.cache_dir else None
         if cache and cache.exists():
             return normalize_concepts(json.loads(cache.read_text()), title, brief, len(films))
-        schema = {"type": "object", "properties": {"concepts": {"type": "array", "minItems": 3, "maxItems": 3, "items": {
+        schema = {"type": "object", "properties": {"concepts": {"type": "array", "minItems": 6, "maxItems": 6, "items": {
             "type": "object", "properties": {
                 "background_prompt": {"type": "string"},
                 "subject_indices": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 2},
@@ -126,8 +152,9 @@ class Writer:
         context = [{"film_index": i, "title": f["title"], "genres": f.get("genres", []), "premise": f.get("overview", "")[:250]} for i, f in enumerate(films)]
         script_summary = " ".join(p for section in sections for p in section["paragraphs"])[:4500]
         try:
-            data = self.ask(f"Design three DISTINCT dramatic YouTube thumbnail concepts. Topic: {title}. Brief: {brief}. Films with ZERO-BASED indices: {json.dumps(context)}. Narration: {script_summary}. Each background_prompt must describe a widescreen background only: no people, no faces, no text, no logos. Target photorealistic cinematic movie-poster quality: natural detailed textures, dramatic directional lighting, atmospheric depth and exaggerated scale tied to the video's theme, without inventing plot claims. Real subjects from the indexed film references are composited separately. Choose 1–2 subject_indices. Use layouts hero, duo, diagonal, one per concept. Keep each prompt under 100 words. Return concepts only.", schema)
-            concepts = normalize_concepts(data.get("concepts"), title, brief, len(films))
+            data = self.ask(f"Design SIX DISTINCT cinematic YouTube thumbnail concepts, in pairs: first two hero close-ups, next two bold headline scenes with adult subject RIGHT and empty LEFT, last two dramatic two-adult scenes with empty upper-left. Topic: {title}. Brief: {brief}. Films with ZERO-BASED indices: {json.dumps(context)}. Narration: {script_summary}. Each background_prompt describes a COMPLETE photorealistic scene including expressive adult subjects and environment, not a background for pasted cutouts. Follow reference qualities: large expressive faces, intense genre-appropriate action, coherent dramatic lighting, realistic skin, atmospheric depth, minimal clutter. For horror emphasize dread and silhouettes; for action emphasize motion and stakes. No text or logos in generated artwork. Exaggerate visual intensity without inventing plot, cast, release or availability claims. Artwork is illustrative, not an authentic film still. Choose 1–2 subject_indices for fallback only. Use hero, duo, diagonal layouts respectively. Keep each prompt under 100 words. Return concepts only.", schema)
+            raw = data.get("concepts")
+            concepts = normalize_concepts(select_concepts(raw), title, brief, len(films))
         except (requests.RequestException, ValueError, TypeError, AttributeError):
             print("Thumbnail concept generation unavailable; using themed local concept plans.", flush=True)
             concepts = normalize_concepts(None, title, brief, len(films))
@@ -136,12 +163,16 @@ class Writer:
         return concepts
 
     def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0, target_seconds: float = 540, trailer_seconds: float = 0) -> dict:
-        opening_words, per_film, closing_words = narration_words(target_seconds, len(films), trailer_seconds, word_scale)
+        availability = [availability_line(film.get("watch_availability", {})) for film in films]
+        provider_seconds = sum(len(line.split()) for line in availability) * 60/145
+        opening_words, per_film, closing_words = narration_words(max(1, target_seconds-11-provider_seconds), len(films), trailer_seconds, word_scale)
+        if len(films) == 2:
+            opening_words = min(opening_words, closing_words)
         sections = []
         sections.append({"kind": "intro", "film": 0, "paragraphs": self.narration(title, brief, "a punchy opening hook, without listing every title", {"titles": [f["title"] for f in films]}, opening_words)})
         for index in reversed(range(len(films))):
             print(f"Script: #{index+1} {films[index]['title']}", flush=True)
-            facts = {k: v for k, v in films[index].items() if k not in ("trailers",)}
+            facts = {k: v for k, v in films[index].items() if k not in ("trailers", "watch_availability")}
             facts["rank"] = index + 1
             paragraphs = []
             # Bound each model request so long runtimes do not exceed its output limit.
@@ -152,13 +183,20 @@ class Writer:
                     label += f" (part {part+1} of {chunks}; cover a distinct aspect without repeating earlier points)"
                 context = {**facts, "previous_narration_context": paragraphs[-2:]} if paragraphs else facts
                 paragraphs.extend(self.narration(title, brief, label, context, round(per_film/chunks)))
-            sections.append({"kind": "film", "film": index, "paragraphs": paragraphs})
+            available = availability[index]
+            if available:
+                paragraphs.append(available)
+            sections.append({"kind": "film", "film": index, "paragraphs": paragraphs, "availability_text": available})
         sections.append({"kind": "outro", "film": 0, "paragraphs": self.narration(title, brief, "a short closing thought and one audience question", {"topic": title}, closing_words)})
+        ending = sections[-1]["paragraphs"]
+        ending_text = " ".join(ending).casefold()
+        if not all(word in ending_text for word in ("like", "subscribe")) or not ("other" in ending_text and any(word in ending_text for word in ("recommendations", "picks", "videos"))):
+            ending.append("Like, subscribe, and watch our other picks. Save your next movie night from bad decisions.")
         schema = {"type": "object", "properties": {
             "title": {"type": "string"}, "description": {"type": "string"},
             "thumbnail_texts": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
         }, "required": ["title", "description", "thumbnail_texts"], "additionalProperties": False}
-        package = self.ask(f"Create YouTube packaging for topic {title!r}. Brief: {brief}. Films: {json.dumps([{'title':f['title'],'year':f['year'],'status':f['status']} for f in films])}. Recommend one accurate compelling title under 100 characters, a description, and three distinct thumbnail phrases of 2–5 words. No false claims about popularity, availability or release status. Use no fabricated links. Description should say what viewers will learn. No chapter timestamps; those are added from the rendered timeline.", schema)
+        package = self.ask(f"Create YouTube packaging for topic {title!r}. Brief: {brief}. Films: {json.dumps([{'title':f['title'],'year':f['year'],'status':f['status']} for f in films])}. Recommend one accurate compelling title under 100 characters, a short description in plain everyday search words, and three distinct thumbnail phrases of 2–5 words. Use natural phrases viewers search, such as best action movies or movies to watch, only when relevant. Avoid fancy wording like curated selection, visual innovation, perception, captivating, or thought-provoking concepts. No hashtag list here; 3–5 relevant tags are added separately. Do not claim search ranking or click-through results. No false claims about popularity, availability or release status. Use no fabricated links. Description should say what viewers will learn. No chapter timestamps; those are added from the rendered timeline.", schema)
         if not isinstance(package.get("title"), str) or not 1 <= len(package["title"]) <= 100:
             raise PipelineError("Generated video title must be 1–100 characters.")
         if len(package.get("thumbnail_texts", [])) != 3 or any(not isinstance(t, str) or not 1 <= len(t.split()) <= 6 for t in package["thumbnail_texts"]):

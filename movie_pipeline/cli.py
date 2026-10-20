@@ -21,6 +21,7 @@ from .core import (
     write_srt,
 )
 from .timing import DurationSpec, requested_duration, trailer_budget
+from .video_settings import export_size, require_disk, resolution_from_brief
 
 
 def chapter_time(seconds):
@@ -58,8 +59,8 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
         raise PipelineError(f"Final video duration {seconds:.1f}s is outside the requested {spec.minimum/60:.1f}–{spec.maximum/60:.1f} minutes.")
     streams = metadata["streams"]
     video = next((s for s in streams if s["codec_type"] == "video"), None)
-    if not video or (video["width"], video["height"]) != (1280, 720) or not any(s["codec_type"] == "audio" for s in streams):
-        raise PipelineError("Final export must have 1280x720 video and an audio stream.")
+    if not video or (video["width"], video["height"]) != export_size() or not any(s["codec_type"] == "audio" for s in streams):
+        raise PipelineError(f"Final export must have {export_size()[0]}x{export_size()[1]} video and an audio stream.")
     from PIL import Image
     for n in range(1, 4):
         path = output / f"thumbnail-{n:02}.jpg"
@@ -70,8 +71,20 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
 
 
 def produce(title: str, brief: str, movies: str, work: Path, output: Path):
+    from .availability import enrich_availability
+    from .editorial import place_intro_meme, subscription_boundary
     from .footage import download
-    from .render import finish, label_image, speech_video, thumbnails, trailer_video
+    from .memes import prepare_intro_meme
+    from .packaging import build_description, midroll_text, refresh_availability
+    from .render import (
+        embed_chapters,
+        finish,
+        label_image,
+        speech_video,
+        subscribe_image,
+        thumbnails,
+        trailer_video,
+    )
     from .research import Research
     from .script import Writer
     from .shots import ShotSelector, analyse, intro_montage
@@ -83,6 +96,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     count_match = re.search(r"\btop\s*(\d+)\b", title, re.IGNORECASE)
     if count_match and int(count_match[1]) != len(items):
         raise PipelineError("The title's countdown number must match the number of movies/shows.")
+    os.environ["VIDEO_RESOLUTION"] = str(resolution_from_brief(brief))
     spec = requested_duration(brief)
     max_beat = trailer_budget(spec, len(items))
     expected_breaks = min(3, max_beat) * len(items)
@@ -91,7 +105,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the writing model so a model upgrade never reuses an old model's script.
     script_model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
-    run_key = key("pipeline-v3-script-model", title, brief, movies, narrator, script_model, os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v4-calm-casual", title, brief, movies, narrator, script_model, os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -99,6 +113,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     research = Research()
     facts_path = work / "research.json"
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
+    films = enrich_availability(films, research, work / "availability")
     trailers = []
     shot_sets = []
     for film in films:
@@ -111,8 +126,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
     script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks)
-    if not script["package"].get("thumbnail_concepts"):
+    refresh_availability(script, films)
+    if script["package"].get("thumbnail_version") != 2:
         script["package"]["thumbnail_concepts"] = writer.thumbnail_concepts(title, brief, films, script["sections"])
+        script["package"]["thumbnail_version"] = 2
     save_json(script_path, script)
     writer.unload()
 
@@ -127,14 +144,34 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 speech[(section_index, paragraph_index)] = speaker.speak(text)
         speaker.close()
         spoken_seconds = sum(duration(path) for path in speech.values())
-        estimated = spoken_seconds + expected_breaks
+        estimated = spoken_seconds + expected_breaks + 11
         if spec.minimum*0.98 <= estimated <= spec.maximum*1.02 or revision == 2:
             break
         print(f"Adjusting overall script to requested runtime; measured {estimated/60:.1f} minutes", flush=True)
-        word_scale *= max(0.2, min(5.0, (spec.target-expected_breaks)/max(1, spoken_seconds)))
+        word_scale *= max(0.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
         script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks)
         save_json(script_path, script)
         writer.unload()
+
+    # Generate the brief CTA separately so its measured length can determine placement.
+    cta_text = midroll_text(title+brief+movies)
+    speaker = Narrator(reference, work / "speech")
+    cta_audio = speaker.speak(cta_text)
+    speaker.close()
+    def shorten_cta(audio):
+        if duration(audio) <= 8:
+            return audio
+        adjusted = work / "subscribe-short.wav"
+        ratio = duration(audio)/8
+        tempos = []
+        while ratio > 2:
+            tempos.append("atempo=2")
+            ratio /= 2
+        tempos.append(f"atempo={ratio}")
+        ffmpeg("-i", audio, "-af", ",".join(tempos), adjusted)
+        return adjusted
+
+    cta_audio = shorten_cta(cta_audio)
 
     print("Aligning speech and analysing trailer dialogue", flush=True)
     from faster_whisper import WhisperModel
@@ -172,13 +209,44 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         cues = json.loads(cache.read_text()) if cache.exists() else captions(trailer, recognizer)
         save_json(cache, cues)
         trailer_cues.append(cues)
+    for retry in range(3):
+        cta_cues = captions(cta_audio, recognizer)
+        if spoken_coverage(cta_text, cta_cues) >= .72:
+            break
+        if retry == 2:
+            raise PipelineError("Short subscribe speech did not pass transcript verification after retries.")
+        cta_audio.unlink(missing_ok=True)
+        speaker = Narrator(reference, work / "speech")
+        cta_audio = shorten_cta(speaker.speak(cta_text, attempt_offset=(retry+1)*3))
+        speaker.close()
     del recognizer
     gc.collect()
 
     action = bool(re.search(r"\b(action|energetic|fast.paced|fight|intense)\b", title + " " + brief, re.IGNORECASE))
     selector = ShotSelector()
-    for trailer, shots in zip(trailers, shot_sets):
+    for film, trailer, shots in zip(films, trailers, shot_sets):
         selector.index(trailer, shots)
+        selector.people[str(trailer)] = film.get("cast", [])
+    beats = {i: choose_beat(trailer_cues[section["film"]], shot_sets[section["film"]], duration(trailers[section["film"]]), action, maximum=max_beat)
+             for i, section in enumerate(script["sections"]) if section["kind"] == "film" and max_beat}
+    lengths = {coordinates: duration(audio) for coordinates, audio in speech.items()}
+    boundary, fraction = subscription_boundary(script["sections"], lengths,
+        {i: beat["end"]-beat["start"] for i, beat in beats.items() if beat}, duration(cta_audio))
+    print(f"Like/subscribe break before a review at {fraction:.0%} of the measured video.", flush=True)
+    shifted = {}
+    shifted_cues = {}
+    for (i, p), audio in speech.items():
+        shifted[(i+(i >= boundary), p)] = audio
+        shifted_cues[(i+(i >= boundary), p)] = aligned[(i,p)]
+    shifted[(boundary, 0)] = cta_audio
+    shifted_cues[(boundary, 0)] = cta_cues
+    speech, aligned = shifted, shifted_cues
+    script["sections"].insert(boundary, {"kind": "subscribe", "film": script["sections"][boundary]["film"], "paragraphs": [cta_text]})
+    beats = {i+(i >= boundary): beat for i, beat in beats.items()}
+    require_disk(work, spec.target)
+    intro_text = " ".join(script["sections"][0]["paragraphs"])
+    meme = prepare_intro_meme(intro_text, title+brief+movies, work / "memes")
+    meme_used = False
     parts = []
     all_cues = []
     chapters = []
@@ -190,22 +258,31 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         trailer = trailers[film_index]
         is_film = section["kind"] == "film"
         chapter = f"#{film_index+1} {film['title']} ({film['year']})" if is_film else section["kind"].title()
-        chapters.append({"start": offset, "title": chapter})
+        if section["kind"] != "subscribe":
+            chapters.append({"start": offset, "title": chapter})
         label = work / f"label-{section_index}.png"
-        label_image(label, film["title"] if is_film else title, film_index+1 if is_film else None, film["year"] if is_film else None)
+        if section["kind"] == "subscribe":
+            subscribe_image(label)
+        else:
+            label_image(label, film["title"] if is_film else title, film_index+1 if is_film else None, film["year"] if is_film else None)
         montage = None
         if section["kind"] == "intro":
             montage = intro_montage(selector, trailers, shot_sets,
                                     [duration(speech[(section_index, p)]) for p in range(len(section["paragraphs"]))],
                                     title + ". " + brief, action)
         midpoint = max(1, len(section["paragraphs"]) // 2)
-        beat = choose_beat(trailer_cues[film_index], shot_sets[film_index], duration(trailer), action, maximum=max_beat) if is_film and max_beat else None
+        beat = beats.get(section_index)
         for paragraph_index, text in enumerate(section["paragraphs"]):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
             chosen = montage[paragraph_index] if montage is not None else selector.choose(trailer, shot_sets[film_index], text, duration(audio), action)
+            if section["kind"] == "subscribe":
+                held = max(chosen, key=lambda cut: cut["duration"])
+                chosen = [{**held, "start": held["start"]+.2, "duration": duration(audio), "freeze": 0, "still": True}]
+            if meme and montage is not None and not meme_used:
+                chosen, meme_used = place_intro_meme(chosen, text, aligned[(section_index, paragraph_index)], meme)
             path = work / f"part-{len(parts):03}.mp4"
-            speech_video(trailer, audio, chosen, path, label if paragraph_index == 0 else None, work / f"render-{len(parts):03}")
+            speech_video(trailer, audio, chosen, path, label if paragraph_index == 0 else None, work / f"render-{len(parts):03}", label_seconds=duration(audio) if section["kind"] == "subscribe" else 3.5)
             seconds = duration(path)
             for cue in aligned[(section_index, paragraph_index)]:
                 all_cues.append({"start": offset + cue["start"], "end": offset + min(cue["end"], seconds), "text": cue["text"]})
@@ -237,17 +314,20 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         chapter["start"] /= speed
     package = script["package"]
     (output / "recommended-title.txt").write_text(package["title"].strip() + "\n")
-    description = package["description"].strip() + "\n\nChapters\n"
-    description += "\n".join(f"{chapter_time(c['start'])} {c['title']}" for c in chapters)
-    description += "\n\nFeatured titles\n" + "\n".join(f"{i+1}. {f['title']} ({f['year']})" for i, f in enumerate(films))
-    description += "\n\nFilm information: TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.\n"
-    description += "\nTrailer sources\n" + "\n".join(json.loads(t.with_suffix('.json').read_text())["source"] for t in trailers)
-    (output / "description.txt").write_text(description + "\n")
+    source_links = [json.loads(t.with_suffix('.json').read_text())["source"] for t in trailers]
+    (output / "description.txt").write_text(build_description(script, films, chapters, source_links))
+    embed_chapters(output / "final-video.mp4", chapters, final_duration, work)
+    credits = "Film metadata: TMDB — https://www.themoviedb.org/\nWatch listings: JustWatch via TMDB — https://www.justwatch.com/us\n"
+    if meme_used:
+        credits += str(meme.get("attribution", "Intro meme"))+" — "+str(meme.get("source", ""))+"\n"
+    (output / "sources-and-credits.txt").write_text(credits)
     thumbnails(trailers, shot_sets, package["thumbnail_texts"], output,
                concepts=package.get("thumbnail_concepts"), title=title, brief=brief,
                work=work / "thumbnail-work", use_api=os.getenv("THUMBNAIL_AI", "true").lower() == "true",
                use_cutouts=True)
     save_json(work / "timeline.json", {"speed": speed, "events": timeline, "chapters": chapters})
+    for part in parts:
+        part.unlink(missing_ok=True)
     validate_package(output, spec=spec)
     # Full decode checks catch corrupt/truncated exports. Audio normalization is handled in render.finish.
     ffmpeg("-xerror", "-i", output / "final-video.mp4", "-f", "null", "-")

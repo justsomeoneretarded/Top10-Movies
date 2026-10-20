@@ -1,4 +1,4 @@
-"""Free thumbnail composition: generated backdrops, cutout subjects, effects, and text."""
+"""Complete cinematic scenes, candidate selection, and local editorial fallback."""
 from __future__ import annotations
 
 import io
@@ -20,10 +20,22 @@ PALETTES = [("#071327", "#136dba", "#ff8739"), ("#130b2a", "#7931c1", "#32eedb")
 
 
 def default_concepts(title: str, brief: str, count: int) -> list[dict]:
-    action = any(w in (title + " " + brief).casefold() for w in ("action", "fight", "chase"))
-    themes = (["cinematic chase, sweeping light trails and distant sparks", "dramatic urban skyline, smoke and warm backlight", "abstract impact wave, flying embers and dramatic clouds"] if action else
-              ["surreal fractured space, dramatic light and deep atmosphere", "mysterious cinematic architecture and a glowing horizon", "abstract ripples of time, cosmic haze and strong depth"])
-    return [{"background_prompt": f"Photorealistic widescreen cinematic movie-poster background, {theme}. Natural detailed textures, dramatic directional light, atmospheric depth, exaggerated cinematic scale, no people, no text, no lettering.",
+    if count < 1:
+        raise ValueError("At least one film is required for thumbnails")
+    topic = (title + " " + brief).casefold()
+    if any(w in topic for w in ("horror", "haunted", "scary", "terror")):
+        themes = ["terrified adult close-up, ominous silhouette in a blue shadowy corridor",
+                  "frightened adult on the right, haunted house and red moon, clear dark space on the left",
+                  "two tense adults inside a rain-soaked car, threatening silhouette in a foggy forest"]
+    elif any(w in topic for w in ("action", "fight", "chase")):
+        themes = ["determined adult action hero in an intense close-up, sparks and a blurred chase behind",
+                  "adult action hero on the right, explosive urban pursuit, dark clear space on the left",
+                  "two tense adult protagonists beside an armored vehicle, smoke and dramatic backlight"]
+    else:
+        themes = ["expressive adult protagonist close-up, mysterious cinematic architecture and deep atmosphere",
+                  "intrigued adult on the right, surreal fractured space, clear dark space on the left",
+                  "two adult protagonists, a glowing horizon and atmospheric cinematic depth"]
+    return [{"background_prompt": f"Complete photorealistic widescreen cinematic scene: {theme}. Coherent natural lighting, realistic skin, strong focal point, exaggerated emotional intensity, no text, no lettering, no logos. Illustrative genre artwork, not a claimed movie still.",
              "subject_indices": [i % count] if i == 0 else list(dict.fromkeys([i % count, (i+1) % count])),
              "layout": layout} for i, (theme, layout) in enumerate(zip(themes, ("hero", "duo", "diagonal")))]
 
@@ -67,7 +79,7 @@ class Pollinations:
         self.unavailable = False
 
     def generate(self, prompt: str, seed: int) -> Image.Image | None:
-        path = self.cache / f"{key('pollinations-classic-v1', prompt, seed)}.jpg"
+        path = self.cache / f"{key('pollinations-scene-v2', prompt, seed)}.jpg"
         if path.exists():
             try:
                 with Image.open(path) as image:
@@ -200,6 +212,67 @@ def paste_subject(canvas: Image.Image, subject: Image.Image, box: tuple, accent:
     canvas.alpha_composite(subject, (x, y))
 
 
+def select_concepts(raw):
+    """Pick one plan per style by explicit composition cues, not prose length."""
+    if not isinstance(raw, list) or len(raw) < 6:
+        return raw
+    selected = []
+    for offset, cues in ((0, ("close-up", "expressive", "lighting", "depth")),
+                         (2, ("right", "left", "empty", "lighting")),
+                         (4, ("two", "upper-left", "lighting", "depth"))):
+        def score(concept, cues=cues):
+            if not isinstance(concept, dict):
+                return -100
+            prompt = str(concept.get("background_prompt", "")).casefold()
+            return sum(cue in prompt for cue in cues) - sum(prompt == c.get("background_prompt", "").casefold() for c in selected)*10
+        best = max(raw[offset:offset+2], key=score)
+        selected.append(best if isinstance(best, dict) else {})
+    return selected
+
+
+def candidate_quality(image: Image.Image) -> float:
+    """Cheap visual checks at phone size; not a face/anatomy or CTR judge."""
+    rgb = np.asarray(image.convert("RGB").resize((320, 180)))
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    contrast = min(float(gray.std()) / 55, 1.0)
+    sharpness = min(float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 500, 1.0)
+    clipped = float(np.mean((gray < 8) | (gray > 247)))
+    return round(contrast * .55 + sharpness * .35 + (1-clipped) * .1, 5)
+
+
+def scene_prompt(plan: dict, variant: int) -> str:
+    placement = ("One dominant expressive adult subject, face fully inside frame, cinematic close-up.",
+                 "Expressive adult subject on the right; left 45 percent simple and dark for a headline.",
+                 "At most two expressive adults; keep upper-left corner simple for editorial branding.")[variant]
+    return (plan["background_prompt"] + " " + placement +
+            " Complete coherent 16:9 photorealistic cinematic scene, directional lighting, strong depth,"
+            " realistic skin texture, striking emotional stakes, one clear focal point readable at phone size."
+            " No collage, no borders, no typography, no letters, no logos, no watermarks requested."
+            " Illustrative artwork inspired by the video's genre; do not invent a movie scene or casting claim.")
+
+
+def choose_scene(provider, plan: dict, variant: int, seed: int, previous: list) -> tuple:
+    candidates = []
+    for attempt in range(2):
+        image = provider.generate(scene_prompt(plan, variant), seed + attempt) if provider else None
+        if image is None:
+            break
+        signature = np.asarray(image.convert("RGB").resize((32, 18)), dtype=float)
+        duplicate = any(float(np.mean(np.abs(signature-old))) < 4 for old in previous)
+        score = candidate_quality(image) - (1 if duplicate else 0)
+        candidates.append((score, attempt, image, signature, duplicate))
+    if not candidates:
+        return None, [], None
+    best = max(candidates, key=lambda c: c[0])
+    # An essentially blank image or duplicate should not displace the local composition.
+    usable = best[0] >= .15 and not best[4]
+    if usable:
+        previous.append(best[3])
+    return (best[2] if usable else None,
+            [{"seed": seed+c[1], "visual_score": c[0], "duplicate": c[4]} for c in candidates],
+            seed+best[1] if usable else None)
+
+
 def build_thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str], output: Path, *, concepts=None, title="", brief="", work: Path | None = None, use_api=False, use_cutouts=False):
     plans = normalize_concepts(concepts, title, brief, len(trailers))
     output.mkdir(parents=True, exist_ok=True)
@@ -208,9 +281,10 @@ def build_thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: lis
     provider = Pollinations(work / "backgrounds") if use_api else None
     cutouts = Cutouts(use_cutouts)
     report = []
+    previous = []
     for variant, plan in enumerate(plans):
         seed = int(key(title, plan, variant)[:8], 16) % 2_000_000_000
-        backdrop = provider.generate(plan["background_prompt"], seed) if provider else None
+        backdrop, candidates, selected_seed = choose_scene(provider, plan, variant, seed, previous)
         generated = backdrop is not None
         if generated:
             # Preserve the full background aspect ratio, including provider branding.
@@ -233,7 +307,7 @@ def build_thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: lis
             boxes = [(540, -20, 760, 745), (180, 100, 480, 590)]
             text_width = 560
         methods = []
-        for index, box in zip(indices, boxes):
+        for index, box in ([] if generated else zip(indices, boxes)):
             try:
                 frame = subject_frame(trailers[index], shots[index], variant)
             except PipelineError:
@@ -247,13 +321,14 @@ def build_thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: lis
             # One bold editorial option; two alternatives keep the cinematic imagery uncluttered.
             shade = Image.new("RGBA", canvas.size)
             draw = ImageDraw.Draw(shade)
-            if plan["layout"] == "duo":
-                draw.rectangle((0, 450, WIDTH, HEIGHT), fill=(0,0,0,155))
+            if generated or plan["layout"] != "duo":
+                text_width = 500
+                draw.rectangle((0, 180, 590, HEIGHT), fill=(0,0,0,175))
             else:
-                draw.rounded_rectangle((20, 180, text_width+65, 655), radius=28, fill=(0,0,0,155))
+                draw.rectangle((0, 450, WIDTH, HEIGHT), fill=(0,0,0,155))
             canvas = Image.alpha_composite(canvas, shade)
             draw = ImageDraw.Draw(canvas)
-            phrase = phrases[variant].upper()
+            phrase = " ".join(phrases[variant].upper().split()[:5])
             size = 104
             while size > 20:
                 lines = wrapped(draw, phrase, font(size), text_width)
@@ -275,5 +350,5 @@ def build_thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: lis
         canvas.convert("RGB").save(target, quality=91, optimize=True)
         if target.stat().st_size >= 2_000_000:
             canvas.convert("RGB").save(target, quality=80, optimize=True)
-        report.append({"file": target.name, "background": "pollinations-classic" if generated else "original-local-artwork", "cutouts": methods, "concept": plan, "style": "bold-text" if variant == 1 else "cinematic-minimal", "netflix_badge": branded})
+        report.append({"file": target.name, "candidates": candidates, "selected_seed": selected_seed, "composition": "complete-generated-scene" if generated else "local-cutout", "background": "pollinations-classic" if generated else "original-local-artwork", "cutouts": methods, "concept": plan, "style": "bold-text" if variant == 1 else "cinematic-minimal", "netflix_badge": branded})
     save_json(work / "thumbnail-report.json", report)

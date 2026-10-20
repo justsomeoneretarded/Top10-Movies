@@ -58,7 +58,7 @@ def test_final_export_respects_requested_duration_with_valid_audio(tmp_path, sou
     assert spec.minimum-0.5 <= seconds <= spec.maximum+0.5
     if brief:
         assert abs(seconds-spec.target) < 0.1
-        assert abs(_speed-1.1) < 0.01
+        assert abs(_speed-source_seconds/(spec.target-3)) < 0.01
     metadata = probe(target)
     audio = next(s for s in metadata["streams"] if s["codec_type"] == "audio")
     assert audio["sample_rate"] == "48000"
@@ -92,3 +92,45 @@ def test_mixed_sources_and_freeze_keep_narration_in_sync(tmp_path):
     assert next_film[:, :, 2].mean() > 240
     assert next_film[:, :, 0].mean() < 10
     ffmpeg("-xerror", "-i", target, "-f", "null", "-")
+
+
+def test_4k_still_frame_export_and_embedded_chapters(monkeypatch, tmp_path):
+    import json
+
+    from movie_pipeline.core import run
+    from movie_pipeline.render import embed_chapters
+    monkeypatch.setenv('VIDEO_RESOLUTION', '2160')
+    source = tmp_path/'source.mp4'
+    audio = tmp_path/'audio.wav'
+    ffmpeg('-f','lavfi','-i','testsrc2=size=640x360:rate=30','-t',2,'-c:v','libx264','-preset','ultrafast',source)
+    ffmpeg('-f','lavfi','-i','sine=frequency=220:sample_rate=48000','-t',.6,audio)
+    label = tmp_path/'label.png'
+    label_image(label, 'Synthetic 4K test', 1, 2026)
+    target = tmp_path/'4k.mp4'
+    speech_video(source,audio,[{'start':.8,'duration':.6,'still':True}],target,label,tmp_path/'render')
+    video = next(s for s in probe(target)['streams'] if s['codec_type']=='video')
+    assert (video['width'],video['height']) == (3840,2160)
+    embed_chapters(target,[{'start':0,'title':'Intro = test #1; safe'},{'start':.3,'title':'Outro'}],duration(target),tmp_path)
+    chapters = json.loads(run(['ffprobe','-v','error','-show_chapters','-of','json',target]))['chapters']
+    assert len(chapters)==2
+    assert chapters[0]['tags']['title']=='Intro = test #1; safe'
+
+
+def test_ending_holds_picture_three_seconds_after_speech(monkeypatch, tmp_path):
+    import numpy as np
+
+    from movie_pipeline.render import finish
+    from movie_pipeline.shots import get_frame
+    from movie_pipeline.timing import DurationSpec
+    monkeypatch.setenv('VIDEO_RESOLUTION', '720')
+    source = tmp_path/'source.mp4'
+    ffmpeg('-f','lavfi','-i','testsrc2=size=1280x720:rate=30','-f','lavfi','-i',
+           'sine=frequency=220:sample_rate=48000','-t',2,'-c:v','libx264','-preset','ultrafast','-c:a','aac',source)
+    target = tmp_path/'final.mp4'
+    seconds,speed = finish([source],target,tmp_path,False,spec=DurationSpec(5,4.9,5.1))
+    assert speed == 1
+    assert seconds == pytest.approx(5,abs=.1)
+    a=np.asarray(get_frame(target,2.2),dtype=float)
+    b=np.asarray(get_frame(target,3.4),dtype=float)
+    assert np.abs(a-b).mean()<1
+    ffmpeg('-xerror','-i',target,'-f','null','-')

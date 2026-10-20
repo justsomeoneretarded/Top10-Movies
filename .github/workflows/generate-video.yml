@@ -36,6 +36,7 @@ jobs:
       # Turbo prioritizes narration quality. Set repository variable TTS_MODEL=nano for faster CPU runs.
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: qwen3:4b
+      VIDEO_RESOLUTION: ${{ vars.VIDEO_RESOLUTION || '1080' }}
       THUMBNAIL_AI: 'true'
       U2NET_HOME: ${{ github.workspace }}/work/models/rembg
       OLLAMA_HOST: 127.0.0.1:11435
@@ -73,16 +74,14 @@ jobs:
           path: work/models
           key: models-cpu-v3-thumbnails-${{ runner.os }}-${{ env.TTS_MODEL }}-${{ env.SCRIPT_MODEL }}
           restore-keys: models-cpu-v2-${{ runner.os }}-${{ env.TTS_MODEL }}-${{ env.SCRIPT_MODEL }}
-      - name: Restore job checkpoints and footage
-        uses: actions/cache@v4
+      - name: Restore speech and script checkpoints
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            work/jobs
-            work/footage
-          key: production-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/jobs
+          key: production-v2-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            production-v1-${{ github.run_id }}-
-            production-v1-
+            production-v2-${{ github.run_id }}-
+            production-v2-
       - name: Install CPU speech model and analysis dependencies
         run: |
           python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
@@ -97,7 +96,7 @@ jobs:
           name: movie-video-${{ github.run_number }}
           path: output/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
       - name: Telegram completion reminder
         if: success()
         continue-on-error: true
@@ -105,14 +104,16 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m movie_pipeline.telegram
-      - name: Save checkpoints after a failed run
-        if: failure()
+      - name: Remove downloaded trailers and rendered intermediates
+        if: always()
+        run: python -m scripts.cleanup_work
+      - name: Save bounded speech and script checkpoints
+        if: always() && !cancelled()
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: |
-            work/jobs
-            work/footage
-          key: production-v1-${{ github.run_id }}-${{ github.run_attempt }}-failed
+          path: work/jobs
+          key: production-v2-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Remove temporary YouTube cookies
         if: always()
         run: rm -f "$RUNNER_TEMP/youtube-cookies.txt"

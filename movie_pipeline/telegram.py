@@ -23,7 +23,7 @@ def notify() -> bool:
         "✅ <b>Your video is ready!</b>",
         f"<b>Title:</b> {escape(title)}",
         f'<b>Download:</b> <a href="{escape(run_url, quote=True)}">GitHub run link</a>',
-    ]) + "\n\nOpen Artifacts to download. Available for 7 days."
+    ]) + "\n\nOpen Artifacts to download. Available for 1 day."
     try:
         response = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
             "chat_id": chat_id,

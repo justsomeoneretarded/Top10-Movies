@@ -1,12 +1,12 @@
 # Top10 Movies
 
-An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive a 720p countdown at your requested duration (8–10 minutes by default), uploadable subtitles, description, recommended title, and three thumbnails.
+An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive a 1080p countdown (with optional 1440p or 4K export) at your requested duration (8–10 minutes by default), uploadable subtitles, description, recommended title, and three thumbnails.
 
 **No paid inference APIs.** Scriptwriting uses a local Ollama model; narration uses Chatterbox; shot matching uses CLIP; captions use faster-whisper. GitHub account usage/storage limits still apply. This is an initial implementation, not a guarantee of editorial quality or successful downloads for every title. End-to-end production must be verified on your runner with your configured secrets.
 
 ## One-time setup
 
-1. Obtain an **API Read Access Token** from [TMDB API settings](https://www.themoviedb.org/settings/api). Add it as repository Actions secret **`TMDB_READ_TOKEN`** in **Settings → Secrets and variables → Actions**. Use the long bearer/read token, not the short API key. TMDB attribution is included in descriptions; commercial use may require separate terms from TMDB.
+1. Obtain an **API Read Access Token** from [TMDB API settings](https://www.themoviedb.org/settings/api). Add it as repository Actions secret **`TMDB_READ_TOKEN`** in **Settings → Secrets and variables → Actions**. Use the long bearer/read token, not the short API key. Source and attribution notes are included in `sources-and-credits.txt`; the requested disclaimer is omitted from the video description. TMDB terms still apply, and commercial use may require separate terms from TMDB.
 2. The three narrator reference clips are already included in `assets/voices/`. **No voice secrets or audio uploads are needed.**
 3. Enable Actions if GitHub asks. No paid LLM/TTS/image accounts are needed.
 
@@ -54,24 +54,26 @@ recommended-title.txt
 thumbnail-01.jpg
 thumbnail-02.jpg
 thumbnail-03.jpg
+sources-and-credits.txt
 ```
 
-Upload the SRT separately in YouTube Studio. Captions cover narration and retained intelligible trailer dialogue; captions and chapter times are adjusted if final audio tempo changes. They are speech-recognized and can contain transcription errors. Subtitles are not burned into the picture. Artifacts expire after seven days.
+Upload the SRT separately in YouTube Studio. Captions cover narration and retained intelligible trailer dialogue; captions and chapter times are adjusted if final audio tempo changes. They are speech-recognized and can contain transcription errors. Subtitles are not burned into the picture. Artifacts expire after one day. The description includes the first two spoken paragraphs, a plain-language topic summary, 3–5 relevant hashtags, chapters, and a featured movies/shows list. Search-friendly metadata does not guarantee ranking. Chapters are also embedded in the MP4. To get chapters on YouTube, paste the timestamped description into your upload; the workflow does not upload or update YouTube videos.
 
 ## Production stages
 
-1. Validate inputs and the selected voice before downloading models.
+1. Validate inputs, export resolution, and the selected voice before downloading models.
 2. Resolve title/year against TMDB movies and TV. If the search year differs, check dated festival/regional release records. If still unresolved, verify an exact title and publication year through Wikidata, then map its IMDb ID back to TMDB. Record the evidence; never accept a nearby year without a supporting date. Reject genuinely ambiguous matches.
 3. Discover TMDB-linked YouTube trailers/teasers. If TMDB has no candidates, search YouTube and require verified-channel metadata plus a matching title. Reject obvious fan/concept/reaction videos.
-4. Download with yt-dlp and FFmpeg, then cache footage. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
-5. Generate source-grounded, original recommendation scripts with `qwen3:4b` through local Ollama. Use word counts as planning guidance, not hard paragraph failure limits; no fabricated ratings, streaming availability, or awards are requested.
-6. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate speech in small chunks and retry faulty speech. Up to two overall script rewrites adapt the content to the requested runtime using measured narration pace.
-7. Transcribe narration and trailer dialogue with CPU/int8 faster-whisper. Reject substantially missing/repeated narration and automatically regenerate bad segments, with bounded retries.
-8. Sample scene changes and motion, embed frames/text with CLIP, and choose relevant shots with reuse and original-sequence penalties. Build the intro from multiple titles, covering at least half (rounded up). Action-oriented intros favor action-related imagery and short cuts.
-9. Render reordered short clips, occasional brief freeze-frame accents, rank graphics, short trailer-audio breaks, and an original procedural instrumental bed. Narration stops during trailer breaks; source audio is removed under narration. Music ducks under speech.
-10. Export H.264/AAC at 1280×720/30fps with normalized audio. If needed, use modest pitch-preserving tempo adjustment; stop if the requested duration still cannot be reached naturally after automatic rewrites.
-11. Ask Qwen3 4B for three script-based visual concepts. Generate free Pollinations backgrounds where available, extract reference subjects with CPU rembg, and compose cinematic layouts with dramatic lighting/effects. Use local artwork and segmentation when remote services/models are unavailable. No paid inference fallback is used.
-12. Validate required outputs, media streams, duration, thumbnail dimensions/size, and a full FFmpeg decode before uploading the package.
+4. Download one successful trailer per title with yt-dlp and FFmpeg, requesting quality up to the selected export resolution. Store it temporarily in `work/footage/`. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
+5. Look up US streaming providers using TMDB's JustWatch-powered watch listings, with a 24-hour cache. Keep subscription, free, ads, rental, and purchase options distinct. Missing or unavailable listings are skipped without failing production.
+6. Generate original, factual recommendation scripts with `qwen3:4b` through local Ollama: casual language, a punchy genre-specific hook, clear movie premises, and an outro inviting likes, subscriptions, and other recommendations. Word counts guide planning rather than cause paragraph failures.
+7. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate speech in small chunks and retry faulty speech. Up to two overall script rewrites adapt the content to the requested runtime using measured narration pace.
+8. Transcribe narration and trailer dialogue with CPU/int8 faster-whisper. Verify that narration words were spoken. Place one funny like/subscribe break at a review boundary around 30–50% of measured runtime; shorten its audio to keep it below 10 seconds after final tempo adjustment.
+9. Match frames loosely to the current narration using CLIP. Prefer steadier, longer visual beats, with occasional face holds and a multi-title intro. Weak visual matches never cause a relevance-validation failure.
+10. Render rank graphics, the like/subscribe/bell card, short trailer-audio breaks, and an original instrumental bed that ducks under speech. Keep the final image for three seconds after speech, with a gentle fade rather than an abrupt cut.
+11. Export H.264/AAC at 1080p/30fps by default, or the requested 720p, 1440p, or 4K setting. Apply modest pitch-preserving tempo adjustment only when needed. Embed chapters and write synchronized SRT and description chapter timestamps.
+12. Ask Qwen3 4B for six thumbnail concepts, select three styles, and compare up to two generated image candidates per selected concept. Complete cinematic scenes are the main path; local artwork and trailer cutouts remain a fallback. No paid inference fallback is used.
+13. Validate output files, media streams, runtime, thumbnail dimensions/size, and a full FFmpeg decode. Upload the package for one day, remove downloaded trailers and render intermediates, and save bounded speech/script checkpoints.
 
 No approval or publication steps occur. Successful runs deliver downloadable files; this repository does not upload to YouTube.
 
@@ -87,6 +89,24 @@ YouTube can block data-center downloads or require authentication. Neither yt-dl
 
 Automated shot matching, trailer dialogue selection, factual accuracy, and narration quality remain imperfect. CLIP matching is a heuristic; the system does not understand every scene or guarantee spoiler avoidance. The three thumbnails are options, not tested CTR winners. The implementation uses clean cuts and rank graphics; it does not claim to reproduce a professional human editor's judgment.
 
+## Resolution, disk space, and downloaded footage
+
+The default export is **1920×1080 at 30 fps**. Add `Export in 4K` to the creative brief for **3840×2160**, or `Use 1440p` for **2560×1440**. A repository Actions variable `VIDEO_RESOLUTION` can set the default to `720`, `1080`, `1440`, or `2160`. A resolution in the brief overrides that default without adding another workflow input. Thumbnails remain 1280×720 JPEGs.
+
+The downloader requests the best available trailer up to the export height, with one successful trailer per title and an 800 MB per-trailer cap. If the trailer is only 1080p, a 4K export will upscale it; this cannot recover genuine 4K detail. Logs and trailer sidecar metadata record the actual source resolution. Streaming website access and native 4K trailer availability are not guaranteed.
+
+4K is supported but expensive on a standard CPU runner: it has four times as many pixels as 1080p, can take substantially longer to encode, and may reach the 350-minute job timeout. Standard runners have finite temporary disk, and models, dependencies, trailers, rendered parts, concatenated input, and final output can coexist during production. Conservative free-space checks stop with an explanation when the working reserve is insufficient. 1080p is the practical choice for more dependable free runs; no 4K completion-time guarantee is made.
+
+Artifacts expire after **one day**. That reduces how long finished packages occupy artifact storage; it does not increase disk space while a job is running. Models and checkpoint caches are separate from artifact storage and follow GitHub's own quotas and eviction rules. Repeated cache snapshots and older cache keys can still occupy repository cache space even though each new checkpoint snapshot is bounded.
+
+During a run, trailers and their analysis files live under `work/footage/`; rendered intermediate clips live under `work/jobs/`. The cleanup step runs after success or failure, deletes downloaded trailers and rendered MP4s, and preserves `output/`, model weights, and the bounded speech/script checkpoints. Trailers must therefore be downloaded again on a new run. A cancelled job or runner shutdown can prevent cleanup or checkpoint saving, but GitHub-hosted runner disks are temporary and are discarded with the runner. These directories are never committed to the repository by the workflow.
+
+## Streaming availability and descriptions
+
+Watch listings use **US availability** from TMDB's JustWatch-powered endpoint. Successful lookups are cached for 24 hours and refreshed as needed. After a review, narration can say where the title is listed, distinguishing a subscription from a free-with-ads, rental, or purchase offer. The spoken line omits the country as requested. The description labels the listings as US and records the check date; availability can still change or be incomplete. Missing data or a provider outage omits the claim and does not fail the video.
+
+`description.txt` begins with the first two spoken script paragraphs, followed by a simple topic summary and 3–5 relevant hashtags. It also includes timed chapters and a heading that matches the content: Featured movies, Featured shows / series, or a mixed heading. The former TMDB disclaimer sentence is omitted from this file as requested; source and attribution notes are kept separately in `sources-and-credits.txt`.
+
 ## Local development
 
 ```bash
@@ -97,7 +117,7 @@ pytest -q
 
 # Full production also needs FFmpeg, fonts, Ollama, and CPU speech dependencies.
 pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
-pip install -e '.[voice]'
+pip install -e '.[voice,thumbnails]'
 ollama serve
 # In another terminal:
 ollama pull qwen3:4b
@@ -142,19 +162,25 @@ The script budget scales with runtime, movie count, and planned trailer-audio pa
 
 This does not promise unlimited video lengths on free hardware: longer videos require more generation/render time and storage, and the GitHub job timeout and account quotas still apply. No live model run has yet verified this duration feature; automated tests cover parsing, script-budget scaling, and real media exports.
 
-## Intro montage and trailer editing
+## Steadier editing, hooks, and calls to action
 
-The opening is a montage drawn from at least half the supplied movies/shows, rounded up: for five titles, at least three appear. Where the intro has room, all titles can appear. Clips alternate between movies; they are selected from anywhere in the usable trailer footage rather than replaying trailer openings. Typical intro cuts are around 1–2 seconds, adjusted to the narration length and required title coverage. For action topics, semantic action prompts and motion scores favor fights, chases, stunts, and similar imagery. These are automated relevance estimates, not a guarantee of the film's best action scenes; only downloaded trailer footage is available.
+Reviews now aim for visual beats around 7.5–8.5 seconds where source footage allows, rather than the old rapid 3–4 second recuts. Longer stable source shots are preferred. When source shots are short, a readable held frame can give the narration time to finish. The intro uses roughly three-second images from several titles, covering at least half the list when its duration allows that without rapid flashes. The first visual can come from anywhere in a trailer, not just its opening.
 
-Movie sections also use selected shots in a new order, with penalties against repeating a shot or continuing the trailer's original sequence when alternatives exist. Brief freeze-frame accents appear occasionally. Freeze holds replace part of a visual slot rather than extending it, so narration, subtitles, chapter times, and requested runtime remain synchronized. Intelligible trailer-dialogue inserts retain their selected short audio/video context.
+CLIP matches the current thought in the script loosely to available frames; relevance is a preference, not a pass/fail condition. It is not a guarantee that every shot illustrates a sentence precisely. When narration discusses a performer or character and a suitable face frame is detected, the edit can pause on it for a few seconds. Face detection is not actor-identity verification. Short trailer-dialogue inserts keep their selected audio/video context, with narration silent during the insert.
 
-Editing is for pacing and original commentary. Cuts, shuffling, frame holds, overlays, or music do not by themselves establish fair use, prevent Content ID claims, or guarantee YouTube monetization. Rights and YouTube's reused-content assessment are separate from the edit effects.
+Hooks use the owner's conversational, curiosity-driven examples as a style direction, adapted to the actual title count and genre. They avoid inventing viewing history, statistics, awards, or availability. Slang can appear naturally without being forced into every line. A rare optional “Absolute Cinema” meme image may be used only for a matching hook and approximately one in eight eligible jobs. The image is fetched from Imgflip; missing images or failed downloads simply skip the meme. It is never a required production dependency.
+
+A funny like-and-subscribe message appears once between reviews, chosen from the actual measured timeline to target 30–50% of the video. It never interrupts a review. If no review boundary fits that window, the closest boundary is used instead of splitting a movie section. The message is kept below 10 seconds after tempo changes and uses a steady card with like, subscribe, and bell graphics. The outro asks viewers to like, subscribe, and watch other recommendations. Its last image remains for about three seconds after speech, then fades out gently.
+
+Chapters include Intro, each movie/show with its timeline position, and Outro. They are adjusted after final tempo changes, written into `description.txt`, and embedded in the MP4. YouTube chapter display requires pasting the timestamped description into the video upload and remains subject to YouTube's chapter eligibility rules.
+
+Editing is for pacing and original commentary. Cuts, shuffling, frame holds, overlays, memes, or music do not by themselves establish fair use, prevent Content ID claims, or guarantee YouTube monetization. Rights and YouTube's reused-content assessment are separate from the edit effects.
 
 ### Voice speed and failed-run recovery
 
 Speaking-rate measurements are now logged as diagnostics. A fast or slow delivery alone does not reject a segment: the transcription stage checks whether the words were actually spoken, and final duration control handles overall pacing. Voice synthesis still rejects empty, silent, non-finite, or extremely long/runaway output after bounded retries.
 
-A new workflow run can restore the latest earlier production checkpoint cache, including footage and completed narration, when GitHub retains it. Each job's research/script/audio paths are keyed by its inputs and selected voice; different inputs do not reuse the wrong script or narrator. Reuse is best effort, depends on the restored cache containing the matching job, and does not guarantee zero repeated work. Neither cookies nor voice secrets are included in this cache.
+A new workflow run can restore earlier research, script, and completed narration checkpoints when GitHub retains them. Downloaded footage and rendered MP4 intermediates are no longer included in checkpoint caches. Cleanup keeps at most the newest two job folders, bounded to 2 GB total before saving; models use a separate cache. Each job's paths are keyed by its inputs and selected voice, so different inputs do not reuse the wrong script or narrator. Reuse is best effort and does not guarantee zero repeated work. Neither cookies nor voice secrets are included in the checkpoint cache. Existing older `production-v1` caches are not automatically deleted; remove them in GitHub's Actions cache settings if you need that space back.
 
 ## Telegram completion reminder
 
@@ -170,7 +196,7 @@ One-time setup:
    - `TELEGRAM_CHAT_ID`: your numeric chat ID.
 5. Start a new Generate Video run on **main**. A reminder is sent only after its finished package uploads successfully.
 
-If getUpdates reports a webhook conflict, use a dedicated new bot for this workflow instead of changing another application's bot. If a token is exposed, revoke it through BotFather and replace the GitHub secret. The linked artifacts retain the repository's GitHub access requirements and expire after seven days. Delivery is best effort: a network failure can prevent confirmation, and re-running a successful production job can send another reminder.
+If getUpdates reports a webhook conflict, use a dedicated new bot for this workflow instead of changing another application's bot. If a token is exposed, revoke it through BotFather and replace the GitHub secret. The linked artifacts retain the repository's GitHub access requirements and expire after one day. Delivery is best effort: a network failure can prevent confirmation, and re-running a successful production job can send another reminder.
 
 ### Channel pinning and spacing
 
@@ -178,14 +204,15 @@ Completion reminders have bold labels and five empty lines between their three m
 
 ## Redesigned thumbnail generation
 
-The thumbnail pipeline creates designed poster-style images instead of tiled, unchanged screenshots. Qwen3 4B uses the title, creative brief, film premises, and narration to propose three background/composition concepts. Recognizable subjects are extracted from sharp reference frames, enlarged, relit through contrast/color treatment, and composited with glow, depth, and layout effects.
+The thumbnail pipeline now requests complete cinematic scenes, including subjects, lighting, and environment together. Qwen3 4B proposes six concepts from the title, brief, premises, and commentary. A lightweight composition-cue selector picks one concept per style. Each selected concept gets up to two image seeds (six image requests maximum); phone-size sharpness, contrast, exposure, and duplicate checks pick a candidate. These are visual heuristics, not a vision model, anatomy checker, semantic verifier, or CTR predictor.
 
-The three options follow the supplied visual direction: a cinematic hero composition, a bold-text editorial composition, and a minimal-text alternative. A red ribbon Netflix-style **N** always appears on option 3, regardless of the title or brief. Options 1 and 2 do not receive this badge. This is an editorial branding choice; the workflow does not verify Netflix availability or imply endorsement. The badge is included as requested and is not evidence of streaming availability.
+The reference direction is expressive close-ups, intense genre-appropriate scenes, coherent dramatic lighting, strong depth, and minimal clutter. Horror gets dedicated dread/silhouette concepts; action gets chase/impact concepts. Generated scenes are illustrative artwork, not verified movie stills or guaranteed actor likenesses.
 
-- **Audio stays Chatterbox Turbo** by default. Pocket TTS is not installed, configured, or integrated.
-- **Backgrounds:** Pollinations Classic is an anonymous, free, best-effort service. Only generated visual prompts are sent, not voice recordings, tokens, or the whole script. Prompts are public to that provider. Requests are sequential, at least 45 seconds apart, with a maximum 1024×576 requested image (then upscaled/composited to 1280×720). Provider corner branding is preserved. Quality, face-free instructions, uptime, and exact detail are not guaranteed.
-- **Cutouts:** pinned CPU rembg uses U2Net weights cached under `work/models/rembg`. If installation/weights/inference are unavailable, OpenCV foreground segmentation and a soft portrait mask provide a local fallback. Difficult source shots can still produce imperfect edges or subject selection.
-- **Local fallback:** original gradient/light-streak artwork plus subject extraction and typography. No paid API, payment wallet, unlimited cloud promise, or local diffusion runtime is added.
-- **Outputs:** still three 1280×720 JPEG files below 2 MB each. Provider/layout/extraction choices are recorded in the cached job's `thumbnail-work/thumbnail-report.json`, outside the downloadable package.
+- **Option 1:** minimal-text cinematic hero.
+- **Option 2:** bold headline, at most five words, with the generated subject on the right and readable text on the left.
+- **Option 3:** cinematic alternative with the requested red Netflix-style N every time. The badge does not verify Netflix availability or endorsement.
+- **Provider:** retains anonymous Pollinations Classic, with no keys or paid fallback. No unverified free FLUX service is claimed. Requests are sequential, at least 45 seconds apart, requested at 1024×576 and resized without cropping away provider branding. The additional candidates can add several minutes. Cached image requests are reused.
+- **Fallback:** provider failure, blank images, or duplicate winners use local artwork and trailer subject cutouts. CPU rembg/U2Net and OpenCV extraction are now fallback tools only; successful complete scenes never get pasted trailer subjects over them.
+- **Outputs:** three 1280×720 JPEGs below 2 MB each. Candidate scores, selected seeds, fallback methods, and concepts are recorded in `thumbnail-work/thumbnail-report.json`, outside the downloadable package. Updated concept/image cache versions prevent old background-only plans from being reused.
 
-No Netflix keyword or special instruction is needed for the N badge on option 3. For text-heavy thumbnails, the main text composition is option 2; options 1 and 3 intentionally prioritize imagery. The references set a direction, not a guarantee of identical photorealistic quality, recognizable generated backgrounds, or click-through performance. The free provider and actual model cutout quality still need verification on your runner.
+Audio stays Chatterbox Turbo by default; Pocket TTS remains excluded. Only generated visual prompts are sent to the public image provider, not voice recordings, tokens, or the whole script. Free service availability and quality are not guaranteed. Live provider quality must be checked on the GitHub runner; offline tests cover selection, composition, cache behavior, fallback, and file constraints.
