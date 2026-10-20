@@ -86,6 +86,35 @@ def test_preferred_tv_result_wins_even_with_fewer_votes_than_movie():
     assert research.get.call_args_list[0].args[0] == "search/tv"
 
 
+@pytest.mark.parametrize("selected, preferred, expected_id", [("tv", "movie", 2), ("movie", "tv", 1)])
+def test_explicit_medium_overrides_inferred_preference(selected, preferred, expected_id):
+    show = {"id": 2, "name": "Arrival", "original_name": "Arrival", "first_air_date": "2016-01-01"}
+    research = research_for([film(1, 0)], [show])
+    research.selected_kind = selected
+    research.preferred_kind = preferred
+    assert research.resolve(FilmInput("Arrival", 2016))["id"] == expected_id
+    assert research.get.call_args_list[0].args[0] == f"search/{selected}"
+
+
+def test_explicit_shows_never_substitutes_same_named_movie():
+    research = research_for([film(1, 20000)])
+    research.selected_kind = "tv"
+    research.wikidata_candidates = Mock(return_value=[])
+    with pytest.raises(PipelineError, match="Could not verify"):
+        research.resolve(FilmInput("Arrival", 2016))
+    assert [call.args[0] for call in research.get.call_args_list] == ["search/tv"]
+
+
+def test_independent_fallback_also_respects_selected_medium():
+    research = research_for([film(1, 20000)])
+    research.selected_kind = "tv"
+    research.wikidata_candidates = Mock(return_value=[(1, "movie", film(1, 20000))])
+    with pytest.raises(PipelineError, match="Could not verify"):
+        research.resolve(FilmInput("Arrival", 2016))
+    research.wikidata_candidates.assert_called_once()
+    assert [call.args[0] for call in research.get.call_args_list] == ["search/tv"]
+
+
 def test_eligible_preferred_result_skips_unneeded_other_medium_search():
     research = research_for([film(1, 0)])
     research.preferred_kind = "movie"

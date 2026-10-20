@@ -76,7 +76,9 @@ class Research:
     def resolve(self, item: FilmInput) -> dict:
         candidates = []
         nearby = []
-        kinds = ("tv", "movie") if getattr(self, "preferred_kind", "movie") == "tv" else ("movie", "tv")
+        selected_kind = getattr(self, "selected_kind", None)
+        kinds = ((selected_kind,) if selected_kind in ("movie", "tv") else
+                 ("tv", "movie") if getattr(self, "preferred_kind", "movie") == "tv" else ("movie", "tv"))
         for kind in kinds:
             data = self.get(f"search/{kind}", query=item.title, language="en-US", include_adult="false")
             for found in data.get("results", []):
@@ -99,6 +101,8 @@ class Research:
                     break
         if not candidates:
             candidates = self.wikidata_candidates(item)
+            if selected_kind:
+                candidates = [candidate for candidate in candidates if candidate[1] == selected_kind]
         if not candidates:
             raise PipelineError(f"Could not verify {item.title} ({item.year}) using search dates, dated release records, or the independent Wikidata/IMDb-ID fallback. This does not establish that your input is wrong.")
         # Owner policy: always keep TMDB's first eligible result. Preserve the API

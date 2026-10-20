@@ -70,6 +70,17 @@ def test_auto_scales_to_list_and_uses_resolved_title_types(monkeypatch):
     assert workflow_duration("Top 100 Movies", 100).target <= 22*60
 
 
+@pytest.mark.parametrize("choice, title, film_kind, per_title", [
+    ("Shows", "Top 5 Movies", "movie", 85),
+    ("Movies", "Top 5 Shows", "tv", 80),
+])
+def test_auto_respects_content_dropdown_over_title_and_metadata(monkeypatch, choice, title, film_kind, per_title):
+    monkeypatch.setenv("VIDEO_MINUTES", "Auto")
+    monkeypatch.setenv("VIDEO_TYPE", choice)
+    assert workflow_duration(title, 5).target == 30 + 5*per_title
+    assert workflow_duration(title, 5, [{"kind": film_kind}]*5).target == 30 + 5*per_title
+
+
 @pytest.mark.parametrize("value", ["bad", "-5", "0", "NaN", "inf", "100", "99999999999999999999999999999999999999999999999999999999999999999999"])
 def test_bad_workflow_minutes_fall_back_to_auto(monkeypatch, value):
     monkeypatch.setenv("VIDEO_MINUTES", value)

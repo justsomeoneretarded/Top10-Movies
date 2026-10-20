@@ -9,13 +9,30 @@ on:
         required: true
         type: string
       description:
-        description: "Creative context, style, scenes, thumbnail, narrator (length is selected below)"
+        description: "Creative context, style, scenes and thumbnail (voice and length are selected below)"
         required: true
         type: string
       movies:
         description: "Titles and years, separated by semicolons: Arrival (2016); Inception (2010)"
         required: true
         type: string
+      content_type:
+        description: "Choose whether this list contains movies or shows / series"
+        required: true
+        type: choice
+        default: Movies
+        options:
+          - Movies
+          - Shows
+      narrator:
+        description: "Narrator voice (overrides any voice instruction in the creative brief)"
+        required: true
+        type: choice
+        default: Warguy
+        options:
+          - Warguy
+          - Kit Laser
+          - Female
       duration_minutes:
         description: "Video length in minutes (±25%); Auto chooses a sensible length for this list"
         required: true
@@ -74,6 +91,8 @@ jobs:
       VIDEO_TITLE: ${{ inputs.title }}
       VIDEO_BRIEF: ${{ inputs.description }}
       MOVIE_LIST: ${{ inputs.movies }}
+      VIDEO_TYPE: ${{ inputs.content_type }}
+      NARRATOR: ${{ inputs.narrator }}
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
       # Turbo prioritizes narration quality. Set repository variable TTS_MODEL=nano for faster CPU runs.
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
@@ -139,7 +158,7 @@ jobs:
           name: movie-video-${{ github.run_number }}
           path: output/
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 2
       - name: Telegram completion reminder
         if: success()
         continue-on-error: true

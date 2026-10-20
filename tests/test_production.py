@@ -29,18 +29,27 @@ from movie_pipeline.packaging import MIDROLLS
 from movie_pipeline.video_settings import export_size
 
 
-@pytest.mark.parametrize("count,try_4k,source_height,expected_size,extra_mode", [
-    (2,"true",2160,(3840,2160),"found"), (5,"true",1080,(1920,1080),"missing"),
-    (2,"false",2160,(1920,1080),"raises"), (5,"true",720,(1280,720),"found"),
-    (2,"true",2160,(3840,2160),"render-fails"),
-    (2,"true",2160,(3840,2160),"rewrite-fails"),
+@pytest.mark.parametrize("count,try_4k,source_height,expected_size,extra_mode,content_type,narrator", [
+    (2,"true",2160,(3840,2160),"found",None,None),
+    (5,"true",1080,(1920,1080),"missing","Shows","Female"),
+    (2,"false",2160,(1920,1080),"raises","Movies","Kit Laser"),
+    (5,"true",720,(1280,720),"found","Movies","Warguy"),
+    (2,"true",2160,(3840,2160),"render-fails",None,None),
+    (2,"true",2160,(3840,2160),"rewrite-fails",None,None),
 ])
-def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size, extra_mode):
+def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size, extra_mode, content_type, narrator):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("VIDEO_RESOLUTION", "1080")
     monkeypatch.setenv("TRY_4K", try_4k)
     monkeypatch.setenv("SCRIPT_MODEL", "qwen3:4b")
     monkeypatch.setenv("VIDEO_MINUTES", "8" if extra_mode == "rewrite-fails" else "5")
+    for name, selection in (("VIDEO_TYPE", content_type), ("NARRATOR", narrator)):
+        if selection is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, selection)
+    expected_kind = "tv" if content_type == "Shows" else "movie"
+    expected_narrator = {None:"warguy", "Warguy":"warguy", "Kit Laser":"kit-laser", "Female":"female"}[narrator]
     records = {}
     durations = {}
     text_for_audio = {}
@@ -49,7 +58,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     embedded = []
     first = "Stop scrolling. Your next favorite movie might be here."
     second = "Two minutes of scrolling saved. Let's find your next watch."
-    films = [{"title": f"Movie {i+1}", "year": 2025, "id": i+1, "kind": "movie",
+    films = [{"title": f"Movie {i+1}", "year": 2025, "id": i+1, "kind": expected_kind,
               "cast": [f"Actor {i+1}"], "genres": ["Action"], "status": "Released"} for i in range(count)]
     reference = tmp_path / "reference.ogg"
     reference.write_bytes(b"reference")
@@ -64,6 +73,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     class FakeResearch:
         def collect(self, items, path):
             assert len(items) == count
+            records['selected_kind'] = getattr(self, 'selected_kind', None)
+            records['preferred_kind'] = self.preferred_kind
             save_json(path, films)
             return copy.deepcopy(films)
 
@@ -192,8 +203,12 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         for i in range(1, 4):
             Image.new('RGB', (1280, 720), '#234567').save(output / f'thumbnail-{i:02}.jpg')
 
+    def reference_for(selected_narrator, root):
+        records['narrator'] = selected_narrator
+        return reference
+
     monkeypatch.setattr(cli, 'inspect_sources', lambda paths: [{"file": p.name, "width": round((source_height if i==0 else 2160)*16/9), "height": source_height if i==0 else 2160} for i,p in enumerate(paths)])
-    monkeypatch.setattr(cli, 'voice_reference', lambda *args: reference)
+    monkeypatch.setattr(cli, 'voice_reference', reference_for)
     monkeypatch.setattr(cli, 'duration', lambda path: durations[str(path)])
     monkeypatch.setattr(cli, 'require_disk', Mock())
     monkeypatch.setattr(cli, 'ffmpeg', Mock())
@@ -220,9 +235,16 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
     monkeypatch.setitem(sys.modules, 'faster_whisper', SimpleNamespace(WhisperModel=Mock()))
     output = tmp_path / 'output'
-    cli.produce(f'Top {count} Action Movies', 'Make a 5-minute video. Use male audio.',
+    brief_voice = 'Use female audio.' if narrator == 'Warguy' else 'Use Warguy.'
+    cli.produce(f'Top {count} Action Movies', 'Make a 5-minute video. '+brief_voice,
                 '; '.join(f"{film['title']} ({film['year']})" for film in films), tmp_path / 'jobs', output)
 
+    assert records['selected_kind'] == (expected_kind if content_type else None)
+    assert records['preferred_kind'] == expected_kind
+    assert records['narrator'] == expected_narrator
+    saved_input = json.loads(next((tmp_path / 'jobs').glob('*/input.json')).read_text())
+    assert saved_input['content_type'] == (expected_kind if content_type else 'auto')
+    assert saved_input['narrator'] == expected_narrator
     assert 285 <= records['final_duration'] <= 315
     assert records['writes'] == (2 if extra_mode == "rewrite-fails" else 1)
     assert records['extra_attempts'] == count
@@ -259,13 +281,15 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert all(a['end'] <= b['start']+.001 for a,b in pairwise(written_cues))
     description = (output / 'description.txt').read_text()
     assert description.startswith(first+'\n\n'+second+'\n\n')
-    assert '00:00 Intro' in description and '#ActionMovies' in description
+    assert '00:00 Intro' in description
+    assert ('#ActionShows' if expected_kind == 'tv' else '#ActionMovies') in description
     if extra_mode == 'found':
         assert 'https://example.org/extra/1' in description
         assert any('-extra.mp4' in shot.get('source','') for event in events for shot in event.get('shots',[]))
     else:
         assert 'https://example.org/extra/' not in description
-    assert 'Featured movies' in description and 'Stream: Netflix; Rent: Amazon Video' in description
+    assert ('Featured shows / series' if expected_kind == 'tv' else 'Featured movies') in description
+    assert 'Stream: Netflix; Rent: Amazon Video' in description
     assert 'Film information: TMDB' not in description
     assert any('Netflix' in event.get('text', '') for event in events)
     assert all('US' not in event.get('text', '') for event in events)
@@ -274,3 +298,33 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         with Image.open(output / f'thumbnail-{i:02}.jpg') as thumbnail:
             assert thumbnail.size == (1280, 720)
     assert not list(timeline_file.parent.glob('part-*.mp4'))
+
+
+def test_media_and_voice_dropdowns_isolate_cached_jobs(monkeypatch, tmp_path):
+    """Identical text cannot restore another medium's research or another voice's speech."""
+    monkeypatch.setenv('VIDEO_MINUTES', '5')
+    monkeypatch.setenv('TRY_4K', 'false')
+    reference = tmp_path / 'same-reference.ogg'
+    reference.write_bytes(b'same reference bytes for every selected voice')
+    monkeypatch.setattr(cli, 'voice_reference', lambda *args: reference)
+    selected_jobs = []
+
+    class StopAfterCacheSelection:
+        def collect(self, items, path):
+            selected_jobs.append((self.selected_kind, path.parent))
+            raise RuntimeError('Stop after cache selection')
+
+    monkeypatch.setattr(research, 'Research', StopAfterCacheSelection)
+    selections = [('Movies', 'Warguy'), ('Shows', 'Warguy'),
+                  ('Movies', 'Kit Laser'), ('Movies', 'Female'), ('Movies', 'Warguy')]
+    for content_type, narrator in selections:
+        monkeypatch.setenv('VIDEO_TYPE', content_type)
+        monkeypatch.setenv('NARRATOR', narrator)
+        with pytest.raises(RuntimeError, match='Stop after cache selection'):
+            cli.produce('Top 2 Movies', 'Use Warguy. Keep it casual.',
+                        'First (2025); Second (2025)', tmp_path / 'jobs', tmp_path / 'output')
+
+    assert [kind for kind, _ in selected_jobs] == ['movie', 'tv', 'movie', 'movie', 'movie']
+    paths = [path for _, path in selected_jobs]
+    assert len(set(paths[:4])) == 4
+    assert paths[0] == paths[-1]

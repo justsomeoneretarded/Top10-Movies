@@ -14,10 +14,11 @@ from .core import (
     duration,
     ffmpeg,
     key,
-    narrator_from_brief,
     parse_movies,
     probe,
     save_json,
+    selected_content_type,
+    selected_narrator,
     voice_reference,
     write_srt,
 )
@@ -108,6 +109,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     if not title.strip() or len(title) > 200 or not brief.strip() or len(brief) > 4000:
         raise PipelineError("Provide a title (max 200 characters) and creative brief (max 4,000 characters).")
     items = parse_movies(movies)
+    content_type = selected_content_type()
     count_match = re.search(r"\btop\s*(\d+)\b", title, re.IGNORECASE)
     if count_match and int(count_match[1]) != len(items):
         raise PipelineError("The title's countdown number must match the number of movies/shows.")
@@ -117,19 +119,20 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     max_beat = trailer_budget(spec, len(items))
     expected_breaks = min(3, max_beat) * len(items)
     print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
-    narrator = narrator_from_brief(brief)
+    narrator = selected_narrator(brief)
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
-    run_key = key("pipeline-v6-first-tmdb-result", title, brief, movies, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v7-workflow-selections", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     research = Research()
-    # Search the medium named in the workflow title first; preserve TMDB order within it.
+    # An explicit dropdown limits lookup to that medium. Local legacy runs can infer it.
     shows_title = re.search(r"\b(?:shows?|series|tv)\b", title, re.IGNORECASE)
     movies_title = re.search(r"\b(?:movies?|films?)\b", title, re.IGNORECASE)
-    research.preferred_kind = "tv" if shows_title and not movies_title else "movie"
+    research.preferred_kind = content_type or ("tv" if shows_title and not movies_title else "movie")
+    research.selected_kind = content_type
     facts_path = work / "research.json"
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
     films = enrich_availability(films, research, work / "availability")
@@ -137,7 +140,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     max_beat = trailer_budget(spec, len(items))
     expected_breaks = min(3, max_beat)*len(items)
     print(f"Runtime mode: {'Auto' if spec.automatic else 'selected minutes'}; soft plan {spec.target/60:.1f} minutes.", flush=True)
-    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
+    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "content_type": content_type or "auto", "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
     trailers = []
     shot_sets = []
     print("Footage round 1: fetch a primary trailer for every title.", flush=True)
@@ -450,7 +453,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Produce an unattended movie countdown; request duration in the creative brief.")
+    parser = argparse.ArgumentParser(description="Produce an unattended movie/show countdown using the workflow selectors.")
     parser.add_argument("--title", default=os.getenv("VIDEO_TITLE", ""))
     parser.add_argument("--brief", default=os.getenv("VIDEO_BRIEF", ""))
     parser.add_argument("--movies", default=os.getenv("MOVIE_LIST", ""))

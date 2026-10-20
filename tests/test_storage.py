@@ -71,7 +71,7 @@ def test_cleanup_limits_checkpoint_count_and_size(monkeypatch, tmp_path):
     assert clean_work(tmp_path)["jobs"] == 0
 
 
-def test_workflow_never_caches_footage_and_expires_artifact_after_one_day():
+def test_workflow_never_caches_footage_and_expires_artifact_after_two_days():
     data = yaml.load(Path(".github/workflows/generate-video.yml").read_text(), Loader=yaml.BaseLoader)
     steps = data["jobs"]["produce"]["steps"]
     caches = [s for s in steps if s.get("uses", "").startswith("actions/cache")]
@@ -81,7 +81,7 @@ def test_workflow_never_caches_footage_and_expires_artifact_after_one_day():
     assert cleanup < save
     assert steps[cleanup]["if"] == "always()"
     upload = next(s for s in steps if s.get("uses", "").startswith("actions/upload-artifact"))
-    assert upload["with"]["retention-days"] == "1"
+    assert upload["with"]["retention-days"] == "2"
 
 
 def test_download_requests_target_height_and_records_actual_resolution(monkeypatch, tmp_path):

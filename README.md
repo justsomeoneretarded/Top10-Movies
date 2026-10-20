@@ -1,6 +1,6 @@
 # Top10 Movies
 
-An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years. Receive a countdown with automatically chosen source-matched resolution, up to 4K, with an Auto or selected video length, uploadable subtitles, description, recommended title, and three thumbnails.
+An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years, then choose Movies or Shows and a narrator from dropdowns. Receive a countdown with automatically chosen source-matched resolution, up to 4K, with an Auto or selected video length, uploadable subtitles, description, recommended title, and three thumbnails.
 
 **No paid inference APIs.** Scriptwriting uses a local Ollama model; narration uses Chatterbox; shot matching uses CLIP; captions use faster-whisper. GitHub account usage/storage limits still apply. This is an initial implementation, not a guarantee of editorial quality or successful downloads for every title. End-to-end production must be verified on your runner with your configured secrets.
 
@@ -10,11 +10,11 @@ An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative 
 2. The three narrator reference clips are already included in `assets/voices/`. **No voice secrets or audio uploads are needed.**
 3. Enable Actions if GitHub asks. No paid LLM/TTS/image accounts are needed.
 
-| Narrator | Included reference | Selection in creative brief |
+| Narrator | Included reference | Narrator dropdown |
 |---|---|---|
-| Warguy | `assets/voices/warguy.ogg` | Default, or “Use Warguy” / “Use male audio” |
-| Kit Laser | `assets/voices/kit-laser.ogg` | “Use Kit Laser” |
-| Female | `assets/voices/female.ogg` | “Use the female voice” |
+| Warguy | `assets/voices/warguy.ogg` | Warguy (default) |
+| Kit Laser | `assets/voices/kit-laser.ogg` | Kit Laser |
+| Female | `assets/voices/female.ogg` | Female |
 
 These are public 12-second reference excerpts starting five seconds into each of the three recordings supplied by the owner, published with their approval. The original full-length recordings are not required for production. The clips are mono Opus files, normalized for cloning. Voice similarity has not been subjectively auditioned here.
 
@@ -24,7 +24,7 @@ To replace a reference, use `python scripts/prepare_voice.py NAME /path/to/audio
 
 Open **[Actions → Generate Video](https://github.com/justsomeoneretarded/Top10-Movies/actions/workflows/generate-video.yml) → Run workflow**.
 
-There are five inputs: title, description / creative brief, movies, a **Video length in minutes** selector, and a **Try 4K** checkbox. Length defaults to **Auto**; Try 4K is checked by default. Timing and resolution are selected in the workflow rather than written into the brief.
+There are seven inputs: title, description / creative brief, movies, a **Movies or Shows** dropdown, a **Narrator** dropdown, a **Video length in minutes** selector, and a **Try 4K** checkbox. Defaults are **Movies**, **Warguy**, **Auto**, and Try 4K checked. Select the type, voice, length, and resolution in the workflow; they do not need to be written in the brief.
 
 ```text
 Title:
@@ -32,12 +32,18 @@ Top 5 Mind-Bending Science Fiction Movies
 
 Description / creative brief:
 Make a cinematic, spoiler-light countdown with a strong opening hook.
-Use Kit Laser. Build tension, feature striking visuals, and let brief
+Build tension, feature striking visuals, and let brief
 trailer dialogue play between narration sections. Make the thumbnail
 about mystery and impossible worlds. Avoid exaggerated claims.
 
 Movies:
 Arrival (2016); Inception (2010); Coherence (2013); Interstellar (2014); Predestination (2014)
+
+Movies or Shows:
+Movies (default), or Shows for a list of TV / streaming series
+
+Narrator:
+Kit Laser (Warguy is the default; Female is also available)
 
 Video length in minutes:
 Auto (default), or choose a number such as 8
@@ -46,9 +52,9 @@ Try 4K:
 Checked (default)
 ```
 
-List titles **best first** (#1 first); the rendered countdown plays from #5 down to #1. Use semicolons or newlines. Both movies and shows are resolved automatically; provide a show's first-release year. Supports 2–15 titles. A “Top N” title must match the list length. Upcoming titles work when TMDB has their release year, synopsis, and a usable trailer; the writer is instructed to avoid presenting them as watched/released.
+List titles **best first** (#1 first); the rendered countdown plays from #5 down to #1. Use semicolons or newlines. Choose **Shows** for an all-show list and provide each show's first-premiere year. Choose **Movies** for an all-movie list. This choice controls research even if the video title uses a different word. Supports 2–15 titles. A “Top N” title must match the list length. Upcoming titles work when TMDB has their release year, synopsis, and a usable trailer; the writer is instructed to avoid presenting them as watched/released.
 
-No narrator instruction means **Warguy**. “Male” alone also means Warguy. Female is selected only by an explicit voice instruction; conflicting narrator choices fail early.
+The **Narrator** dropdown defaults to **Warguy** and overrides voice instructions in the brief. Select **Kit Laser** or **Female** when desired; Female is never selected automatically. Local/API use without an explicit selector retains the earlier brief-based narrator selection, defaulting to Warguy.
 
 When the run succeeds, download **Artifacts → movie-video-N**. The ZIP contains:
 
@@ -63,12 +69,12 @@ thumbnail-03.jpg
 sources-and-credits.txt
 ```
 
-Upload the SRT separately in YouTube Studio. Captions cover narration and retained intelligible trailer dialogue; captions and chapter times are adjusted if final audio tempo changes. They are speech-recognized and can contain transcription errors. Subtitles are not burned into the picture. Artifacts expire after one day. The description includes the first two spoken paragraphs, a plain-language topic summary, 3–5 relevant hashtags, chapters, and a featured movies/shows list. Search-friendly metadata does not guarantee ranking. Chapters are also embedded in the MP4. To get chapters on YouTube, paste the timestamped description into your upload; the workflow does not upload or update YouTube videos.
+Upload the SRT separately in YouTube Studio. Captions cover narration and retained intelligible trailer dialogue; captions and chapter times are adjusted if final audio tempo changes. They are speech-recognized and can contain transcription errors. Subtitles are not burned into the picture. New artifacts expire after **48 hours (two days)** from upload. The description includes the first two spoken paragraphs, a plain-language topic summary, 3–5 relevant hashtags, chapters, and a featured movies/shows list. Search-friendly metadata does not guarantee ranking. Chapters are also embedded in the MP4. To get chapters on YouTube, paste the timestamped description into your upload; the workflow does not upload or update YouTube videos.
 
 ## Production stages
 
 1. Validate inputs, the video-length selection, the Try 4K setting, and the selected voice before downloading models.
-2. Resolve title/year against TMDB movies and TV, always selecting the first eligible result in TMDB's returned order. A shows/series/TV workflow title searches TV first; otherwise movies take priority. Do not rerank by vote counts or reject matching namesakes as ambiguous. If no search-year match exists, check dated festival/regional release records, then use the Wikidata/IMDb-ID fallback. Never accept a nearby year without a supporting date.
+2. Resolve title/year against the selected Movies or Shows medium, always selecting the first eligible result in TMDB's returned order. Do not rerank by vote counts or reject matching namesakes as ambiguous. If no search-year match exists, check dated festival/regional release records, then use the Wikidata/IMDb-ID fallback within the chosen medium. Never accept a nearby year without a supporting date. Local use without a type selection retains automatic movie/TV discovery.
 3. Discover TMDB-linked YouTube trailers/teasers and bounded YouTube search matches. Prefer an official primary trailer. A second source may be a fan edit of the same movie/show when its title/year checks match; concept, AI-generated, fake, reaction, and review videos are excluded.
 4. Fetch primary footage in a first round: download one usable primary trailer for every title before looking for second trailers. Choose the highest shared export resolution up to the checkbox ceiling. In a separate second round, try to add a trailer with different scenes for each title at that resolution. Discovery and retries are bounded; keep at most two trailers per title temporarily in `work/footage/`. One usable trailer is enough, and a missing or rejected second trailer never fails production. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
 5. Look up US streaming providers using TMDB's JustWatch-powered watch listings, with a 24-hour cache. Keep subscription, free, ads, rental, and purchase options distinct. Missing or unavailable listings are skipped without failing production.
@@ -79,7 +85,7 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 10. Render rank graphics, the like/subscribe/bell card, short trailer-audio breaks, and an original instrumental bed that ducks under speech. Keep the final image for three seconds after speech, with a gentle fade rather than an abrupt cut.
 11. Export H.264/AAC at 30fps, using the highest source-matched resolution shared by all selected trailers, up to 4K when checked or 1080p when unchecked. Apply modest pitch-preserving tempo adjustment only when needed. Embed chapters and write synchronized SRT and description chapter timestamps.
 12. Ask Qwen3 4B for six thumbnail concepts, select three styles, and compare up to two generated image candidates per selected concept. Complete cinematic scenes are the main path; local artwork and trailer cutouts remain a fallback. No paid inference fallback is used.
-13. Validate output files, usable media streams and duration, thumbnail dimensions/size, and a full FFmpeg decode. A healthy export is not rejected solely for missing the length goal. Upload the package for one day, remove downloaded trailers and render intermediates, and save bounded speech/script checkpoints.
+13. Validate output files, usable media streams and duration, thumbnail dimensions/size, and a full FFmpeg decode. A healthy export is not rejected solely for missing the length goal. Upload the package for two days, remove downloaded trailers and render intermediates, and save bounded speech/script checkpoints. An independent hourly maintenance workflow expires production caches after the run has been completed for at least 24 hours.
 
 No approval or publication steps occur. Successful runs deliver downloadable files; this repository does not upload to YouTube.
 
@@ -107,7 +113,7 @@ Missing 4K footage does not cause a resolution error: production continues at th
 
 4K is supported but expensive on a standard CPU runner: it has four times as many pixels as 1080p, can take substantially longer to encode, and may reach the 350-minute job timeout. Standard runners have finite temporary disk, and models, dependencies, trailers, rendered parts, concatenated input, and final output can coexist during production. Conservative free-space checks stop with an explanation when the working reserve is insufficient. 1080p is the practical choice for more dependable free runs; no 4K completion-time guarantee is made.
 
-Artifacts expire after **one day**. That reduces how long finished packages occupy artifact storage; it does not increase disk space while a job is running. Models and checkpoint caches are separate from artifact storage and follow GitHub's own quotas and eviction rules. Repeated cache snapshots and older cache keys can still occupy repository cache space even though each new checkpoint snapshot is bounded.
+New artifacts expire after **48 hours (two days)** from upload. That reduces how long finished packages occupy artifact storage; it does not increase disk space while a job is running. This setting applies to newly uploaded artifacts; previously uploaded packages keep their original expiration. Production caches have a separate 24-hour cleanup policy below. Model and Python dependency caches are preserved by this cleanup, but GitHub's own quotas and eviction rules still apply.
 
 During a run, trailers and their analysis files live under `work/footage/`; rendered intermediate clips live under `work/jobs/`. The cleanup step runs after success or failure, deletes both primary and optional second trailers plus rendered MP4s, and preserves `output/`, model weights, and the bounded speech/script checkpoints. Trailers must therefore be downloaded again on a new run. A cancelled job or runner shutdown can prevent cleanup or checkpoint saving, but GitHub-hosted runner disks are temporary and are discarded with the runner. These directories are never committed to the repository by the workflow.
 
@@ -156,7 +162,7 @@ The workflow writes cookies to a permission-restricted file under `RUNNER_TEMP`,
 
 ### Release-year differences and independent identity lookup
 
-The resolver follows a **first matching result** policy: after filtering by title and supported release year, it always uses the first result returned by TMDB for the preferred medium. Vote counts, low popularity, zero votes, or additional matching records do not cause an ambiguity failure. This preserves TMDB's search ranking rather than attempting a second ranking. TMDB can occasionally put a different version first, so this policy favors unattended completion over additional identity checks. Logs show the selected TMDB kind and ID. Independent lookup is used only when no eligible TMDB/release-date result exists, not as an extra gate for a valid first result.
+The resolver follows a **first matching result** policy: after filtering by title and supported release year, it always uses the first result returned by TMDB within the Movies or Shows selection. Vote counts, low popularity, zero votes, or additional matching records do not cause an ambiguity failure. This preserves TMDB's search ranking rather than attempting a second ranking. TMDB can occasionally put a different version first, so this policy favors unattended completion over additional identity checks. Logs show the selected TMDB kind and ID. Independent lookup is used only when no eligible TMDB/release-date result exists, not as an extra gate for a valid first result.
 
 A title may premiere at a festival in one year and reach theaters in the next. The resolver preserves the year you entered and checks supporting release dates before rejecting it. If needed, a keyless Wikidata lookup checks the English label/aliases, publication-year claims, and IMDb identifier. TMDB's IMDb-ID lookup then retrieves the same film's metadata and trailer references. This is an independent **identity/year check**, not scraping IMDb reviews or plots. Synopses and trailer references still come from TMDB. Source outages and incomplete claims can still prevent verification; logs report that without assuming the input is wrong. No additional account or API secret is required.
 
@@ -189,7 +195,21 @@ Editing is for pacing and original commentary. Cuts, shuffling, frame holds, ove
 
 Speaking-rate measurements are now logged as diagnostics. A fast or slow delivery alone does not reject a segment: the transcription stage checks whether the words were actually spoken, and final duration control handles overall pacing. Voice synthesis still rejects empty, silent, non-finite, or extremely long/runaway output after bounded retries.
 
-A new workflow run can restore earlier research, script, and completed narration checkpoints when GitHub retains them. Downloaded footage and rendered MP4 intermediates are no longer included in checkpoint caches. Cleanup keeps at most the newest two job folders, bounded to 2 GB total before saving; models use a separate cache. Each job's paths are keyed by its inputs and selected voice, so different inputs do not reuse the wrong script or narrator. Reuse is best effort and does not guarantee zero repeated work. Neither cookies nor voice secrets are included in the checkpoint cache. Existing older `production-v1` caches are not automatically deleted; remove them in GitHub's Actions cache settings if you need that space back.
+A new workflow run can restore earlier research, script, and completed narration checkpoints while they are retained. Downloaded footage and rendered MP4 intermediates are excluded. End-of-job cleanup keeps at most the newest two job folders, bounded to 2 GB total before saving; models use a separate cache. Each job's paths include its inputs, Movies/Shows choice, and selected voice, so different selections cannot reuse the wrong research, script, or narration. Neither cookies nor voice secrets are included in the checkpoint cache.
+
+The **Expire Production Caches** workflow runs hourly and can also be started manually from Actions. It uses GitHub's automatic workflow token; no new secret is needed. It deletes only `production-v1-*` and `production-v2-RUN_ID-ATTEMPT` checkpoint caches, by cache ID, once both the cache and the completed production run are at least **24 hours old**. Active or unverifiable runs are skipped. A rerun restarts the completion window. Unattributed older `production-v1` keys wait until all video runs have ended and the latest completion is at least a day old. Failed/cancelled runs also receive a day to retry before their verified completed-run caches expire. Legacy caches may therefore be kept longer while new production continues.
+
+The schedule normally removes eligible checkpoints within **24–25 hours after completion**, and can run later if GitHub delays scheduled jobs. It does not hold a production runner open for a day. Cleanup has its own short job and narrowly scoped Actions write permission; the video-production job retains read-only repository permissions.
+
+| Stored item | Retention / cleanup | Effect |
+|---|---|---|
+| Production checkpoints (`production-v1-*`, `production-v2-*`) | Eligible after 24 hours from verified completion; checked hourly | Reruns can reuse scripts/speech before expiry; afterward they may need to regenerate them. |
+| Finished downloadable package | New uploads retained for 48 hours | Available to download independently of production-cache cleanup. Downloaded copies remain yours. |
+| Model caches (`models-cpu-*`) | Untouched by this cleanup | Existing model downloads remain reusable while GitHub retains the caches. |
+| setup-python / pip and all other cache keys | Untouched by this cleanup | Dependency caching keeps its existing behavior. |
+| Downloaded trailers and rendered intermediates | Removed at the end of production | Temporary runner files are not kept in checkpoint caches. |
+
+Deleting checkpoints does not change video quality, remove an existing artifact, or require downloading cached models again. The cost is reduced recovery/reuse: rerunning the same input after expiry can regenerate research, scripts, speech, captions, and thumbnail work and take longer. A completely new video's work generally must be generated anyway. Model/dependency caches remain subject to GitHub's own storage limits and eviction; this workflow does not guarantee permanent retention. The two-day artifact setting applies to new uploads and does not extend older artifacts' original expiry.
 
 ## Telegram completion reminder
 
@@ -205,7 +225,7 @@ One-time setup:
    - `TELEGRAM_CHAT_ID`: your numeric chat ID.
 5. Start a new Generate Video run on **main**. A reminder is sent only after its finished package uploads successfully.
 
-If getUpdates reports a webhook conflict, use a dedicated new bot for this workflow instead of changing another application's bot. If a token is exposed, revoke it through BotFather and replace the GitHub secret. The linked artifacts retain the repository's GitHub access requirements and expire after one day. Delivery is best effort: a network failure can prevent confirmation, and re-running a successful production job can send another reminder.
+If getUpdates reports a webhook conflict, use a dedicated new bot for this workflow instead of changing another application's bot. If a token is exposed, revoke it through BotFather and replace the GitHub secret. The linked artifacts retain the repository's GitHub access requirements; new uploads expire after 48 hours. Delivery is best effort: a network failure can prevent confirmation, and re-running a successful production job can send another reminder.
 
 ### Channel pinning and spacing
 

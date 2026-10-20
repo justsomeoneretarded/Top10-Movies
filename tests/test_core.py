@@ -1,4 +1,7 @@
 
+import runpy
+from unittest.mock import Mock
+
 import pytest
 
 from movie_pipeline.cli import choose_beat
@@ -6,6 +9,8 @@ from movie_pipeline.core import (
     PipelineError,
     narrator_from_brief,
     parse_movies,
+    selected_content_type,
+    selected_narrator,
     write_srt,
 )
 from movie_pipeline.footage import candidate_ok
@@ -41,6 +46,64 @@ def test_narrator_selection(brief, expected):
 def test_ambiguous_narrator_rejected():
     with pytest.raises(PipelineError):
         narrator_from_brief("Use Kit Laser and the female voice")
+
+
+@pytest.mark.parametrize("choice, expected", [("Warguy", "warguy"), ("Kit Laser", "kit-laser"), ("Female", "female")])
+def test_explicit_narrator_overrides_conflicting_brief(monkeypatch, choice, expected):
+    monkeypatch.setenv("NARRATOR", choice)
+    assert selected_narrator("Use Kit Laser and the female voice with Warguy.") == expected
+
+
+def test_unspecified_narrator_preserves_local_brief_selection(monkeypatch):
+    monkeypatch.delenv("NARRATOR", raising=False)
+    assert selected_narrator("An energetic countdown.") == "warguy"
+    assert selected_narrator("Use the female voice.") == "female"
+    monkeypatch.setenv("NARRATOR", "")
+    assert selected_narrator("Use Kit Laser.") == "kit-laser"
+
+
+def test_selected_warguy_does_not_allow_brief_to_choose_female(monkeypatch):
+    monkeypatch.setenv("NARRATOR", "Warguy")
+    assert selected_narrator("Use the female voice.") == "warguy"
+
+
+def test_invalid_narrator_selector_reports_early(monkeypatch):
+    monkeypatch.setenv("NARRATOR", "unknown")
+    with pytest.raises(PipelineError, match="narrator selector"):
+        selected_narrator("Use Warguy.")
+
+
+@pytest.mark.parametrize("choice, expected", [("Movies", "movie"), ("Shows", "tv"), ("movies", "movie"), ("Shows ", "tv")])
+def test_explicit_content_type(monkeypatch, choice, expected):
+    monkeypatch.setenv("VIDEO_TYPE", choice)
+    assert selected_content_type() == expected
+
+
+def test_unspecified_content_type_preserves_automatic_lookup(monkeypatch):
+    monkeypatch.delenv("VIDEO_TYPE", raising=False)
+    assert selected_content_type() is None
+    monkeypatch.setenv("VIDEO_TYPE", " ")
+    assert selected_content_type() is None
+
+
+def test_invalid_content_type_selector_reports_early(monkeypatch):
+    monkeypatch.setenv("VIDEO_TYPE", "unknown")
+    with pytest.raises(PipelineError, match="content-type selector"):
+        selected_content_type()
+
+
+def test_preflight_uses_same_explicit_media_and_voice_before_models(monkeypatch, capsys):
+    for name, value in {
+        "VIDEO_TITLE": "Top 2 Movies", "VIDEO_BRIEF": "Use Warguy.",
+        "MOVIE_LIST": "Example A (2020); Example B (2022)", "TMDB_READ_TOKEN": "placeholder",
+        "VIDEO_TYPE": "Shows", "NARRATOR": "Female", "VIDEO_MINUTES": "Auto", "TRY_4K": "false",
+    }.items():
+        monkeypatch.setenv(name, value)
+    reference = Mock()
+    monkeypatch.setattr("movie_pipeline.core.voice_reference", reference)
+    runpy.run_module("scripts.preflight", run_name="__main__")
+    assert reference.call_args.args[0] == "female"
+    assert "content type tv; narrator female" in capsys.readouterr().out
 
 
 def test_srt_is_uploadable_and_nonoverlapping(tmp_path):

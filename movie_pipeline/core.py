@@ -83,6 +83,28 @@ def narrator_from_brief(brief: str) -> str:
     return chosen[0] if chosen else "warguy"
 
 
+def selected_narrator(brief: str) -> str:
+    """An explicit workflow choice wins over narrator wording in the brief."""
+    value = normalized(os.getenv("NARRATOR", ""))
+    if not value:
+        return narrator_from_brief(brief)
+    choices = {"warguy": "warguy", "war guy": "warguy", "kit laser": "kit-laser", "female": "female"}
+    if value not in choices:
+        raise PipelineError("Choose Warguy, Kit Laser, or Female in the narrator selector.")
+    return choices[value]
+
+
+def selected_content_type() -> str | None:
+    """Return the explicit workflow medium; absent means legacy automatic lookup."""
+    value = normalized(os.getenv("VIDEO_TYPE", ""))
+    if not value:
+        return None
+    choices = {"movies": "movie", "movie": "movie", "shows": "tv", "show": "tv", "series": "tv", "tv": "tv"}
+    if value not in choices:
+        raise PipelineError("Choose Movies or Shows in the content-type selector.")
+    return choices[value]
+
+
 def voice_reference(narrator: str, root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     for extension in ("wav", "mp3", "ogg", "opus"):

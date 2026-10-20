@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from .core import PipelineError
+from .core import PipelineError, selected_content_type
 
 
 @dataclass(frozen=True)
@@ -21,8 +21,13 @@ def _auto_duration(title: str, count: int, films: list[dict] | None = None) -> D
     # Roughly 80 seconds per recommendation keeps small lists concise, while
     # allowing a ten-title countdown to naturally run around fourteen minutes.
     count = max(2, min(15, count))
-    shows = (sum(film.get("kind") == "tv" for film in films) > len(films)/2
-             if films else bool(re.search(r"\b(shows?|series|tv)\b", title, re.IGNORECASE)))
+    kind = selected_content_type()
+    if kind:
+        shows = kind == "tv"
+    elif films:
+        shows = sum(film.get("kind") == "tv" for film in films) > len(films)/2
+    else:
+        shows = bool(re.search(r"\b(shows?|series|tv)\b", title, re.IGNORECASE))
     target = min(22*60, 30 + count*(85 if shows else 80))
     return DurationSpec(target, target*.75, target*1.25, automatic=True)
 
