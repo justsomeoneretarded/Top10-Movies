@@ -119,13 +119,17 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
     narrator = narrator_from_brief(brief)
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
-    # Include the writing model so a model upgrade never reuses an old model's script.
+    # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
-    run_key = key("pipeline-v5-adaptive-duration", title, brief, movies, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v6-first-tmdb-result", title, brief, movies, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     research = Research()
+    # Search the medium named in the workflow title first; preserve TMDB order within it.
+    shows_title = re.search(r"\b(?:shows?|series|tv)\b", title, re.IGNORECASE)
+    movies_title = re.search(r"\b(?:movies?|films?)\b", title, re.IGNORECASE)
+    research.preferred_kind = "tv" if shows_title and not movies_title else "movie"
     facts_path = work / "research.json"
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
     films = enrich_availability(films, research, work / "availability")

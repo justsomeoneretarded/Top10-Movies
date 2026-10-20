@@ -76,48 +76,36 @@ class Research:
     def resolve(self, item: FilmInput) -> dict:
         candidates = []
         nearby = []
-        for kind in ("movie", "tv"):
+        kinds = ("tv", "movie") if getattr(self, "preferred_kind", "movie") == "tv" else ("movie", "tv")
+        for kind in kinds:
             data = self.get(f"search/{kind}", query=item.title, language="en-US", include_adult="false")
             for found in data.get("results", []):
                 date = found.get("release_date" if kind == "movie" else "first_air_date", "")
                 similarity = self.title_score(item, found, kind)
                 if date[:4] == str(item.year) and similarity >= 0.88:
                     candidates.append((similarity, kind, found))
+                    break
                 elif kind == "movie" and date[:4].isdigit() and abs(int(date[:4]) - item.year) <= 2 and similarity >= 0.88:
                     nearby.append((similarity, kind, found))
+            if candidates:
+                break
         if not candidates:
             # Festival premieres and regional theatrical dates can precede the search year.
-            for similarity, kind, found in sorted(nearby, key=lambda c: c[0], reverse=True)[:5]:
+            for similarity, kind, found in nearby[:5]:
                 releases = self.get(f"movie/{found['id']}/release_dates")
                 dated = [r.get("release_date", "") for country in releases.get("results", []) for r in country.get("release_dates", [])]
                 if any(date[:4] == str(item.year) for date in dated):
                     candidates.append((similarity, kind, {**found, "_year_evidence": "TMDB dated festival/regional release record"}))
+                    break
         if not candidates:
             candidates = self.wikidata_candidates(item)
-        # Search endpoints can return duplicate rows. A duplicate must never create ambiguity.
-        candidates = list({(kind, found["id"]): (score, kind, found) for score, kind, found in candidates}.values())
-        candidates.sort(key=lambda x: (x[0], x[2].get("vote_count", 0) or 0), reverse=True)
         if not candidates:
             raise PipelineError(f"Could not verify {item.title} ({item.year}) using search dates, dated release records, or the independent Wikidata/IMDb-ID fallback. This does not establish that your input is wrong.")
-        contenders = [candidate for candidate in candidates if candidates[0][0] - candidate[0] < 0.025]
-        if len(contenders) > 1:
-            # Exact title/year matches outrank near matches; retain movie/TV neutrality.
-            exact = [candidate for candidate in contenders if candidate[0] == 1.0]
-            if exact:
-                contenders = exact
-        if len(contenders) > 1:
-            # Mainstream features often share a title/year with obscure shorts or TV entries.
-            # Require strong evidence, rather than choosing the API's first result or popularity alone.
-            contenders.sort(key=lambda c: c[2].get("vote_count", 0) or 0, reverse=True)
-            first_votes = contenders[0][2].get("vote_count", 0) or 0
-            second_votes = contenders[1][2].get("vote_count", 0) or 0
-            if first_votes < 50 or first_votes < 10 * max(1, second_votes):
-                raise PipelineError(
-                    f"Multiple similarly supported title/year matches for {item.title} ({item.year}). "
-                    "Unable to choose confidently; check the official title and first-release year."
-                )
-            print(f"Resolved competing matches for {item.title} using a dominant audience-vote count.", flush=True)
-        _, kind, match = contenders[0]
+        # Owner policy: always keep TMDB's first eligible result. Preserve the API
+        # order instead of reranking by votes, exactness, or a second confidence gate.
+        # Title/year checks still exclude unrelated titles and unsupported years.
+        _, kind, match = candidates[0]
+        print(f"Selected first matching TMDB result: {item.title} ({item.year}) -> {kind}/{match['id']}.", flush=True)
         if match.get("_year_evidence"):
             print(f"Verified {item.title} ({item.year}) via {match['_year_evidence']} (search release date: {match.get('release_date', '')}).", flush=True)
         details = self.get(f"{kind}/{match['id']}", append_to_response="videos,credits,external_ids", language="en-US")
