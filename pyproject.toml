@@ -22,7 +22,7 @@ test = ["pytest>=8,<9", "PyYAML>=6,<7"]
 movie-pipeline = "movie_pipeline.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["movie_pipeline*"]
+include = ["movie_pipeline*", "scripts*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
