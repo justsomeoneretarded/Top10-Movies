@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 
-def subscription_boundary(sections: list[dict], lengths: dict[tuple[int, int], float], beat_lengths: dict[int, float], cta_seconds: float, ending_hold: float = 3) -> tuple[int, float]:
+def subscription_boundary(sections: list[dict], lengths: dict[tuple[int, int], float], beat_lengths: dict[int, float], cta_seconds: float, ending_hold: float = 3, *, opening_seconds: float = 0) -> tuple[int, float]:
     durations = [sum(lengths[(i,p)] for p in range(len(section['paragraphs']))) + beat_lengths.get(i, 0)
                  for i, section in enumerate(sections)]
-    total = sum(durations)+cta_seconds+ending_hold
-    elapsed = 0.0
+    total = sum(durations)+cta_seconds+ending_hold+opening_seconds
+    elapsed = opening_seconds
     choices = []
     films_seen = 0
     for i, (section, seconds) in enumerate(zip(sections, durations)):

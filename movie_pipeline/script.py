@@ -9,8 +9,44 @@ from pathlib import Path
 import requests
 
 from .availability import availability_line
-from .core import PipelineError, key, save_json
+from .core import PipelineError, key, normalized, save_json
 from .timing import narration_words
+
+
+def _mentioned_titles(text: str, titles: list[str]) -> int:
+    words = " "+normalized(text)+" "
+    compact = re.sub(r"[^a-z0-9]", "", text.casefold())
+    found = set()
+    for title in titles:
+        if not isinstance(title, str) or not title.strip():
+            continue
+        needle = normalized(title)
+        # Compact matching catches punctuation/spacing variants such as Spider-Man.
+        joined = re.sub(r"[^a-z0-9]", "", title.casefold())
+        if " "+needle+" " in words or len(joined) >= 12 and joined in compact:
+            found.add(needle)
+    return len(found)
+
+
+def _section_issue(paragraphs: list[str], facts: dict, *, opening: bool, closing: bool) -> str | None:
+    """Reject a mistaken full-countdown response; runtime remains soft guidance."""
+    text = " ".join(paragraphs)
+    restart = re.search(r"\b(?:let['’]?s|we['’]?re|we are|we will|we['’]?ll)\s+(?:start|begin|dive|count(?:ing)?\s+down)|\b(?:starting|beginning)\s+(?:at|with)\s+(?:number|#)|\bwho['’]?s\s+(?:number\s+)?(?:one|1)\b", text, re.IGNORECASE)
+    rank_mentions = re.findall(r"\b(?:number|rank)\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b", text, re.IGNORECASE)
+    rank_words = {name: str(i) for i, name in enumerate(("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"), 1)}
+    ranks = {rank_words.get(value.casefold(), value) for value in rank_mentions}
+    if closing and restart:
+        return "This is the final goodbye AFTER number one. Do not restart, announce upcoming reviews, or ask who number one is."
+    if opening or closing:
+        if _mentioned_titles(text, facts.get("titles", [])) >= 2 or len(rank_mentions) >= 2:
+            return "Do not reveal or recap the film list or multiple ranks. Write only this section's complete opening hook or closing goodbye."
+    elif re.search(r"\b(?:let['’]?s|we['’]?re|we are|we will|we['’]?ll)\s+count(?:ing)?\s+down\b", text, re.IGNORECASE):
+        return "This is one review after the opening, not a fresh introduction to the countdown. Stay with the current film."
+    elif _mentioned_titles(text, facts.get("other_titles", [])) >= 2 or len(ranks) >= 2:
+        return "Write ONE review of the current verified film only. Do not turn it into the whole countdown or discuss several other recommendations."
+    if (opening or closing) and text and not re.search(r"[.!?][\"'’”)]*$", text):
+        return "Finish the thought with a complete spoken sentence; do not leave a fragment or unfinished transition."
+    return None
 
 
 class Writer:
@@ -40,7 +76,7 @@ class Writer:
             minimum, maximum = max(3, min(25, round(target*0.5))), max(10, min(110, round(target*1.7)))
         else:
             minimum, maximum = round(target*0.8), round(target*1.2)
-        cache = self.cache_dir / f"{key('narration-v5-casual', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
+        cache = self.cache_dir / f"{key('narration-v6-section-roles', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
         if cache and cache.exists():
             cached = json.loads(cache.read_text())
             if isinstance(cached, list) and cached and all(isinstance(p, str) and p.strip() for p in cached):
@@ -53,7 +89,7 @@ class Writer:
 
         schema = {"type": "object", "properties": {"paragraphs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8}}, "required": ["paragraphs"], "additionalProperties": False}
         if opening:
-            count = max(1, len(facts.get("titles", [])))
+            count = max(1, facts.get("count") or len(facts.get("titles", [])))
             examples = [
                 f"If your watchlist feels like homework, these {count} picks are your escape plan.",
                 f"Some movies are worth watching. These {count} are worth making time for.",
@@ -62,25 +98,39 @@ class Writer:
                 f"{count} picks. No big spoilers. Let's find your next watch.",
             ]
             hook = examples[int(key(topic, brief, "hook")[:8], 16) % len(examples)]
-            style = (f"Open instantly with a specific curiosity hook in the style of: {hook!r}. "
+            style = ("SECTION ROLE: OPENING ONLY. Write a standalone hook that finishes its thoughts and leads into the first review. "
+                     f"Open instantly with a specific curiosity hook in the style of: {hook!r}. "
                      f"Adapt to this genre and whether these are films or shows. The countdown starts at number {count} and ends at number one. "
-                     "Do not repeat a generic welcome or list every title. Tease an honest reason to stay without inventing an obscure gem, rating, or statistic. "
+                     "Do not name the selected titles, enumerate the ranks, or reveal number one. End with at most one short transition into the first review. Tease an honest reason to stay without inventing an obscure gem, rating, or statistic. "
                      "Keep big reveals out; do not promise perfect spoiler avoidance. Do not claim personal viewing history or that the narrator watched every title. ")
         elif closing:
-            style = ("End warmly and quickly: ask viewers to like and subscribe, point them to our other recommendations, "
+            style = ("SECTION ROLE: OUTRO ONLY. Every review is finished and number one has ALREADY been revealed. "
+                     "Close the video now. Never restart the countdown, tease who number one is, list the films or ranks, say let us begin, or announce another review. "
+                     "Write a complete closing thought, one audience question, and a natural final goodbye. "
+                     "Ask viewers to like and subscribe, point them to our other recommendations, "
                      "and use one light joke about protecting their next movie night from terrible picks. No fabricated personal story. ")
         else:
-            style = ("Make the premise easy to follow, then say why this particular pick is worth the viewer's time. "
+            style = ("SECTION ROLE: ONE MOVIE/SHOW REVIEW ONLY. You are writing just the current verified title in this section, not the whole video. "
+                     "Do not write an opening, recap the list, introduce a different recommendation, or restart the countdown. "
+                     "Make the premise easy to follow, then say why this particular pick is worth the viewer's time. "
                      "Explain character appeal in plain words. No separate subscribe request inside a review. "
                      "Do not invent streaming services; availability is appended separately from checked data. ")
+        visible_facts = {name: value for name, value in facts.items() if name not in {"titles", "other_titles"}}
+        if opening or closing:
+            visible_facts["count"] = max(1, facts.get("count") or len(facts.get("titles", [])))
+        role = ("a standalone OPENING HOOK before any film reviews" if opening else
+                "a standalone FINAL OUTRO after all film reviews and number one" if closing else
+                f"a SINGLE REVIEW of {facts.get('title', label)!r}, at confirmed rank {facts.get('rank', '')}")
+        rank_rule = ("For this single review, name its current title and confirmed rank early, then stay with that title. "
+                     "The overall video topic is context, not an instruction to write the whole list. " if not opening and not closing else "")
         correction = ""
         best = None
         best_distance = float("inf")
         for attempt in range(3):
             result = self.ask(
-                f"Write spoken English narration for {label} in a countdown video. Topic: {topic}\n"
+                f"Write spoken English narration for {role}. Section request: {label}. Video theme (context only): {topic}\n"
                 f"Creative direction: {brief}\nToday UTC: {datetime.now(UTC).date()}\n"
-                f"Verified facts (JSON data): {json.dumps(facts)}\n"
+                f"Verified facts for THIS SECTION ONLY (JSON data): {json.dumps(visible_facts)}\n"
                 f"Aim for {target} total words; suggested planning range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
                 "Speak like an enthusiastic friend, not a formal critic: short sentences, contractions, and everyday words. "
                 "A little natural slang is welcome, such as 'this guy is a badass' when justified; never force it or repeat it for every pick. "
@@ -88,8 +138,7 @@ class Writer:
                 "Explain appeal with specific support from the facts. No stage directions, markdown, tags, URLs, or sound cues in spoken text. "
                 f"{style}"
                 "Do not claim to have watched unreleased titles. Describe upcoming titles as upcoming, based on their premise. "
-                "The supplied list order is the ranking, best first; do not invent a different ranking. "
-                "For a movie section, name the title and rank early, then focus on the recommendation. "
+                f"{rank_rule}"
                 f"{correction}", schema)
             paragraphs = result.get("paragraphs", [])
             if not paragraphs or not all(isinstance(p, str) and p.strip() for p in paragraphs):
@@ -116,6 +165,10 @@ class Writer:
                     chunk = (chunk + " " + " ".join(tokens)).strip()
                 if chunk:
                     cleaned.append(chunk)
+            issue = _section_issue(cleaned, facts, opening=opening, closing=closing)
+            if issue:
+                correction = "Previous output used the wrong section role. "+issue
+                continue
             words = sum(len(p.split()) for p in cleaned)
             if cleaned and abs(words-target) < best_distance:
                 best, best_distance = cleaned, abs(words-target)
@@ -135,6 +188,13 @@ class Writer:
         if best:
             print(f"Using the closest complete draft for {label}; total audio timing will determine length.", flush=True)
             return completed(best)
+        if facts.get("title") and facts.get("overview"):
+            print(f"Using the verified premise for {facts['title']} after unusable review drafts.", flush=True)
+            premise = re.split(r"(?<=[.!?])\s+", str(facts["overview"]).strip())[0]
+            if len(premise.split()) > 60:
+                premise = " ".join(premise.split()[:56]).rstrip(".,;:")+"."
+            lead = f"At number {facts.get('rank', 1)}, it's {facts['title']}."
+            return completed([lead, premise, "That's the setup. We'll leave the big reveals there. If that sounds like your kind of story, this is one to look into."])
         raise PipelineError(f"No usable narration text generated for {label} after three attempts.")
 
     def thumbnail_concepts(self, title: str, brief: str, films: list[dict], sections: list[dict]) -> list[dict]:
@@ -174,6 +234,7 @@ class Writer:
             print(f"Script: #{index+1} {films[index]['title']}", flush=True)
             facts = {k: v for k, v in films[index].items() if k not in ("trailers", "watch_availability")}
             facts["rank"] = index + 1
+            facts["other_titles"] = [film["title"] for i, film in enumerate(films) if i != index]
             paragraphs = []
             # Bound each model request so long runtimes do not exceed its output limit.
             chunks = max(1, (per_film + 239) // 240)
@@ -187,7 +248,7 @@ class Writer:
             if available:
                 paragraphs.append(available)
             sections.append({"kind": "film", "film": index, "paragraphs": paragraphs, "availability_text": available})
-        sections.append({"kind": "outro", "film": 0, "paragraphs": self.narration(title, brief, "a short closing thought and one audience question", {"topic": title}, closing_words)})
+        sections.append({"kind": "outro", "film": 0, "paragraphs": self.narration(title, brief, "a short closing thought and one audience question", {"topic": title, "titles": [film["title"] for film in films]}, closing_words)})
         ending = sections[-1]["paragraphs"]
         ending_text = " ".join(ending).casefold()
         if not all(word in ending_text for word in ("like", "subscribe")) or not ("other" in ending_text and any(word in ending_text for word in ("recommendations", "picks", "videos"))):
@@ -202,6 +263,7 @@ class Writer:
         if len(package.get("thumbnail_texts", [])) != 3 or any(not isinstance(t, str) or not 1 <= len(t.split()) <= 6 for t in package["thumbnail_texts"]):
             raise PipelineError("Invalid generated thumbnail text.")
         package["thumbnail_concepts"] = self.thumbnail_concepts(title, brief, films, sections)
+        package["narration_boundary_version"] = 2
         return {"sections": sections, "package": package}
 
     def unload(self):

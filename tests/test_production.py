@@ -36,6 +36,7 @@ from movie_pipeline.video_settings import export_size
     (5,"true",720,(1280,720),"found","Movies","Warguy"),
     (2,"true",2160,(3840,2160),"render-fails",None,None),
     (2,"true",2160,(3840,2160),"rewrite-fails",None,None),
+    (2,"false",2160,(1920,1080),"shared-audio-retry","Movies","Warguy"),
 ])
 def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size, extra_mode, content_type, narrator):
     monkeypatch.chdir(tmp_path)
@@ -118,7 +119,9 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 seconds = 120 if count == 2 else 47
             elif text.startswith("It's listed"):
                 seconds = 3
-            elif text in MIDROLLS:
+                if kwargs.get('attempt_offset'):
+                    records['shared_regenerations'] = records.get('shared_regenerations', 0)+1
+            elif text in MIDROLLS or text == records.get('cta_text'):
                 seconds = 6
             else:
                 seconds = 20
@@ -142,7 +145,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert minimum_size == expected_size
         if extra_mode == 'raises':
             raise RuntimeError('Optional source unavailable')
-        if extra_mode in {'missing', 'rewrite-fails'}:
+        if extra_mode in {'missing', 'rewrite-fails', 'shared-audio-retry'}:
             return None
         path = make(root / f"movie-{film['id']}-extra.mp4", 150)
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/extra/{film['id']}"})
@@ -150,6 +153,12 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
 
     def captions(audio, recognizer):
         if str(audio) in text_for_audio:
+            assert Path(audio).exists(), 'Shared speech must remain present while its coordinates are verified'
+            text = text_for_audio[str(audio)]
+            if extra_mode == 'shared-audio-retry' and text.startswith("It's listed"):
+                records['shared_transcriptions'] = records.get('shared_transcriptions', 0)+1
+                if not records.get('shared_regenerations'):
+                    return [{'start': 0, 'end': durations[str(audio)], 'text': 'Missing the expected availability sentence.'}]
             return [{"start": 0, "end": durations[str(audio)], "text": text_for_audio[str(audio)]}]
         return [{"start": 30, "end": 32.9, "text": "We have to leave right now"}]
 
@@ -177,16 +186,49 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             raise PipelineError('Optional decoder failed')
         render_sizes.append(export_size())
         text = text_for_audio[str(audio)]
-        if text in MIDROLLS:
-            records['cta_plan'] = copy.deepcopy(selected)
-            assert kwargs['label_seconds'] == durations[str(audio)]
+        assert label is None  # Rank labels belong to previews, never the spoken review.
+        records.setdefault('spoken_renders', []).append({'text': text, 'target': str(target)})
         make(target, durations[str(audio)])
 
-    def trailer_video(source, start, seconds, target):
+    def trailer_video(source, start, seconds, target, **kwargs):
+        records.setdefault('trailer_renders', []).append({
+            'source': str(source), 'start': start, 'duration': seconds,
+            'target': str(target), **kwargs,
+        })
         make(target, seconds)
+
+    def cold_open_plan(selector, pools, shot_lookup, text, action, dialogue=None, seconds=5):
+        assert seconds == 5
+        records['cold_open_planned'] = True
+        return [{'source': str(pools[0][0]), 'start': 40, 'duration': seconds, 'muted': True, 'film_index': 0}]
+
+    def choose_preview(selector, sources, shot_lookup, text, seconds, action, dialogue=None):
+        assert seconds == 3.5
+        records.setdefault('review_previews', []).append(str(sources[0]))
+        return {'source': str(sources[0]), 'start': 40, 'duration': seconds, 'muted': True}
+
+    def prepare_cta(title, brief, seed, work):
+        records['cta_text'] = MIDROLLS[0]
+        plan = {'text': MIDROLLS[0], 'path': str(tmp_path / 'reaction.gif'),
+                'animated': True, 'headline': 'LIKE + SUBSCRIBE', 'theme': 'movie-night',
+                'source': 'https://example.org/reaction', 'attribution': 'Test reaction asset'}
+        records['cta_prepared'] = copy.deepcopy(plan)
+        return plan
+
+    def render_cta(plan, audio, target, work, background=None):
+        assert plan['animated'] is True
+        assert plan == records['cta_prepared']
+        assert text_for_audio[str(audio)] == plan['text']
+        records['cta_render'] = {'plan': copy.deepcopy(plan), 'target': str(target), 'background': background}
+        render_sizes.append(export_size())
+        make(target, durations[str(audio)])
+        return {'source': plan['path'], 'start': 0, 'duration': durations[str(audio)],
+                'image': True, 'animation': True, 'still': False,
+                'credit_source': plan['source'], 'attribution': plan['attribution']}
 
     def finish(parts, target, work, action, spec):
         records['ending_hold'] = 3
+        records['parts'] = [str(part) for part in parts]
         seconds = (sum(durations[str(part)] for part in parts)+3)/1.02
         make(target, seconds)
         return seconds, 1.02
@@ -206,6 +248,10 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     def reference_for(selected_narrator, root):
         records['narrator'] = selected_narrator
         return reference
+
+    def label_image(path, title, rank=None, year=None):
+        records.setdefault('rank_labels', []).append({'title': title, 'rank': rank, 'year': year})
+        path.write_bytes(b'label')
 
     monkeypatch.setattr(cli, 'inspect_sources', lambda paths: [{"file": p.name, "width": round((source_height if i==0 else 2160)*16/9), "height": source_height if i==0 else 2160} for i,p in enumerate(paths)])
     monkeypatch.setattr(cli, 'voice_reference', reference_for)
@@ -228,11 +274,19 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(memes, 'prepare_intro_meme', lambda *args: None)
     monkeypatch.setattr(render, 'speech_video', speech_video)
     monkeypatch.setattr(render, 'trailer_video', trailer_video)
-    monkeypatch.setattr(render, 'label_image', lambda path, *args: path.write_bytes(b'label'))
-    monkeypatch.setattr(render, 'subscribe_image', lambda path: path.write_bytes(b'cta'))
+    monkeypatch.setattr(render, 'label_image', label_image)
+    monkeypatch.setattr(render, 'subscribe_image', Mock(side_effect=AssertionError('The old static CTA card must not render')))
     monkeypatch.setattr(render, 'finish', finish)
     monkeypatch.setattr(render, 'embed_chapters', embed)
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
+    monkeypatch.setitem(sys.modules, 'movie_pipeline.previews', SimpleNamespace(
+        cold_open_plan=cold_open_plan, choose_preview=choose_preview,
+        outro_recap_plan=lambda selector, pools, shots, lengths, text, action: montage(
+            selector, [pool[0] for pool in pools], shots, lengths, text, action),
+    ))
+    monkeypatch.setitem(sys.modules, 'movie_pipeline.cta', SimpleNamespace(
+        prepare_cta=prepare_cta, render_cta=render_cta,
+    ))
     monkeypatch.setitem(sys.modules, 'faster_whisper', SimpleNamespace(WhisperModel=Mock()))
     output = tmp_path / 'output'
     brief_voice = 'Use female audio.' if narrator == 'Warguy' else 'Use Warguy.'
@@ -245,8 +299,13 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     saved_input = json.loads(next((tmp_path / 'jobs').glob('*/input.json')).read_text())
     assert saved_input['content_type'] == (expected_kind if content_type else 'auto')
     assert saved_input['narrator'] == expected_narrator
-    assert 285 <= records['final_duration'] <= 315
+    # Cold opening and title previews add intentional screen time to the old plan.
+    added_visual_seconds = 5 + count*3.5
+    assert 285 <= records['final_duration']-added_visual_seconds/1.02 <= 315
     assert records['writes'] == (2 if extra_mode == "rewrite-fails" else 1)
+    if extra_mode == 'shared-audio-retry':
+        assert records['shared_transcriptions'] == 2  # one failed shared file, then its replacement
+        assert records['shared_regenerations'] == 1  # reused by every repeated paragraph
     assert records['extra_attempts'] == count
     assert records["footage_order"] == [("primary",film["id"]) for film in films]+[("secondary",film["id"]) for film in films]
     if extra_mode == "render-fails":
@@ -256,12 +315,29 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     quality_report = json.loads(next((tmp_path / "jobs").glob("*/quality-report.json")).read_text())
     assert quality_report["try_4k"] == (try_4k == "true")
     assert (quality_report["export_width"], quality_report["export_height"]) == expected_size
-    assert records['cta_plan'][0]['still'] is True
-    assert len(records['cta_plan']) == 1
+    assert records['cta_render']['plan']['animated'] is True
+    assert records['cta_render']['plan']['path'].endswith('.gif')
+    assert len(records['review_previews']) == count
+    assert records['rank_labels'] == [
+        {'title': f'Movie {i+1}', 'rank': i+1, 'year': 2025} for i in reversed(range(count))
+    ]
     timeline_file = next((tmp_path / 'jobs').glob('*/timeline.json'))
     timeline = json.loads(timeline_file.read_text())
     events = timeline['events']
-    ctas = [(i, event) for i, event in enumerate(events) if event.get('text') in MIDROLLS]
+    assert events[0]['type'] == 'cold-open'
+    assert events[0]['start'] == 0
+    assert sum(event['duration'] for event in events if event['type'] == 'cold-open') == pytest.approx(5)
+    assert records['parts'][0] == records['trailer_renders'][0]['target']
+    assert records['trailer_renders'][0]['muted'] is True
+    assert min(cue['start'] for cue in written_cues) == pytest.approx(5/timeline['speed'])
+    assert written_cues[0]['text'] == first
+    previews = [event for event in events if event['type'] == 'review-preview']
+    assert len(previews) == count
+    assert all(event['duration'] == pytest.approx(3.5) for event in previews)
+    labelled = [event for event in records['trailer_renders'] if event.get('label') is not None]
+    assert len(labelled) == count
+    assert all(event['label_seconds'] == 3.5 for event in labelled)
+    ctas = [(i, event) for i, event in enumerate(events) if event.get('type') == 'subscribe']
     assert len(ctas) == 1
     index, cta = ctas[0]
     raw_duration = records['final_duration']*timeline['speed']
@@ -269,16 +345,26 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert cta['duration']/timeline['speed'] < 10
     assert events[index-1]['film'] != events[index+1]['film']
     assert events[index-1]['text'].startswith("It's listed")  # preceding review completed
-    assert events[index+1]['text'].startswith('Review number')  # next review has not started
+    assert events[index+1]['type'] == 'review-preview'  # next review begins after the CTA
+    assert events[index+2]['text'].startswith('Review number')
     assert [chapter['title'] for chapter in embedded] == ['Intro',
             *[f"#{i+1} Movie {i+1} (2025)" for i in reversed(range(count))], 'Outro']
     assert all(a['start'] < b['start'] for a, b in pairwise(embedded))
     assert not any('subscribe' in chapter['title'].casefold() for chapter in embedded)
     assert embedded == timeline['chapters']
+    assert embedded[0]['start'] == 0
+    for preview, chapter in zip(previews, embedded[1:-1]):
+        assert chapter['start'] == pytest.approx(preview['start']/timeline['speed'])
+        following = next(event for event in events if event['type'] == 'narration'
+                         and event.get('section_kind') == 'film' and event['film'] == preview['film'])
+        assert following['start'] == pytest.approx(preview['start']+3.5)
+        cue = next(cue for cue in written_cues if cue['text'] == following['text'])
+        assert cue['start'] == pytest.approx(following['start']/timeline['speed'])
     cta_cue = next(cue for cue in written_cues if cue['text'] in MIDROLLS)
     assert cta_cue['start'] == pytest.approx(cta['start']/timeline['speed'])
     assert cta_cue['end']-cta_cue['start'] < 10
     assert all(a['end'] <= b['start']+.001 for a,b in pairwise(written_cues))
+    assert (records['final_duration']-written_cues[-1]['end'])*timeline['speed'] == pytest.approx(3)
     description = (output / 'description.txt').read_text()
     assert description.startswith(first+'\n\n'+second+'\n\n')
     assert '00:00 Intro' in description

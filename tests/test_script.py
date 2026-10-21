@@ -68,3 +68,54 @@ def test_empty_movie_text_is_still_an_error():
     writer.ask = Mock(return_value={"paragraphs": []})
     with pytest.raises(PipelineError, match="No usable narration text"):
         writer.narration("Top 5", "Action", "rank 1: Example", {}, 216)
+
+
+FILMS = ["The Odyssey", "Spider-Man: Brand New Day", "Michael", "Toy Story 5", "Project Hail Mary"]
+
+
+def test_intro_does_not_reveal_the_full_list_even_when_model_ignores_its_role():
+    writer = Writer()
+    bad = "Project Hail Mary is five. Toy Story 5 is four. Michael is three. Spider-Man: Brand New Day is two. The Odyssey is one. Which is your pick?"
+    writer.ask = Mock(return_value={"paragraphs": [bad]})
+    result = writer.narration("Top 5 Movies of 2026", "Action", "a punchy opening hook, without listing every title", {"titles":FILMS}, 65)
+    assert writer.ask.call_count == 3
+    assert not any(title in " ".join(result) for title in FILMS)
+    assert "number 5" in " ".join(result)
+    # The title list is kept for checking the response, not fed back as material to enumerate.
+    assert all(title not in writer.ask.call_args_list[0].args[0] for title in FILMS)
+
+
+def test_outro_is_a_goodbye_instead_of_a_second_countdown():
+    writer = Writer()
+    writer.ask = Mock(return_value={"paragraphs": ["Who's one? Let's count down. At number five, Project Hail Mary. Number four is Toy Story 5. Number three is Michael. Our movie list is about to begin."]})
+    result = writer.narration("Top 5 Movies of 2026", "Action", CLOSING, {"titles":FILMS}, 35)
+    text = " ".join(result)
+    assert writer.ask.call_count == 3
+    assert "subscribe" in text and "other recommendations" in text
+    assert "Let's count down" not in text and "Who's one" not in text
+    assert all(title not in text for title in FILMS)
+
+
+def test_single_review_cannot_turn_into_the_whole_countdown():
+    writer = Writer()
+    writer.ask = Mock(return_value={"paragraphs": ["We're counting down the top five. Project Hail Mary is a space adventure. Next up, Toy Story 5 is family fun. Michael has music, then Spider-Man: Brand New Day brings action. Finally, The Odyssey is number one."]})
+    facts = {"title":"Project Hail Mary", "rank":5, "overview":"A teacher wakes up aboard a spaceship with no memory of how he got there.",
+             "other_titles":FILMS[:-1]}
+    result = writer.narration("Top 5 Movies of 2026", "Keep it relaxed", "rank 5: Project Hail Mary", facts, 180)
+    text = " ".join(result)
+    assert writer.ask.call_count == 3
+    assert "Project Hail Mary" in text and "teacher" in text
+    assert all(title not in text for title in FILMS[:-1])
+    assert all(len(paragraph.split()) <= 65 for paragraph in result)
+    prompt = writer.ask.call_args_list[0].args[0]
+    assert "SINGLE REVIEW" in prompt and all(title not in prompt for title in FILMS[:-1])
+
+
+def test_one_movie_comparison_and_repeated_same_rank_remain_usable():
+    writer = Writer()
+    text = "Number five is Project Hail Mary. A teacher wakes up on a spaceship, far from home. This setup might appeal to fans of The Odyssey. At rank 5, the focus stays on this one adventure."
+    writer.ask = Mock(return_value={"paragraphs":[text]})
+    result = writer.narration("Top 5 Movies", "Relaxed", "rank 5: Project Hail Mary",
+                              {"title":"Project Hail Mary", "rank":5, "other_titles":FILMS[:-1]}, 40)
+    assert result == [text]
+    assert writer.ask.call_count == 1

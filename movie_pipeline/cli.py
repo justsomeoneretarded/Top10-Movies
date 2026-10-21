@@ -31,6 +31,9 @@ from .video_settings import (
     require_disk,
 )
 
+COLD_OPEN_SECONDS = 5.0
+REVIEW_PREVIEW_SECONDS = 3.5
+
 
 def chapter_time(seconds):
     seconds = int(seconds)
@@ -82,16 +85,17 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
 
 def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .availability import enrich_availability
+    from .cta import prepare_cta, render_cta
     from .editorial import place_intro_meme, subscription_boundary
     from .footage import download
     from .memes import prepare_intro_meme
-    from .packaging import build_description, midroll_text, refresh_availability
+    from .packaging import build_description, refresh_availability
+    from .previews import choose_preview, cold_open_plan, outro_recap_plan
     from .render import (
         embed_chapters,
         finish,
         label_image,
         speech_video,
-        subscribe_image,
         thumbnails,
         trailer_video,
     )
@@ -104,7 +108,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         choose_from_sources,
         primary_fallback_plan,
     )
-    from .voice import Narrator, captions, spoken_coverage
+    from .voice import Narrator, captions, speech_verified
 
     if not title.strip() or len(title) > 200 or not brief.strip() or len(brief) > 4000:
         raise PipelineError("Provide a title (max 200 characters) and creative brief (max 4,000 characters).")
@@ -117,13 +121,13 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     os.environ["VIDEO_RESOLUTION"] = str(ceiling)
     spec = workflow_duration(title, len(items))
     max_beat = trailer_budget(spec, len(items))
-    expected_breaks = min(3, max_beat) * len(items)
+    expected_breaks = min(3, max_beat) * len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
     print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
     narrator = selected_narrator(brief)
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
-    run_key = key("pipeline-v7-workflow-selections", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v8-cinematic-boundaries", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -138,7 +142,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     films = enrich_availability(films, research, work / "availability")
     spec = workflow_duration(title, len(items), films)
     max_beat = trailer_budget(spec, len(items))
-    expected_breaks = min(3, max_beat)*len(items)
+    expected_breaks = min(3, max_beat)*len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
     print(f"Runtime mode: {'Auto' if spec.automatic else 'selected minutes'}; soft plan {spec.target/60:.1f} minutes.", flush=True)
     save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "content_type": content_type or "auto", "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
     trailers = []
@@ -239,7 +243,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     save_json(script_path, script)
 
     # Generate the brief CTA separately so its measured length can determine placement.
-    cta_text = midroll_text(title+brief+movies)
+    cta_plan = prepare_cta(title, brief, title+brief+movies, work / "memes")
+    cta_text = cta_plan["text"]
     speaker = Narrator(reference, work / "speech")
     cta_audio = speaker.speak(cta_text)
     speaker.close()
@@ -265,28 +270,40 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     pending = list(speech)
     for retry in range(3):
         bad = []
+        transcripts = {}
         for coordinates in pending:
             audio = speech[coordinates]
             index, paragraph = coordinates
             cache = audio.with_suffix(".captions.json")
-            cues = json.loads(cache.read_text()) if cache.exists() else captions(audio, recognizer)
-            if spoken_coverage(script["sections"][index]["paragraphs"][paragraph], cues) < 0.72:
-                audio.unlink(missing_ok=True)
-                cache.unlink(missing_ok=True)
+            # Repeated text shares a speech cache path. Verify that file once,
+            # and leave it present until every coordinate has been checked.
+            if audio not in transcripts:
+                transcripts[audio] = json.loads(cache.read_text()) if cache.exists() else captions(audio, recognizer)
+            cues = transcripts[audio]
+            if not speech_verified(script["sections"][index]["paragraphs"][paragraph], cues):
                 bad.append(coordinates)
             else:
                 save_json(cache, cues)
                 aligned[coordinates] = cues
         if not bad:
             break
+        for audio in {speech[coordinates] for coordinates in bad}:
+            audio.unlink(missing_ok=True)
+            audio.with_suffix(".captions.json").unlink(missing_ok=True)
         if retry == 2:
             raise PipelineError(f"Speech verification failed after automatic retries in {len(bad)} paragraphs.")
         print(f"Automatically regenerating {len(bad)} speech segments", flush=True)
         speaker = Narrator(reference, work / "speech")
-        for coordinates in bad:
-            i, p = coordinates
-            speech[coordinates] = speaker.speak(script["sections"][i]["paragraphs"][p], attempt_offset=(retry+1)*3)
-        speaker.close()
+        regenerated = {}
+        try:
+            for coordinates in bad:
+                audio = speech[coordinates]
+                i, p = coordinates
+                if audio not in regenerated:
+                    regenerated[audio] = speaker.speak(script["sections"][i]["paragraphs"][p], attempt_offset=(retry+1)*3)
+                speech[coordinates] = regenerated[audio]
+        finally:
+            speaker.close()
         pending = bad
     trailer_cues = []
     for trailer in trailers:
@@ -296,7 +313,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         trailer_cues.append(cues)
     for retry in range(3):
         cta_cues = captions(cta_audio, recognizer)
-        if spoken_coverage(cta_text, cta_cues) >= .72:
+        if speech_verified(cta_text, cta_cues):
             break
         if retry == 2:
             raise PipelineError("Short subscribe speech did not pass transcript verification after retries.")
@@ -307,7 +324,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     del recognizer
     gc.collect()
 
-    action = bool(re.search(r"\b(action|energetic|fast.paced|fight|intense)\b", title + " " + brief, re.IGNORECASE))
+    action = bool(re.search(r"\b(action|energetic|fast.paced|fight|intense)\b", title + " " + brief, re.IGNORECASE)) or sum("Action" in film.get("genres", []) for film in films) >= max(1, len(films)//2)
     selector = ShotSelector()
     for film, trailer, shots in zip(films, trailers, shot_sets):
         selector.index(trailer, shots)
@@ -325,9 +342,17 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     save_json(work / "quality-report.json", quality_report)
     beats = {i: choose_beat(trailer_cues[section["film"]], shot_sets[section["film"]], duration(trailers[section["film"]]), action, maximum=max_beat)
              for i, section in enumerate(script["sections"]) if section["kind"] == "film" and max_beat}
+    dialogue = {str(trailer): cues for trailer, cues in zip(trailers, trailer_cues)}
+    opening = cold_open_plan(selector, pools, shot_lookup, title+". "+brief, action,
+                             dialogue=dialogue, seconds=COLD_OPEN_SECONDS)
+    previews = {i: choose_preview(selector, pools[section["film"]], shot_lookup,
+                 films[section["film"]].get("overview", "")+". "+title+". "+brief,
+                 REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
+                for i, section in enumerate(script["sections"]) if section["kind"] == "film"}
     lengths = {coordinates: duration(audio) for coordinates, audio in speech.items()}
     boundary, fraction = subscription_boundary(script["sections"], lengths,
-        {i: beat["end"]-beat["start"] for i, beat in beats.items() if beat}, duration(cta_audio))
+        {i: preview["duration"] + (beats[i]["end"]-beats[i]["start"] if beats.get(i) else 0)
+         for i, preview in previews.items()}, duration(cta_audio), opening_seconds=COLD_OPEN_SECONDS)
     print(f"Like/subscribe break before a review at {fraction:.0%} of the measured video.", flush=True)
     shifted = {}
     shifted_cues = {}
@@ -339,6 +364,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     speech, aligned = shifted, shifted_cues
     script["sections"].insert(boundary, {"kind": "subscribe", "film": script["sections"][boundary]["film"], "paragraphs": [cta_text]})
     beats = {i+(i >= boundary): beat for i, beat in beats.items()}
+    previews = {i+(i >= boundary): preview for i, preview in previews.items()}
     require_disk(work, spec.target)
     intro_text = " ".join(script["sections"][0]["paragraphs"])
     meme = prepare_intro_meme(intro_text, title+brief+movies, work / "memes")
@@ -348,7 +374,27 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     chapters = []
     timeline = []
     used_video_sources = set()
+    cta_rendered = {}
     offset = 0.0
+    for shot in opening:
+        film_index = shot["film_index"]
+        source = Path(shot["source"])
+        path = work / f"part-{len(parts):03}.mp4"
+        try:
+            trailer_video(source, shot["start"], shot["duration"], path, muted=shot["muted"])
+        except (PipelineError, OSError, RuntimeError, ValueError):
+            if source == trailers[film_index]:
+                raise
+            shot = {**choose_preview(selector, [trailers[film_index]], shot_lookup,
+                    title+". "+brief, shot["duration"], action, dialogue=dialogue), "film_index": film_index}
+            source = Path(shot["source"])
+            trailer_video(source, shot["start"], shot["duration"], path, muted=shot["muted"])
+        seconds = duration(path)
+        timeline.append({"start": offset, "duration": seconds, "type": "cold-open", "film": films[film_index]["title"],
+                         "source_start": shot["start"], "shots": [shot], "narration": False})
+        parts.append(path)
+        used_video_sources.add(str(source))
+        offset += seconds
     for section_index, section in enumerate(script["sections"]):
         film_index = section["film"]
         film = films[film_index]
@@ -356,47 +402,72 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         is_film = section["kind"] == "film"
         chapter = f"#{film_index+1} {film['title']} ({film['year']})" if is_film else section["kind"].title()
         if section["kind"] != "subscribe":
-            chapters.append({"start": offset, "title": chapter})
-        label = work / f"label-{section_index}.png"
-        if section["kind"] == "subscribe":
-            subscribe_image(label)
-        else:
-            label_image(label, film["title"] if is_film else title, film_index+1 if is_film else None, film["year"] if is_film else None)
+            chapters.append({"start": 0.0 if section["kind"] == "intro" else offset, "title": chapter})
+        if is_film:
+            label = work / f"label-{section_index}.png"
+            label_image(label, film["title"], film_index+1, film["year"])
+            preview = previews[section_index]
+            source = Path(preview["source"])
+            path = work / f"part-{len(parts):03}.mp4"
+            try:
+                trailer_video(source, preview["start"], preview["duration"], path,
+                              label=label, label_seconds=preview["duration"], muted=preview["muted"])
+            except (PipelineError, OSError, RuntimeError, ValueError):
+                if source == trailer:
+                    raise
+                preview = choose_preview(selector, [trailer], shot_lookup, title+". "+brief,
+                                         REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
+                source = Path(preview["source"])
+                trailer_video(source, preview["start"], preview["duration"], path,
+                              label=label, label_seconds=preview["duration"], muted=preview["muted"])
+            seconds = duration(path)
+            timeline.append({"start": offset, "duration": seconds, "type": "review-preview", "film": film["title"],
+                             "source_start": preview["start"], "shots": [preview], "narration": False})
+            parts.append(path)
+            used_video_sources.add(str(source))
+            offset += seconds
         montage = None
         if section["kind"] == "intro":
             intro_sources = best_intro_sources(selector, pools, shot_lookup, title+". "+brief, action)
             montage = intro_montage(selector, intro_sources, [shot_lookup[str(path)] for path in intro_sources],
                                     [duration(speech[(section_index, p)]) for p in range(len(section["paragraphs"]))],
                                     title + ". " + brief, action)
+        elif section["kind"] == "outro":
+            montage = outro_recap_plan(selector, pools, shot_lookup,
+                [duration(speech[(section_index, p)]) for p in range(len(section["paragraphs"]))],
+                " ".join(section["paragraphs"]), action)
         midpoint = max(1, len(section["paragraphs"]) // 2)
         beat = beats.get(section_index)
         for paragraph_index, text in enumerate(section["paragraphs"]):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
             chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), action)
-            if section["kind"] == "subscribe":
-                held = max(chosen, key=lambda cut: cut["duration"])
-                chosen = [{**held, "start": held["start"]+.2, "duration": duration(audio), "freeze": 0, "still": True}]
-            if meme and montage is not None and not meme_used:
+            if meme and section["kind"] == "intro" and montage is not None and not meme_used:
                 chosen, meme_used = place_intro_meme(chosen, text, aligned[(section_index, paragraph_index)], meme)
             path = work / f"part-{len(parts):03}.mp4"
-            try:
-                speech_video(trailer, audio, chosen, path, label if paragraph_index == 0 else None, work / f"render-{len(parts):03}", label_seconds=duration(audio) if section["kind"] == "subscribe" else 3.5)
-            except (PipelineError, OSError, RuntimeError, ValueError):
-                optional = {str(extra) for pool in pools for extra in pool[1:]}
-                failed = {cut.get("source") for cut in chosen if cut.get("source") in optional}
-                if not failed:
-                    raise
-                print("Optional trailer could not render; retrying this paragraph with primary footage.", flush=True)
-                chosen = primary_fallback_plan(selector, chosen, trailers, shot_sets, text, action, film_index)
-                for pool in pools:
-                    pool[:] = [source for source in pool if str(source) not in failed]
-                speech_video(trailer, audio, chosen, path, label if paragraph_index == 0 else None, work / f"render-{len(parts):03}", label_seconds=duration(audio) if section["kind"] == "subscribe" else 3.5)
+            if section["kind"] == "subscribe":
+                held = max(chosen, key=lambda cut: cut["duration"])
+                cta_rendered = render_cta(cta_plan, audio, path, work / f"render-{len(parts):03}", background=held)
+                chosen = [cta_rendered]
+            else:
+                try:
+                    speech_video(trailer, audio, chosen, path, None, work / f"render-{len(parts):03}")
+                except (PipelineError, OSError, RuntimeError, ValueError):
+                    optional = {str(extra) for pool in pools for extra in pool[1:]}
+                    failed = {cut.get("source") for cut in chosen if cut.get("source") in optional}
+                    if not failed:
+                        raise
+                    print("Optional trailer could not render; retrying this paragraph with primary footage.", flush=True)
+                    chosen = primary_fallback_plan(selector, chosen, trailers, shot_sets, text, action, film_index)
+                    for pool in pools:
+                        pool[:] = [source for source in pool if str(source) not in failed]
+                    speech_video(trailer, audio, chosen, path, None, work / f"render-{len(parts):03}")
             used_video_sources.update(str(cut.get("source", trailer)) for cut in chosen if not cut.get("image"))
             seconds = duration(path)
             for cue in aligned[(section_index, paragraph_index)]:
                 all_cues.append({"start": offset + cue["start"], "end": offset + min(cue["end"], seconds), "text": cue["text"]})
-            timeline.append({"start": offset, "duration": seconds, "type": "narration", "film": "Intro montage" if montage is not None else film["title"], "films": sorted({films[cut.get("film_index", film_index)]["title"] for cut in chosen}), "text": text, "shots": chosen})
+            timeline.append({"start": offset, "duration": seconds, "type": "subscribe" if section["kind"] == "subscribe" else "narration",
+                             "section_kind": section["kind"], "film": section["kind"].title()+" montage" if montage is not None else film["title"], "films": sorted({films[cut.get("film_index", film_index)]["title"] for cut in chosen}), "text": text, "shots": chosen})
             parts.append(path)
             offset += seconds
             if beat and paragraph_index + 1 == midpoint:
@@ -438,6 +509,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     credits = "Film metadata: TMDB — https://www.themoviedb.org/\nWatch listings: JustWatch via TMDB — https://www.justwatch.com/us\n"
     if meme_used:
         credits += str(meme.get("attribution", "Intro meme"))+" — "+str(meme.get("source", ""))+"\n"
+    if cta_rendered.get("credit_source"):
+        credits += str(cta_rendered.get("attribution", "Subscribe reaction"))+" — "+str(cta_rendered["credit_source"])+"\n"
     (output / "sources-and-credits.txt").write_text(credits)
     thumbnails(trailers, shot_sets, package["thumbnail_texts"], output,
                concepts=package.get("thumbnail_concepts"), title=title, brief=brief,

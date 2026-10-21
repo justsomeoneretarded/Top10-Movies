@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .core import PipelineError, duration, ffmpeg
+from .core import PipelineError, duration, ffmpeg, probe
 from .timing import DurationSpec, final_tempo
 from .video_settings import export_size
 
@@ -39,37 +39,70 @@ def wrapped(draw, text, face, width):
 
 
 def label_image(path: Path, title: str, rank: int | None, year: int | None):
+    """A restrained, content-only lower third; intro/outro footage needs no banner."""
     image = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    if rank is None:
+        image.save(path)
+        return
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((48, 520, 1190, 680), radius=18, fill=(8, 12, 22, 225))
-    draw.rounded_rectangle((48, 520, 61, 680), radius=5, fill=(255, 190, 55, 255))
-    prefix = f"#{rank}  " if rank is not None else ""
-    label = prefix + title
-    size = 43
-    while size > 24 and draw.textbbox((0, 0), label, font=font(size))[2] > 1060:
+    left, top, right, bottom = 56, 566, 1224, 666
+    title_left, title_width = 184, right-184-28
+    size = 34
+    while size > 24 and draw.textlength(title, font=font(size)) > title_width:
         size -= 1
-    lines = wrapped(draw, label, font(size), 1050)
-    draw.text((85, 543), lines[0], font=font(size), fill="white")
-    draw.text((87, 609), str(year) if year else "THE COUNTDOWN", font=font(24), fill=(255, 190, 55))
+    lines = wrapped(draw, title, font(size), title_width)
+    # Long official titles remain complete rather than being silently cut at line one.
+    if len(lines) > 1:
+        top = 542
+        while size > 18 and len(wrapped(draw, title, font(size), title_width)) > 2:
+            size -= 1
+        lines = wrapped(draw, title, font(size), title_width)
+    content_width = max((draw.textlength(line, font=font(size)) for line in lines), default=0)
+    right = min(right, max(650, round(title_left+content_width+30)))
+    # Compact glass-dark backplate, hairline border, no badges/glows/extra copy.
+    draw.rounded_rectangle((left, top, right, bottom), radius=9,
+                           fill=(10, 12, 16, 220), outline=(255, 255, 255, 42), width=1)
+    draw.line((158, top+21, 158, bottom-21), fill=(255, 255, 255, 65), width=1)
+    draw.text((84, (top+bottom)//2), f"{rank:02d}", font=font(42), anchor="lm", fill=(245, 246, 249))
+    title_y = top+16
+    for line in lines:
+        draw.text((title_left, title_y), line, font=font(size), fill=(248, 249, 251))
+        title_y += size+4
+    if year is not None:
+        draw.text((title_left, bottom-28), str(year), font=font(18), fill=(174, 181, 192))
     image.save(path)
 
 
+def _label_graph(input_index: int, seconds: float, width: int, height: int) -> str:
+    """One consistent eased slide/fade animation, measured on the whole clip clock."""
+    end = max(.1, seconds)
+    delay = min(.12, end*.10)
+    enter = min(.42, end*.30)
+    leave = min(.34, end*.25)
+    out_start = max(delay+enter, end-leave)
+    # PNG has a full transparent canvas, so moving by one frame width fully hides it.
+    x = (f"if(lt(t,{delay}),-{width},"
+         f"if(lt(t,{delay+enter}),-{width}*pow(1-(t-{delay})/{enter},3),"
+         f"if(lt(t,{out_start}),0,-{width}*pow((t-{out_start})/{leave},3))))")
+    return (
+        f"[{input_index}:v]scale={width}:{height}:flags=lanczos,format=rgba,"
+        f"fade=t=in:st={delay}:d={enter}:alpha=1,"
+        f"fade=t=out:st={out_start}:d={leave}:alpha=1[rank];"
+        f"[v][rank]overlay=x='{x}':y=0:enable='between(t,{delay},{end})':eof_action=pass[out]"
+    )
+
+
 def subscribe_image(path: Path):
-    """A readable, steady CTA with thumb, subscribe button, and bell."""
+    """A quiet footer over reaction footage, leaving the meme as the focal point."""
     image = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((120, 200, 1160, 495), radius=30, fill=(8,12,22,235))
-    draw.text((185, 240), "LIKE  +  SUBSCRIBE", font=font(58), fill="white")
-    draw.text((185, 340), "Your next good movie starts here.", font=font(29), fill="#ffbe37")
-    draw.rounded_rectangle((185, 402, 620, 460), radius=16, fill="#e50914")
-    draw.text((210, 411), "SUBSCRIBE", font=font(31), fill="white")
-    # Bell outline and ringing arcs, drawn locally without icon-font dependencies.
-    draw.arc((960, 288, 1035, 365), 180, 360, fill="#ffbe37", width=7)
-    draw.line((960,326,954,370,1041,370,1035,326), fill="#ffbe37", width=7)
-    draw.ellipse((989, 376, 1007, 394), fill="#ffbe37")
-    draw.arc((935, 272, 1057, 388), 190, 250, fill="white", width=5)
-    draw.arc((935, 272, 1057, 388), 290, 350, fill="white", width=5)
-    draw.polygon([(1050,428),(1065,428),(1076,400),(1086,402),(1086,419),(1116,419),(1110,452),(1074,452),(1065,446),(1050,446)], fill="white")
+    draw.rounded_rectangle((365, 608, 915, 672), radius=9,
+                           fill=(10, 12, 16, 225), outline=(255, 255, 255, 45), width=1)
+    draw.text((398, 626), "LIKE  +  SUBSCRIBE", font=font(27), fill=(248, 249, 251))
+    # Small bell line icon rather than a full-screen faux interface.
+    draw.arc((857, 623, 881, 649), 180, 360, fill=(240, 242, 247), width=2)
+    draw.line((857,636,854,652,884,652,881,636), fill=(240, 242, 247), width=2)
+    draw.ellipse((866, 655, 872, 661), fill=(240, 242, 247))
     image.save(path)
 
 
@@ -108,18 +141,22 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
         filters = f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1,fps={FPS}"
         hold_frames = min(max(0, round(shot.get("freeze", 0)*FPS)), max(0, frames-1))
         if shot.get("still"):
-            filters += f",trim=end_frame=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={(frames+1)/FPS}"
+            filters += f",trim=end_frame=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop={frames+1}"
         elif hold_frames:
-            filters += f",trim=end_frame={frames-hold_frames},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={(hold_frames+1)/FPS}"
-        inputs = (["-loop", "1", "-framerate", FPS, "-i", shot["source"]] if shot.get("image") else
-                  ["-ss", shot["start"], "-i", shot.get("source", source)])
-        if label and index == 0:
-            inputs += ["-i", label]
-            filters = f"[0:v]{filters}[v];[1:v]scale={width}:{height}[label];[v][label]overlay=0:0:enable='lt(t,{label_seconds})'[out]"
-            options = ["-filter_complex", filters, "-map", "[out]"]
+            filters += f",trim=end_frame={frames-hold_frames},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop={hold_frames+1}"
         else:
-            options = ["-vf", filters]
-        ffmpeg(*inputs, *options, "-frames:v", frames, "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-threads", "2", out)
+            # A selected window can approach the source's last decoded frame. Hold
+            # that last picture to cover narration instead of shortening the export.
+            filters += f",setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop={frames+1}"
+        if shot.get("animation"):
+            inputs = ["-stream_loop", "-1", "-i", shot["source"]]
+        elif shot.get("image"):
+            inputs = ["-loop", "1", "-framerate", FPS, "-i", shot["source"]]
+        else:
+            inputs = ["-ss", shot["start"], "-i", shot.get("source", source)]
+        ffmpeg(*inputs, "-vf", filters+f",setpts=N/({FPS}*TB)", "-frames:v", frames, "-r", FPS,
+               "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+               "-pix_fmt", "yuv420p", "-threads", "2", out)
         clips.append(out)
         remaining -= frames
         if remaining <= 0:
@@ -131,21 +168,52 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
     silent = work / "silent.mp4"
     ffmpeg("-f", "concat", "-safe", "0", "-i", listing, "-c", "copy", silent)
     seconds = total_frames / FPS
-    ffmpeg("-i", silent, "-i", audio, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", "apad", "-t", seconds, "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", output)
+    inputs = ["-i", silent, "-i", audio]
+    if label:
+        inputs += ["-loop", "1", "-framerate", FPS, "-i", label]
+        graph = f"[0:v]setpts=PTS-STARTPTS[v];{_label_graph(2, min(label_seconds, seconds), width, height)}"
+        video_options = ["-filter_complex", graph, "-map", "[out]", "-c:v", "libx264",
+                         "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS, "-threads", "2"]
+    else:
+        video_options = ["-map", "0:v", "-c:v", "copy"]
+    # Lossless intermediate audio avoids an independent AAC encoder delay at every
+    # paragraph/preview boundary. Only the finished upload is encoded to AAC.
+    ffmpeg(*inputs, *video_options, "-map", "1:a", "-af", "asetpts=PTS-STARTPTS,apad",
+           "-t", seconds, "-ar", "48000", "-ac", "2", "-c:a", "alac", output)
     for clip in clips:
         clip.unlink(missing_ok=True)
     silent.unlink(missing_ok=True)
 
 
-def trailer_video(source: Path, start: float, seconds: float, output: Path):
+def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
+                  label: Path | None = None, label_seconds: float = 3.5, muted: bool = False):
+    """A narration-free preview, optionally carrying the animated rank introduction."""
     frames = max(FPS, round(seconds * FPS))
     actual = frames / FPS
     width, height = export_size()
-    ffmpeg("-ss", start, "-i", source, "-t", actual,
-           "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1,fps={FPS}",
-           "-af", f"afade=t=in:d=0.08,afade=t=out:st={max(0,actual-0.15)}:d=0.15,loudnorm=I=-18:TP=-2:LRA=9,apad",
-           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-threads", "2",
-           "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", output)
+    inputs = ["-ss", start, "-i", source]
+    has_audio = not muted and any(s.get("codec_type") == "audio" for s in probe(source).get("streams", []))
+    audio_index = 0
+    label_index = 1
+    if not has_audio:
+        inputs += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+        audio_index = 1
+        label_index = 2
+    graph = (
+        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop={width}:{height},setsar=1,setpts=PTS-STARTPTS,fps={FPS},"
+        f"tpad=stop_mode=clone:stop={frames},setpts=N/({FPS}*TB)[v];"
+        f"[{audio_index}:a]asetpts=PTS-STARTPTS,afade=t=in:d=0.08,"
+        f"afade=t=out:st={max(0,actual-0.15)}:d=0.15,loudnorm=I=-18:TP=-2:LRA=9,apad[a]"
+    )
+    video = "[v]"
+    if label:
+        inputs += ["-loop", "1", "-framerate", FPS, "-i", label]
+        graph += ";"+_label_graph(label_index, min(label_seconds, actual), width, height)
+        video = "[out]"
+    ffmpeg(*inputs, "-filter_complex", graph, "-map", video, "-map", "[a]", "-t", actual,
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS, "-threads", "2",
+           "-ar", "48000", "-ac", "2", "-c:a", "alac", output)
 
 
 def music_bed(path: Path, seconds: float, action: bool):
@@ -183,7 +251,8 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
     music_bed(music, final_duration + 1, action)
     graph = (
         f"[0:v]setpts=(PTS-STARTPTS)/{speed},fps={FPS},tpad=stop_mode=clone:stop_duration={ending_hold},fade=t=out:st={final_duration-1.2}:d=1.2[v];"
-        f"[0:a]atempo={speed},aresample=48000,apad=pad_dur={ending_hold},asplit=2[voice][control];"
+        f"[0:a]asetpts=PTS-STARTPTS,aresample=48000,atempo={speed},"
+        f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
         "[1:a]volume=0.13[bed];"
         "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
         f"[voice][duck]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
