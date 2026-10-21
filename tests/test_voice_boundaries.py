@@ -8,7 +8,13 @@ import numpy as np
 import pytest
 
 from movie_pipeline.core import ffmpeg, key
-from movie_pipeline.voice import Narrator, speech_verified, spoken_coverage
+from movie_pipeline.voice import (
+    Narrator,
+    captions,
+    speech_check,
+    speech_verified,
+    spoken_coverage,
+)
 
 PARAGRAPH = (
     "Stop scrolling because your weekend deserves better movies. "
@@ -74,6 +80,90 @@ def test_legacy_overall_coverage_api_keeps_float_result():
     assert spoken_coverage("One two three four", cues("One two three")) == .75
 
 
+@pytest.mark.parametrize("expected,heard", [
+    ("Like and subscribe. I'll handle both sides of the high five.",
+     "Like and subscribe. I will handle both sides of the highfive."),
+    ("Like and subscribe. Virtual high five. Zero awkward eye contact.",
+     "Like and subscribe. Virtual high-five. Zero awkward eyecontact."),
+    ("Keep your notebook ready because these five recommendations deserve a closer look.",
+     "Keep your note book ready because these 5 recommendations deserve a closer look."),
+])
+def test_bounded_word_join_and_split_equivalents_preserve_complete_speech(expected, heard):
+    check = speech_check(expected, cues(heard))
+    assert check['accepted']
+    assert check['coverage'] == 1
+    assert check['opening']['accepted'] and check['ending']['accepted']
+
+
+@pytest.mark.parametrize("expected,heard", [
+    ("One. Two. Three.", "Six."),
+    ("One, two, three.", "Six."),
+    ("One two three.", "Six."),
+    ("Five. Zero distractions.", "Five distractions."),
+])
+def test_independent_number_phrases_are_never_added_together(expected, heard):
+    assert not speech_verified(expected, cues(heard))
+
+
+@pytest.mark.parametrize("expected,heard", [
+    ("One, two, three.", "One two three."),
+    ("There are 1,000 great films and twenty-five recommendations worth discussing.",
+     "There are one thousand great films and 25 recommendations worth discussing."),
+])
+def test_real_number_phrases_and_number_lists_still_match(expected, heard):
+    assert speech_verified(expected, cues(heard))
+
+
+def test_full_sentence_repeated_three_times_is_not_accepted():
+    expected = "Like and subscribe. Protect your next movie night from terrible recommendations."
+    check = speech_check(expected, cues(" ".join([expected]*3)))
+    assert check['coverage'] == 1
+    assert not check['accepted']
+    assert check['reason'] == 'extra_or_repeated_speech'
+
+
+def test_one_short_asr_correction_is_tolerated():
+    expected = "Like and subscribe. Your next movie night deserves better recommendations."
+    heard = "Like and subscribe. Your next, your next movie night deserves better recommendations."
+    assert speech_verified(expected, cues(heard))
+
+
+@pytest.mark.parametrize("move_clause", [False, True])
+def test_missing_or_reordered_middle_clause_cannot_hide_inside_good_overall_coverage(move_clause):
+    beginning = "Keep this original opening because your next movie night deserves much better recommendations than another boring sequel."
+    middle = "The middle clause must remain exactly here."
+    ending = "Finish with these closing words because they complete the entire thought for our audience."
+    expected = f"{beginning} {middle} {ending}"
+    heard = f"{beginning} {ending}" + (f" {middle}" if move_clause else "")
+    check = speech_check(expected, cues(heard))
+    assert check['coverage'] >= .72
+    assert not check['accepted']
+    assert check['reason'] == 'missing_or_reordered_phrase'
+
+
+def test_speech_check_reports_boundary_evidence_and_original_transcript():
+    heard = " ".join(PARAGRAPH.split()[6:])
+    check = speech_check(PARAGRAPH, cues(heard))
+    assert not check['accepted']
+    assert check['reason'] == 'opening'
+    assert check['heard'] == heard
+    assert check['coverage'] >= .72
+    assert check['opening']['unmatched_tokens'] == 6
+    assert check['ending']['accepted']
+
+
+@pytest.mark.parametrize("options,expected", [
+    ({}, {'vad_filter': True, 'beam_size': 3, 'condition_on_previous_text': False}),
+    ({'vad_filter': False, 'beam_size': 5}, {'vad_filter': False, 'beam_size': 5, 'condition_on_previous_text': False}),
+])
+def test_captions_support_independent_decode_modes_without_expected_text_prompts(options, expected):
+    word = SimpleNamespace(word=' Complete.', start=.16, end=1.2)
+    segment = SimpleNamespace(words=[word], text='Complete.', start=.16, end=1.2)
+    model = SimpleNamespace(transcribe=Mock(return_value=([segment], None)))
+    assert captions(Path('speech.wav'), model, **options) == [{'start': .16, 'end': 1.2, 'text': 'Complete.'}]
+    model.transcribe.assert_called_once_with('speech.wav', language='en', word_timestamps=True, **expected)
+
+
 class Wave:
     def __init__(self, samples):
         self.samples = samples
@@ -127,6 +217,25 @@ def test_new_voice_cache_does_not_reuse_unpadded_v1_audio(monkeypatch, tmp_path)
     assert speaker.model.generate.call_count == 1
     assert speaker.speak(text) == output
     assert speaker.model.generate.call_count == 1
+
+
+def test_forced_retry_generates_distinct_audio_without_overwriting_verified_cache(monkeypatch, tmp_path):
+    speaker = fake_speaker(monkeypatch, tmp_path, np.full(24000, .1))
+    text = 'Keep this verified speech unchanged while another use retries.'
+    baseline = speaker.speak(text)
+    original = baseline.read_bytes()
+    baseline.with_suffix('.captions.json').write_text('[{"text":"verified"}]')
+    first = speaker.speak(text, attempt_offset=3, force=True)
+    second = speaker.speak(text, attempt_offset=3, force=True)
+    third = speaker.speak(text, attempt_offset=6, force=True)
+    assert len({baseline, first, second, third}) == 4
+    assert baseline.read_bytes() == original
+    assert baseline.with_suffix('.captions.json').read_text() == '[{"text":"verified"}]'
+    assert speaker.model.generate.call_count == 4
+    seeds = [call.args[0] for call in __import__('sys').modules['torch'].manual_seed.call_args_list]
+    assert len(set(seeds)) == 4
+    assert speaker.speak(text) == baseline
+    assert speaker.model.generate.call_count == 4
 
 
 def test_padding_preserves_first_and_last_audio_markers_through_aac(monkeypatch, tmp_path):

@@ -53,6 +53,50 @@ def test_missing_assets_use_a_film_background_without_failing(monkeypatch, tmp_p
     assert "like and subscribe" in plan["text"].casefold()
 
 
+@pytest.mark.parametrize("title", ["Action movies", "Science fiction movies", "Horror movies"])
+def test_cta_variants_keep_the_original_first_and_every_reaction_field(tmp_path, title):
+    plan = cta.prepare_cta(title, "", "seed", tmp_path)
+    plan["narrator"] = "warguy"
+    before = dict(plan)
+    variants = cta.cta_variants(plan)
+    assert variants == cta.cta_variants(plan)
+    assert variants[0] == before
+    assert plan == before
+    assert 2 <= len(variants) <= 3
+    assert len({item["text"] for item in variants}) == len(variants)
+    reaction = next(item for item in cta.REACTIONS if item["theme"] == plan["theme"])
+    assert [item["text"] for item in variants[1:]] == [
+        text for text in reaction["jokes"] if text != plan["text"]
+    ][:2]
+    for variant in variants:
+        assert {name: value for name, value in variant.items() if name != "text"} == {
+            name: value for name, value in before.items() if name != "text"
+        }
+        assert len(variant["text"].split()) <= 16
+        assert "like" in variant["text"].casefold() and "subscribe" in variant["text"].casefold()
+
+
+def test_film_background_cta_variants_stay_about_movie_night(monkeypatch, tmp_path):
+    monkeypatch.setattr(cta, "ASSET_ROOT", tmp_path / "unavailable")
+    plan = cta.prepare_cta("Movies", "", "seed", tmp_path / "work")
+    variants = cta.cta_variants(plan)
+    assert variants[0] == plan
+    assert len(variants) == 3
+    assert len({item["text"] for item in variants}) == 3
+    for variant in variants:
+        assert variant["path"] is None
+        assert variant["theme"] == "movie-night"
+        assert "movie night" in variant["text"].casefold()
+        assert "cat" not in variant["text"].casefold() and "high five" not in variant["text"].casefold()
+        assert len(variant["text"].split()) <= 16
+
+
+def test_custom_reaction_does_not_get_an_unrelated_generic_joke():
+    plan = {"text": "Like and subscribe. Our mascot approves.", "theme": "channel-mascot",
+            "path": "/owned/mascot.gif", "narrator": "kit-laser"}
+    assert cta.cta_variants(plan) == [plan]
+
+
 def test_optional_decode_failure_uses_the_selected_movie_and_exact_time(monkeypatch, tmp_path):
     source = tmp_path / "trailer.mp4"
     source.touch()

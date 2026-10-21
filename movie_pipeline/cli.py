@@ -85,7 +85,7 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
 
 def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .availability import enrich_availability
-    from .cta import prepare_cta, render_cta
+    from .cta import cta_variants, prepare_cta, render_cta
     from .editorial import place_intro_meme, subscription_boundary
     from .footage import download
     from .memes import prepare_intro_meme
@@ -108,7 +108,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         choose_from_sources,
         primary_fallback_plan,
     )
-    from .voice import Narrator, captions, speech_verified
+    from .speech_recovery import SpeechRecovery, SpeechRecoveryError
+    from .voice import Narrator, captions
 
     if not title.strip() or len(title) > 200 or not brief.strip() or len(brief) > 4000:
         raise PipelineError("Provide a title (max 200 characters) and creative brief (max 4,000 characters).")
@@ -203,6 +204,34 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     save_json(script_path, script)
     writer.unload()
 
+    # Check the short intermission before spending an hour on full narration.
+    # The same verifier then covers every hook, review, availability line and outro.
+    from faster_whisper import WhisperModel
+    recognizer = WhisperModel("base.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4))
+    recovery = SpeechRecovery(recognizer, lambda: Narrator(reference, work / "speech"),
+        work / "speech-checks", fallback_factory=lambda: WhisperModel(
+            "small.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4),
+            download_root=os.getenv("SPEECH_VERIFY_MODEL_DIR") or None))
+    cta_plan = prepare_cta(title, brief, title+brief+movies, work / "memes")
+    cta_error = None
+    try:
+        for candidate in cta_variants(cta_plan):
+            try:
+                cta_audio, cta_cues = recovery.recover(candidate["text"], label="subscribe break",
+                    max_seconds=8, allow_split=False)
+            except SpeechRecoveryError as exc:
+                cta_error = exc
+                print("Trying another short joke paired with the same reaction and narrator.", flush=True)
+                continue
+            cta_plan = candidate
+            cta_text = candidate["text"]
+            break
+        else:
+            raise SpeechRecoveryError(f"No complete short subscribe take could be verified. {cta_error}")
+    finally:
+        recovery.release_voice()
+    print("Subscribe speech verified before full narration generation.", flush=True)
+
     print(f"Narration: {narrator} / {os.getenv('TTS_MODEL', 'turbo')} on CPU", flush=True)
     word_scale = 1.0
     best_draft = None
@@ -214,10 +243,18 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 for section_index, section in enumerate(script["sections"]):
                     for paragraph_index, text in enumerate(section["paragraphs"]):
                         print(f"Narrating section {section_index+1}, paragraph {paragraph_index+1}", flush=True)
-                        speech[(section_index, paragraph_index)] = speaker.speak(text)
+                        try:
+                            speech[(section_index, paragraph_index)] = speaker.speak(text)
+                        except (RuntimeError, OSError, ValueError):
+                            # Defer a bad take to the same bounded recovery used
+                            # for missing words; never substitute silence or text.
+                            speech[(section_index, paragraph_index)] = None
+                            print("Initial voice take unavailable; queued for verified same-voice recovery.", flush=True)
             finally:
                 speaker.close()
-            spoken_seconds = sum(duration(path) for path in speech.values())
+            spoken_seconds = sum(duration(path) if path is not None else
+                len(script["sections"][i]["paragraphs"][p].split())*60/145
+                for (i, p), path in speech.items())
         except Exception:
             if best_draft is None:
                 raise
@@ -229,7 +266,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         distance = abs(estimated-spec.target)+(0 if comfortable else spec.target)
         if best_draft is None or distance < best_draft[0]:
             best_draft = (distance, script, speech)
-        if comfortable or revision == 2:
+        if comfortable or revision == 2 or any(path is None for path in speech.values()):
             break
         print(f"Refining an unusually {'long' if estimated > spec.target else 'short'} draft; measured {estimated/60:.1f} minutes.", flush=True)
         word_scale *= max(.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
@@ -242,85 +279,29 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     _distance, script, speech = best_draft
     save_json(script_path, script)
 
-    # Generate the brief CTA separately so its measured length can determine placement.
-    cta_plan = prepare_cta(title, brief, title+brief+movies, work / "memes")
-    cta_text = cta_plan["text"]
-    speaker = Narrator(reference, work / "speech")
-    cta_audio = speaker.speak(cta_text)
-    speaker.close()
-    def shorten_cta(audio):
-        if duration(audio) <= 8:
-            return audio
-        adjusted = work / "subscribe-short.wav"
-        ratio = duration(audio)/8
-        tempos = []
-        while ratio > 2:
-            tempos.append("atempo=2")
-            ratio /= 2
-        tempos.append(f"atempo={ratio}")
-        ffmpeg("-i", audio, "-af", ",".join(tempos), adjusted)
-        return adjusted
-
-    cta_audio = shorten_cta(cta_audio)
-
-    print("Aligning speech and analysing trailer dialogue", flush=True)
-    from faster_whisper import WhisperModel
-    recognizer = WhisperModel("base.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4))
+    print("Verifying narration and analysing trailer dialogue", flush=True)
     aligned = {}
-    pending = list(speech)
-    for retry in range(3):
-        bad = []
-        transcripts = {}
-        for coordinates in pending:
-            audio = speech[coordinates]
-            index, paragraph = coordinates
-            cache = audio.with_suffix(".captions.json")
-            # Repeated text shares a speech cache path. Verify that file once,
-            # and leave it present until every coordinate has been checked.
-            if audio not in transcripts:
-                transcripts[audio] = json.loads(cache.read_text()) if cache.exists() else captions(audio, recognizer)
-            cues = transcripts[audio]
-            if not speech_verified(script["sections"][index]["paragraphs"][paragraph], cues):
-                bad.append(coordinates)
-            else:
-                save_json(cache, cues)
-                aligned[coordinates] = cues
-        if not bad:
-            break
-        for audio in {speech[coordinates] for coordinates in bad}:
-            audio.unlink(missing_ok=True)
-            audio.with_suffix(".captions.json").unlink(missing_ok=True)
-        if retry == 2:
-            raise PipelineError(f"Speech verification failed after automatic retries in {len(bad)} paragraphs.")
-        print(f"Automatically regenerating {len(bad)} speech segments", flush=True)
-        speaker = Narrator(reference, work / "speech")
-        regenerated = {}
-        try:
-            for coordinates in bad:
-                audio = speech[coordinates]
-                i, p = coordinates
-                if audio not in regenerated:
-                    regenerated[audio] = speaker.speak(script["sections"][i]["paragraphs"][p], attempt_offset=(retry+1)*3)
-                speech[coordinates] = regenerated[audio]
-        finally:
-            speaker.close()
-        pending = bad
+    grouped = {}
+    for coordinates, audio in speech.items():
+        i, p = coordinates
+        text = script["sections"][i]["paragraphs"][p]
+        grouped.setdefault((audio, text), []).append(coordinates)
+    try:
+        for (audio, text), coordinates in grouped.items():
+            i, p = coordinates[0]
+            label = f"{script['sections'][i]['kind']} section {i+1}, paragraph {p+1}"
+            verified, cues = recovery.recover(text, audio, label=label)
+            for coordinate in coordinates:
+                speech[coordinate] = verified
+                aligned[coordinate] = cues
+    finally:
+        recovery.close()
     trailer_cues = []
     for trailer in trailers:
         cache = trailer.with_suffix(".dialogue.json")
         cues = json.loads(cache.read_text()) if cache.exists() else captions(trailer, recognizer)
         save_json(cache, cues)
         trailer_cues.append(cues)
-    for retry in range(3):
-        cta_cues = captions(cta_audio, recognizer)
-        if speech_verified(cta_text, cta_cues):
-            break
-        if retry == 2:
-            raise PipelineError("Short subscribe speech did not pass transcript verification after retries.")
-        cta_audio.unlink(missing_ok=True)
-        speaker = Narrator(reference, work / "speech")
-        cta_audio = shorten_cta(speaker.speak(cta_text, attempt_offset=(retry+1)*3))
-        speaker.close()
     del recognizer
     gc.collect()
 

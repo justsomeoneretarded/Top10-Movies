@@ -49,3 +49,21 @@ def test_workflow_has_checked_4k_option_and_never_interpolates_inputs_in_shell()
     assert checkpoints["with"]["path"] == "work/jobs"
     assert checkpoints["with"]["key"] == "production-v2-${{ github.run_id }}-${{ github.run_attempt }}"
     assert data["permissions"]["contents"] == "read"
+
+
+def test_speech_diagnostics_are_failure_only_and_optional_models_are_separately_cached():
+    data = yaml.load(Path(".github/workflows/generate-video.yml").read_text(), Loader=yaml.BaseLoader)
+    steps = data["jobs"]["produce"]["steps"]
+    diagnostics = next(step for step in steps if step.get("name") == "Speech diagnostics if production fails")
+    assert diagnostics["if"] == "failure()"
+    assert diagnostics["with"]["retention-days"] == "2"
+    assert "speech-verification.json" in diagnostics["with"]["path"]
+    assert "last-unverified.wav" in diagnostics["with"]["path"]
+    assert "models" not in diagnostics["with"]["path"]
+    model_restore = next(step for step in steps if step.get("id") == "speech-verifier-cache")
+    assert model_restore["with"]["key"].startswith("models-cpu-")
+    assert model_restore["with"]["path"] == "work/speech-verifier-model"
+    model_save = next(step for step in steps if step.get("name") == "Save optional speech recognizer when downloaded")
+    assert "cache-hit != 'true'" in model_save["if"]
+    assert "config.json" in model_save["if"]
+    assert model_save["with"] == model_restore["with"]

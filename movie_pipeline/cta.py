@@ -139,6 +139,36 @@ def prepare_cta(title: str, brief: str, seed: str, work: Path) -> dict:
     }
 
 
+def cta_variants(plan: dict) -> list[dict]:
+    """Offer at most three matching lines while retaining the selected reaction.
+
+    Try the exact original plan first. Later choices change only its spoken text,
+    using the same reaction's existing jokes in a stable order. This gives speech
+    recovery a different short line without changing the image, caption, voice,
+    or credit. Unknown/custom reactions retain their original line alone.
+    """
+    reaction = next((item for item in REACTIONS if item["theme"] == plan.get("theme")), None)
+    if reaction is not None:
+        jokes = reaction["jokes"]
+    elif plan.get("theme") == "movie-night":
+        jokes = (
+            "Like and subscribe. Bad movie nights have claimed enough victims.",
+            "Like and subscribe. Your next movie night deserves a happy ending.",
+        )
+    else:
+        jokes = ()
+    choices = [dict(plan)]
+    seen = {plan["text"]}
+    for text in jokes:
+        if text in seen:
+            continue
+        choices.append({**plan, "text": text})
+        seen.add(text)
+        if len(choices) == 3:
+            break
+    return choices
+
+
 def _caption(path: Path, headline: str):
     """A small caption in the safe area, leaving the reaction itself in charge."""
     from .render import HEIGHT, WIDTH, font

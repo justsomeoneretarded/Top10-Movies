@@ -22,6 +22,7 @@ from movie_pipeline import (
     script,
     secondary_footage,
     shots,
+    speech_recovery,
     voice,
 )
 from movie_pipeline.core import PipelineError, key, save_json, write_srt
@@ -37,6 +38,10 @@ from movie_pipeline.video_settings import export_size
     (2,"true",2160,(3840,2160),"render-fails",None,None),
     (2,"true",2160,(3840,2160),"rewrite-fails",None,None),
     (2,"false",2160,(1920,1080),"shared-audio-retry","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"cta-vad-retry","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"cta-joke-fallback","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"intro-partial","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"initial-speaker-error","Movies","Warguy"),
 ])
 def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size, extra_mode, content_type, narrator):
     monkeypatch.chdir(tmp_path)
@@ -113,6 +118,10 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             self.cache = cache
 
         def speak(self, text, **kwargs):
+            records.setdefault('speech_events', []).append(('generate', text))
+            records.setdefault('speech_calls', []).append({'text': text, **kwargs})
+            if extra_mode == 'initial-speaker-error' and text == first and not kwargs.get('force'):
+                raise RuntimeError('Initial narration generation unavailable')
             if text in {first, second}:
                 seconds = 6
             elif text.startswith("Review number"):
@@ -121,7 +130,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 seconds = 3
                 if kwargs.get('attempt_offset'):
                     records['shared_regenerations'] = records.get('shared_regenerations', 0)+1
-            elif text in MIDROLLS or text == records.get('cta_text'):
+            elif text in MIDROLLS or text in records.get('cta_candidates', []):
                 seconds = 6
             else:
                 seconds = 20
@@ -145,16 +154,29 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert minimum_size == expected_size
         if extra_mode == 'raises':
             raise RuntimeError('Optional source unavailable')
-        if extra_mode in {'missing', 'rewrite-fails', 'shared-audio-retry'}:
+        if extra_mode in {'missing', 'rewrite-fails', 'shared-audio-retry', 'cta-vad-retry',
+                          'cta-joke-fallback', 'intro-partial', 'initial-speaker-error'}:
             return None
         path = make(root / f"movie-{film['id']}-extra.mp4", 150)
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/extra/{film['id']}"})
         return path
 
-    def captions(audio, recognizer):
+    def captions(audio, recognizer, **kwargs):
         if str(audio) in text_for_audio:
             assert Path(audio).exists(), 'Shared speech must remain present while its coordinates are verified'
             text = text_for_audio[str(audio)]
+            records.setdefault('speech_events', []).append(('recognize', text))
+            if text in records.get('cta_candidates', []):
+                records.setdefault('cta_transcriptions', []).append({'text': text, **kwargs})
+                if extra_mode == 'cta-vad-retry' and kwargs.get('vad_filter', True):
+                    return [{'start': 0, 'end': durations[str(audio)], 'text': 'An unrelated sentence.'}]
+                if extra_mode == 'cta-joke-fallback' and text == records['cta_candidates'][0]:
+                    return [{'start': 0, 'end': durations[str(audio)], 'text': 'Subscribe.'}]
+            if extra_mode == 'intro-partial' and text == first:
+                # The hypotheses together contain every word, but no complete
+                # hypothesis verifies the actual beginning and end of the take.
+                heard = ' '.join(text.split()[:-3] if kwargs.get('vad_filter', True) else text.split()[3:])
+                return [{'start': 0, 'end': durations[str(audio)], 'text': heard}]
             if extra_mode == 'shared-audio-retry' and text.startswith("It's listed"):
                 records['shared_transcriptions'] = records.get('shared_transcriptions', 0)+1
                 if not records.get('shared_regenerations'):
@@ -215,10 +237,18 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         records['cta_prepared'] = copy.deepcopy(plan)
         return plan
 
+    def cta_variants(plan):
+        plans = [plan]
+        if extra_mode == 'cta-joke-fallback':
+            plans.append({**plan, 'text': 'Like and subscribe. Your next movie night deserves a happy ending.'})
+        records['cta_candidates'] = [candidate['text'] for candidate in plans]
+        return plans
+
     def render_cta(plan, audio, target, work, background=None):
         assert plan['animated'] is True
-        assert plan == records['cta_prepared']
+        assert plan == {**records['cta_prepared'], 'text': plan['text']}
         assert text_for_audio[str(audio)] == plan['text']
+        records['cta_text'] = plan['text']
         records['cta_render'] = {'plan': copy.deepcopy(plan), 'target': str(target), 'background': background}
         render_sizes.append(export_size())
         make(target, durations[str(audio)])
@@ -256,6 +286,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(cli, 'inspect_sources', lambda paths: [{"file": p.name, "width": round((source_height if i==0 else 2160)*16/9), "height": source_height if i==0 else 2160} for i,p in enumerate(paths)])
     monkeypatch.setattr(cli, 'voice_reference', reference_for)
     monkeypatch.setattr(cli, 'duration', lambda path: durations[str(path)])
+    monkeypatch.setattr(speech_recovery, 'duration', lambda path: durations[str(path)])
     monkeypatch.setattr(cli, 'require_disk', Mock())
     monkeypatch.setattr(cli, 'ffmpeg', Mock())
     monkeypatch.setattr(cli, 'validate_package', Mock())
@@ -267,7 +298,6 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(script, 'Writer', FakeWriter)
     monkeypatch.setattr(voice, 'Narrator', FakeNarrator)
     monkeypatch.setattr(voice, 'captions', captions)
-    monkeypatch.setattr(voice, 'spoken_coverage', lambda *args: 1)
     monkeypatch.setattr(shots, 'analyse', lambda *args: [{'start': 30, 'end': 90, 'motion': 8}])
     monkeypatch.setattr(shots, 'ShotSelector', FakeSelector)
     monkeypatch.setattr(shots, 'intro_montage', montage)
@@ -285,13 +315,25 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             selector, [pool[0] for pool in pools], shots, lengths, text, action),
     ))
     monkeypatch.setitem(sys.modules, 'movie_pipeline.cta', SimpleNamespace(
-        prepare_cta=prepare_cta, render_cta=render_cta,
+        prepare_cta=prepare_cta, render_cta=render_cta, cta_variants=cta_variants,
     ))
     monkeypatch.setitem(sys.modules, 'faster_whisper', SimpleNamespace(WhisperModel=Mock()))
     output = tmp_path / 'output'
     brief_voice = 'Use female audio.' if narrator == 'Warguy' else 'Use Warguy.'
-    cli.produce(f'Top {count} Action Movies', 'Make a 5-minute video. '+brief_voice,
-                '; '.join(f"{film['title']} ({film['year']})" for film in films), tmp_path / 'jobs', output)
+    arguments = (f'Top {count} Action Movies', 'Make a 5-minute video. '+brief_voice,
+                 '; '.join(f"{film['title']} ({film['year']})" for film in films), tmp_path / 'jobs', output)
+    if extra_mode == 'intro-partial':
+        with pytest.raises(speech_recovery.SpeechRecoveryError, match='complete speech for intro'):
+            cli.produce(*arguments)
+        checks = json.loads(next((tmp_path / 'jobs').glob('*/speech-checks/speech-verification.json')).read_text())['checks']
+        opening_checks = [check for check in checks if check.get('expected') == first]
+        assert len(opening_checks) == 9  # three complete hypotheses for each of three voice takes
+        assert not any(check['accepted'] for check in opening_checks)
+        assert not records.get('spoken_renders')
+        assert not records.get('trailer_renders')
+        assert not (output / 'final-video.mp4').exists()
+        return
+    cli.produce(*arguments)
 
     assert records['selected_kind'] == (expected_kind if content_type else None)
     assert records['preferred_kind'] == expected_kind
@@ -303,9 +345,38 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     added_visual_seconds = 5 + count*3.5
     assert 285 <= records['final_duration']-added_visual_seconds/1.02 <= 315
     assert records['writes'] == (2 if extra_mode == "rewrite-fails" else 1)
+    # The short joke is generated and verified before any full-length narration.
+    events = records['speech_events']
+    first_body_generation = events.index(('generate', first))
+    assert all(('recognize', candidate) in events[:first_body_generation]
+               for candidate in records['cta_candidates'])
+    speech_checks = json.loads(next((tmp_path / 'jobs').glob('*/speech-checks/speech-verification.json')).read_text())['checks']
+    cta_checks = [check for check in speech_checks if check.get('label') == 'subscribe break']
+    assert any(check.get('accepted') and check.get('expected') == records['cta_text'] for check in cta_checks)
     if extra_mode == 'shared-audio-retry':
-        assert records['shared_transcriptions'] == 2  # one failed shared file, then its replacement
+        assert records['shared_transcriptions'] == 4  # three ASR routes, then the verified replacement
         assert records['shared_regenerations'] == 1  # reused by every repeated paragraph
+    if extra_mode == 'cta-vad-retry':
+        takes = [call for call in records['speech_calls'] if call['text'] in records['cta_candidates']]
+        assert len(takes) == 1  # a no-VAD check retains the original generated audio
+        assert [check['stage'] for check in cta_checks] == ['base-vad', 'base-no-vad']
+        assert [check['accepted'] for check in cta_checks] == [False, True]
+    if extra_mode == 'cta-joke-fallback':
+        assert records['cta_text'] == records['cta_candidates'][1]
+        original_takes = [call for call in records['speech_calls'] if call['text'] == records['cta_candidates'][0]]
+        assert len(original_takes) == 3  # bounded retries before changing only the matching joke
+        assert records['cta_render']['plan']['path'] == records['cta_prepared']['path']
+    if extra_mode == 'initial-speaker-error':
+        opening_takes = [call for call in records['speech_calls'] if call['text'] == first]
+        assert len(opening_takes) == 2
+        assert not opening_takes[0].get('force')
+        assert opening_takes[1]['force'] is True
+        assert opening_takes[1]['attempt_offset'] > 0
+        opening_checks = [check for check in speech_checks if check.get('expected') == first]
+        assert len(opening_checks) == 1
+        assert opening_checks[0]['accepted'] is True
+        assert opening_checks[0]['heard'] == first
+        assert sum(part['text'] == first for part in records['spoken_renders']) == 1
     assert records['extra_attempts'] == count
     assert records["footage_order"] == [("primary",film["id"]) for film in films]+[("secondary",film["id"]) for film in films]
     if extra_mode == "render-fails":
@@ -360,7 +431,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert following['start'] == pytest.approx(preview['start']+3.5)
         cue = next(cue for cue in written_cues if cue['text'] == following['text'])
         assert cue['start'] == pytest.approx(following['start']/timeline['speed'])
-    cta_cue = next(cue for cue in written_cues if cue['text'] in MIDROLLS)
+    cta_cue = next(cue for cue in written_cues if cue['text'] == records['cta_text'])
     assert cta_cue['start'] == pytest.approx(cta['start']/timeline['speed'])
     assert cta_cue['end']-cta_cue['start'] < 10
     assert all(a['end'] <= b['start']+.001 for a,b in pairwise(written_cues))
