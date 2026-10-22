@@ -121,7 +121,7 @@ jobs:
       - name: System dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1 fonts-dejavu-core zstd
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1 fonts-dejavu-core zstd tesseract-ocr
       - name: Install light dependencies and validate inputs
         run: |
           python -m pip install --upgrade pip
@@ -181,6 +181,8 @@ jobs:
           path: |
             work/jobs/*/speech-checks/speech-verification.json
             work/jobs/*/speech-checks/last-unverified.wav
+            work/jobs/*/audio-assembly.json
+            work/jobs/*/audio-review.json
           if-no-files-found: ignore
           retention-days: 2
       - name: Remove downloaded trailers and rendered intermediates

@@ -39,6 +39,12 @@ def test_shorter_duration_gets_shorter_total_script():
     assert sum((five[0], five[1]*5, five[2])) < sum((fifteen[0], fifteen[1]*5, fifteen[2]))
 
 
+@pytest.mark.parametrize("seconds, count, scale", [(300, 5, 1), (900, 10, 1), (1800, 15, 2)])
+def test_intro_word_goal_stays_brief_when_video_duration_or_revision_scale_grows(seconds, count, scale):
+    opening, _, _ = narration_words(seconds, count, scale=scale)
+    assert 16 <= opening <= 20
+
+
 def test_tiny_video_does_not_spend_its_duration_on_trailer_breaks():
     assert trailer_budget(requested_duration("30-second video"), 5) == 0
 

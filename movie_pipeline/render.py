@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import json
 import math
 import os
+import shutil
+import tempfile
 import wave
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .core import PipelineError, duration, ffmpeg, probe
+from .core import PipelineError, duration, ffmpeg, probe, run, save_json
 from .timing import DurationSpec, final_tempo
 from .video_settings import export_size
 
 WIDTH, HEIGHT, FPS = 1280, 720, 30
+LOSSLESS_AUDIO = ("-ar", "48000", "-ac", "2", "-channel_layout", "stereo",
+                  "-c:a", "alac", "-sample_fmt", "s32p")
+AUDIO_ALIGNMENT_TOLERANCE = .12
 
 
 def font(size: int):
@@ -179,14 +185,15 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
     # Lossless intermediate audio avoids an independent AAC encoder delay at every
     # paragraph/preview boundary. Only the finished upload is encoded to AAC.
     ffmpeg(*inputs, *video_options, "-map", "1:a", "-af", "asetpts=PTS-STARTPTS,apad",
-           "-t", seconds, "-ar", "48000", "-ac", "2", "-c:a", "alac", output)
+           "-t", seconds, *LOSSLESS_AUDIO, output)
     for clip in clips:
         clip.unlink(missing_ok=True)
     silent.unlink(missing_ok=True)
 
 
 def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
-                  label: Path | None = None, label_seconds: float = 3.5, muted: bool = False):
+                  label: Path | None = None, label_seconds: float = 3.5, muted: bool = False,
+                  still: bool = False):
     """A narration-free preview, optionally carrying the animated rank introduction."""
     frames = max(FPS, round(seconds * FPS))
     actual = frames / FPS
@@ -199,10 +206,11 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
         inputs += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
         audio_index = 1
         label_index = 2
+    hold = "trim=end_frame=1,setpts=PTS-STARTPTS," if still else ""
     graph = (
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
         f"crop={width}:{height},setsar=1,setpts=PTS-STARTPTS,fps={FPS},"
-        f"tpad=stop_mode=clone:stop={frames},setpts=N/({FPS}*TB)[v];"
+        f"{hold}tpad=stop_mode=clone:stop={frames},setpts=N/({FPS}*TB)[v];"
         f"[{audio_index}:a]asetpts=PTS-STARTPTS,afade=t=in:d=0.08,"
         f"afade=t=out:st={max(0,actual-0.15)}:d=0.15,loudnorm=I=-18:TP=-2:LRA=9,apad[a]"
     )
@@ -213,7 +221,86 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
         video = "[out]"
     ffmpeg(*inputs, "-filter_complex", graph, "-map", video, "-map", "[a]", "-t", actual,
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS, "-threads", "2",
-           "-ar", "48000", "-ac", "2", "-c:a", "alac", output)
+           *LOSSLESS_AUDIO, output)
+
+
+def _audio_stream(path: Path) -> dict:
+    metadata = json.loads(run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+        "-show_entries", "stream=codec_name,sample_fmt,sample_rate,channels,channel_layout,bits_per_raw_sample,extradata,extradata_size",
+        "-show_data", "-of", "json", path]))
+    streams = metadata.get("streams", [])
+    if not streams:
+        raise PipelineError(f"No audio stream is available in {path.name}.")
+    return streams[0]
+
+
+def _canonical_audio(stream: dict) -> bool:
+    # ALAC codec configuration is global in MP4. Identical codec names/rates
+    # alone are insufficient: 16-bit packets cannot use a 24-bit stream header.
+    return (stream.get("codec_name") == "alac" and stream.get("sample_fmt") == "s32p"
+            and str(stream.get("sample_rate")) == "48000" and stream.get("channels") == 2
+            and stream.get("channel_layout") == "stereo" and str(stream.get("bits_per_raw_sample")) == "24"
+            and bool(stream.get("extradata")) and stream.get("extradata_size", 0) > 0)
+
+
+def _normalized_audio_parts(parts: list[Path], work: Path) -> list[Path]:
+    """Keep video bytes while making every audio codec configuration identical."""
+    if not parts:
+        raise PipelineError("Cannot assemble a video without media parts.")
+    result, streams = [], []
+    for index, value in enumerate(parts):
+        path = Path(value)
+        stream = _audio_stream(path)
+        if not _canonical_audio(stream):
+            normalized = work / f"part-{index:04}.mp4"
+            ffmpeg("-xerror", "-err_detect", "explode", "-i", path, "-map", "0:v:0", "-map", "0:a:0",
+                   "-c:v", "copy", "-af", "asetpts=PTS-STARTPTS", "-t", duration(path), *LOSSLESS_AUDIO, normalized)
+            path, stream = normalized, _audio_stream(normalized)
+        result.append(path)
+        streams.append(stream)
+    # A foreign ALAC encoder can use different predictor/configuration bytes
+    # despite matching PCM parameters. Reencode that uncommon group uniformly.
+    if len({stream.get("extradata") for stream in streams}) != 1:
+        for index, path in enumerate(result):
+            normalized = work / f"uniform-{index:04}.mp4"
+            ffmpeg("-xerror", "-err_detect", "explode", "-i", path, "-map", "0:v:0", "-map", "0:a:0",
+                   "-c:v", "copy", "-af", "asetpts=PTS-STARTPTS", "-t", duration(path), *LOSSLESS_AUDIO, normalized)
+            result[index], streams[index] = normalized, _audio_stream(normalized)
+    if not all(_canonical_audio(stream) for stream in streams) or len({stream.get("extradata") for stream in streams}) != 1:
+        raise PipelineError("Intermediate audio codec configurations remain incompatible after lossless normalization.")
+    return result
+
+
+def _strict_audio_decode(path: Path):
+    # Audio-only decoding is inexpensive even for long 4K exports. Treat packet
+    # corruption as an error before a final encode can conceal it behind music.
+    ffmpeg("-xerror", "-err_detect", "explode", "-i", path, "-map", "0:a:0", "-vn", "-f", "null", "-")
+
+
+def validate_audio_video_duration(path: Path, expected_seconds: float | None = None) -> float:
+    """Require complete, aligned audio/video streams, including the ending hold."""
+    metadata = probe(path)
+    video = next((stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "video"), None)
+    audio = next((stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "audio"), None)
+    if video is None or audio is None:
+        raise PipelineError(f"Both audio and video streams are required in {path.name}.")
+    try:
+        video_start, audio_start = float(video.get("start_time", 0)), float(audio.get("start_time", 0))
+        video_seconds, audio_seconds = float(video["duration"]), float(audio["duration"])
+        total = float(metadata["format"]["duration"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PipelineError(f"Cannot verify complete audio/video duration in {path.name}.") from exc
+    values = (video_start, audio_start, video_seconds, audio_seconds, total)
+    if not all(math.isfinite(value) for value in values) or min(video_seconds, audio_seconds, total) <= 0:
+        raise PipelineError(f"Invalid audio/video duration in {path.name}.")
+    tolerance = AUDIO_ALIGNMENT_TOLERANCE
+    if (abs(video_start-audio_start) > tolerance or
+            abs((video_start+video_seconds)-(audio_start+audio_seconds)) > tolerance):
+        raise PipelineError(f"Audio/video timing is incomplete in {path.name}: video {video_seconds:.3f}s, audio {audio_seconds:.3f}s.")
+    if expected_seconds is not None and (not math.isfinite(expected_seconds) or expected_seconds <= 0 or
+            any(abs(value-expected_seconds) > tolerance for value in (video_seconds, audio_seconds, total))):
+        raise PipelineError(f"Export streams do not cover the complete planned edit in {path.name}.")
+    return total
 
 
 def music_bed(path: Path, seconds: float, action: bool):
@@ -237,11 +324,41 @@ def music_bed(path: Path, seconds: float, action: bool):
 
 def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: DurationSpec | None = None, *, ending_hold: float = 3.0) -> tuple[float, float]:
     spec = spec or DurationSpec()
+    work.mkdir(parents=True, exist_ok=True)
+    report = {"status": "pending", "canonical_audio": {"codec": "alac", "sample_format": "s32p",
+              "bits_per_sample": 24, "sample_rate": 48000, "channels": 2, "channel_layout": "stereo"},
+              "part_count": len(parts), "normalized_part_count": 0,
+              "concatenated_strict_decode": "pending", "final_strict_decode": "pending"}
+
+    def record(stage, **values):
+        report.update(stage=stage, **values)
+        save_json(work / "audio-assembly.json", report)
+
+    def failed(exc):
+        record(report["stage"], status="failed", error=type(exc).__name__, detail=str(exc)[-500:])
+
+    record("normalizing")
     listing = work / "final-concat.txt"
-    concat_file(parts, listing)
     combined = work / "combined.mp4"
-    ffmpeg("-f", "concat", "-safe", "0", "-i", listing, "-c", "copy", combined)
-    original = duration(combined)
+    normalization = Path(tempfile.mkdtemp(prefix="audio-normalized-", dir=work))
+    try:
+        normalized = _normalized_audio_parts(parts, normalization)
+        record("concatenating", normalized_part_count=sum(Path(old) != new for old, new in zip(parts, normalized)))
+        concat_file(normalized, listing)
+        ffmpeg("-xerror", "-f", "concat", "-safe", "0", "-i", listing, "-c", "copy", combined)
+    except Exception as exc:
+        failed(exc)
+        raise
+    finally:
+        shutil.rmtree(normalization, ignore_errors=True)
+    try:
+        record("checking-concatenated-audio", concatenated_strict_decode="running")
+        _strict_audio_decode(combined)
+        record("checking-concatenated-duration", concatenated_strict_decode="passed")
+        original = validate_audio_video_duration(combined)
+    except Exception as exc:
+        failed(exc)
+        raise
     speed = final_tempo(original, spec, ending_hold)
     if not spec.automatic and not spec.minimum <= original/speed+ending_hold <= spec.maximum:
         print("Keeping the complete video at a natural pace outside the soft runtime target.", flush=True)
@@ -251,18 +368,35 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
     music_bed(music, final_duration + 1, action)
     graph = (
         f"[0:v]setpts=(PTS-STARTPTS)/{speed},fps={FPS},tpad=stop_mode=clone:stop_duration={ending_hold},fade=t=out:st={final_duration-1.2}:d=1.2[v];"
-        f"[0:a]asetpts=PTS-STARTPTS,aresample=48000,atempo={speed},"
+        # Honor timestamp-declared silence before converting the audio clock to
+        # sample counts. Stream-looped AAC can contain small gaps between valid
+        # packets; dropping those gaps would pull later speech forward. Strict
+        # decoding and duration checks above already reject missing/corrupt audio.
+        f"[0:a]asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0:min_hard_comp=0.0001,atempo={speed},"
         f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
         "[1:a]volume=0.13[bed];"
         "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
         f"[voice][duck]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
     )
-    ffmpeg("-i", combined, "-i", music, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
-           "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS,
-           "-threads", "2", "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", final_duration, output)
+    try:
+        record("encoding", planned_duration=final_duration)
+        ffmpeg("-xerror", "-err_detect", "explode", "-i", combined, "-i", music, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+               "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS,
+               "-threads", "2", "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", final_duration, output)
+        record("checking-final-audio", final_strict_decode="running")
+        _strict_audio_decode(output)
+        metadata = probe(output)
+        record("checking-final-duration", final_strict_decode="passed", final_stream_durations={
+            stream["codec_type"]: stream.get("duration") for stream in metadata.get("streams", [])
+            if stream.get("codec_type") in ("audio", "video")})
+        actual_duration = validate_audio_video_duration(output, final_duration)
+    except Exception as exc:
+        failed(exc)
+        raise
+    record("complete", status="passed", final_duration=actual_duration)
     music.unlink(missing_ok=True)
     combined.unlink(missing_ok=True)
-    return duration(output), speed
+    return actual_duration, speed
 
 
 def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str], output: Path, **options):

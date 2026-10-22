@@ -134,3 +134,14 @@ def test_beat_avoids_promos_and_respects_bounds():
     cues = [{"start": 1, "end": 3, "text": "We have to go"}, {"start": 20, "end": 23, "text": "In theaters this summer"}, {"start": 30, "end": 33, "text": "We are running out of time"}]
     chosen = choose_beat(cues, [{"start": 29, "end": 34, "motion": 30}], 100, True)
     assert chosen["text"] == "We are running out of time"
+
+
+def test_trailer_dialogue_skips_title_cards_even_when_the_cue_starts_in_a_scene():
+    cues = [{"start": 30, "end": 33, "text": "We are running out of time"},
+            {"start": 40, "end": 42, "text": "We have to leave now"}]
+    cards = [{"start": 32.5, "end": 35, "motion": 0}]
+    shots = [{"start": 29, "end": 32.5, "motion": 30}, *cards,
+             {"start": 39, "end": 43, "motion": 10}]
+    chosen = choose_beat(cues, shots, 100, True, excluded=cards)
+    assert chosen["text"] == "We have to leave now"
+    assert choose_beat(cues[:1], shots, 100, True, excluded=cards) is None

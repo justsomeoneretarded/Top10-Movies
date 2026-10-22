@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import sys
+import wave
 from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,8 +43,12 @@ from movie_pipeline.video_settings import export_size
     (2,"false",2160,(1920,1080),"cta-joke-fallback","Movies","Warguy"),
     (2,"false",2160,(1920,1080),"intro-partial","Movies","Warguy"),
     (2,"false",2160,(1920,1080),"initial-speaker-error","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"final-audio-rejected","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"final-audio-error","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"title-cards","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"title-card-fails","Movies","Warguy"),
 ])
-def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, count, try_4k, source_height, expected_size, extra_mode, content_type, narrator):
+def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, capsys, count, try_4k, source_height, expected_size, extra_mode, content_type, narrator):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("VIDEO_RESOLUTION", "1080")
     monkeypatch.setenv("TRY_4K", try_4k)
@@ -113,6 +118,17 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         def unload(self):
             pass
 
+        def refresh_editorial(self, title, brief, values, draft):
+            records['editorial_refreshed'] = True
+            draft['package']['editorial_test_marker'] = True
+            return draft
+
+        def refresh_intro(self, title, brief, values, draft, **kwargs):
+            records.setdefault('intro_refinements', []).append(kwargs)
+            # Retain these complete takes so the timing orchestration fixtures
+            # remain independent of whether optional rewriting succeeds.
+            return draft
+
     class FakeNarrator:
         def __init__(self, reference, cache):
             self.cache = cache
@@ -135,6 +151,11 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             else:
                 seconds = 20
             path = make(self.cache / (key(text)+".wav"), seconds)
+            with wave.open(str(path), 'wb') as audio:
+                audio.setnchannels(1)
+                audio.setsampwidth(2)
+                audio.setframerate(16000)
+                audio.writeframes(b'\x00\x00' * 160)
             text_for_audio[str(path)] = text
             return path
 
@@ -155,7 +176,9 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         if extra_mode == 'raises':
             raise RuntimeError('Optional source unavailable')
         if extra_mode in {'missing', 'rewrite-fails', 'shared-audio-retry', 'cta-vad-retry',
-                          'cta-joke-fallback', 'intro-partial', 'initial-speaker-error'}:
+                          'cta-joke-fallback', 'intro-partial', 'initial-speaker-error',
+                          'final-audio-rejected', 'final-audio-error', 'title-cards',
+                          'title-card-fails'}:
             return None
         path = make(root / f"movie-{film['id']}-extra.mp4", 150)
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/extra/{film['id']}"})
@@ -217,6 +240,14 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             'source': str(source), 'start': start, 'duration': seconds,
             'target': str(target), **kwargs,
         })
+        if seconds == 1.5 and start == 140:
+            records.setdefault('title_card_attempts', []).append(str(source))
+            assert kwargs.get('muted') is True
+            assert kwargs.get('label') is None, 'The trailer title card plays without a rank overlay'
+            assert kwargs.get('still', False) is False
+            if extra_mode == 'title-card-fails' and len(records['title_card_attempts']) == 1:
+                records['title_card_failures'] = records.get('title_card_failures', 0)+1
+                raise PipelineError('An optional title-card interval could not decode')
         make(target, seconds)
 
     def cold_open_plan(selector, pools, shot_lookup, text, action, dialogue=None, seconds=5):
@@ -228,6 +259,16 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert seconds == 3.5
         records.setdefault('review_previews', []).append(str(sources[0]))
         return {'source': str(sources[0]), 'start': 40, 'duration': seconds, 'muted': True}
+
+    def choose_title_card(selector, sources, shot_lookup, title):
+        if extra_mode not in {'title-cards', 'title-card-fails'}:
+            return None
+        film = next(film for film in films if film['title'] == title)
+        assert Path(sources[0]).name == f"movie-{film['id']}.mp4"
+        card = {'source': str(sources[0]), 'start': 140, 'duration': 1.5,
+                'title': title, 'muted': True}
+        records.setdefault('title_card_plans', []).append(card)
+        return card
 
     def prepare_cta(title, brief, seed, work):
         records['cta_text'] = MIDROLLS[0]
@@ -271,6 +312,36 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         embedded.extend(copy.deepcopy(chapters))
         records['final_duration'] = total
 
+    def verify_export_audio(video, events, speed, recovery, work):
+        assert Path(video).is_file()
+        assert speed == pytest.approx(1.02)
+        assert work.is_dir()
+        spoken = [event for event in events if event['type'] in {'narration', 'subscribe'}]
+        assert len(spoken) >= 3
+        for event in spoken:
+            source = Path(event['source_audio'])
+            assert source.is_file(), 'Verified speech remains available until final-export QA finishes'
+            assert text_for_audio[str(source)] == event['text']
+            with wave.open(str(source)) as audio:
+                assert audio.getnframes() > 0
+        narration = [event for event in spoken if event['type'] == 'narration']
+        sampled = [narration[0], narration[len(narration)//2], narration[-1]]
+        assert sampled[0]['section_kind'] == 'intro'
+        assert sampled[1]['section_kind'] == 'film'
+        assert sampled[-1]['section_kind'] == 'outro'
+        assert len({event['start'] for event in sampled}) == 3
+        records['export_audio_review'] = {
+            'events': copy.deepcopy(events), 'speed': speed,
+            'samples': [{'start': event['start']/speed, 'source_audio': event['source_audio']}
+                        for event in sampled],
+        }
+        records['export_recovery_close'] = Mock(wraps=recovery.close)
+        recovery.close = records['export_recovery_close']
+        if extra_mode == 'final-audio-error':
+            raise PipelineError('Finished audio stream is truncated before the final narration.')
+        return {'accepted': extra_mode != 'final-audio-rejected',
+                'status': 'rejected' if extra_mode == 'final-audio-rejected' else 'verified'}
+
     def thumbnails(trailers, choices, phrases, output, **kwargs):
         for i in range(1, 4):
             Image.new('RGB', (1280, 720), '#234567').save(output / f'thumbnail-{i:02}.jpg')
@@ -310,12 +381,15 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(render, 'embed_chapters', embed)
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
     monkeypatch.setitem(sys.modules, 'movie_pipeline.previews', SimpleNamespace(
-        cold_open_plan=cold_open_plan, choose_preview=choose_preview,
+        cold_open_plan=cold_open_plan, choose_preview=choose_preview, choose_title_card=choose_title_card,
         outro_recap_plan=lambda selector, pools, shots, lengths, text, action: montage(
             selector, [pool[0] for pool in pools], shots, lengths, text, action),
     ))
     monkeypatch.setitem(sys.modules, 'movie_pipeline.cta', SimpleNamespace(
         prepare_cta=prepare_cta, render_cta=render_cta, cta_variants=cta_variants,
+    ))
+    monkeypatch.setitem(sys.modules, 'movie_pipeline.audio_review', SimpleNamespace(
+        verify_export_audio=verify_export_audio,
     ))
     monkeypatch.setitem(sys.modules, 'faster_whisper', SimpleNamespace(WhisperModel=Mock()))
     output = tmp_path / 'output'
@@ -333,8 +407,26 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert not records.get('trailer_renders')
         assert not (output / 'final-video.mp4').exists()
         return
+    if extra_mode in {'final-audio-rejected', 'final-audio-error'}:
+        message = ('damaged export will not be delivered' if extra_mode == 'final-audio-rejected'
+                   else 'Finished audio stream is truncated before the final narration')
+        with pytest.raises(PipelineError, match=message):
+            cli.produce(*arguments)
+        assert records['export_audio_review']
+        records['export_recovery_close'].assert_called_once_with()
+        assert not (output / 'recommended-title.txt').exists()
+        assert not (output / 'subtitles.srt').exists()
+        assert 'Complete:' not in capsys.readouterr().out
+        cli.validate_package.assert_not_called()
+        return
     cli.produce(*arguments)
 
+    assert records['editorial_refreshed'] is True
+    assert records.get('intro_refinements', []) == ([] if extra_mode == 'initial-speaker-error'
+                                                  else [{'target_words': 13}])
+    records['export_recovery_close'].assert_called_once_with()
+    audio_report_path = next((tmp_path / 'jobs').glob('*/audio-review.json'))
+    assert json.loads(audio_report_path.read_text()) == {'accepted': True, 'status': 'verified'}
     assert records['selected_kind'] == (expected_kind if content_type else None)
     assert records['preferred_kind'] == expected_kind
     assert records['narrator'] == expected_narrator
@@ -343,6 +435,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert saved_input['narrator'] == expected_narrator
     # Cold opening and title previews add intentional screen time to the old plan.
     added_visual_seconds = 5 + count*3.5
+    if extra_mode in {'title-cards', 'title-card-fails'}:
+        added_visual_seconds += (count-(extra_mode == 'title-card-fails'))*1.5
     assert 285 <= records['final_duration']-added_visual_seconds/1.02 <= 315
     assert records['writes'] == (2 if extra_mode == "rewrite-fails" else 1)
     # The short joke is generated and verified before any full-length narration.
@@ -395,6 +489,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     timeline_file = next((tmp_path / 'jobs').glob('*/timeline.json'))
     timeline = json.loads(timeline_file.read_text())
     events = timeline['events']
+    assert records['export_audio_review']['events'] == events
+    assert len(records['export_audio_review']['samples']) == 3
     assert events[0]['type'] == 'cold-open'
     assert events[0]['start'] == 0
     assert sum(event['duration'] for event in events if event['type'] == 'cold-open') == pytest.approx(5)
@@ -415,9 +511,42 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert .30 <= cta['start']/raw_duration <= .50
     assert cta['duration']/timeline['speed'] < 10
     assert events[index-1]['film'] != events[index+1]['film']
-    assert events[index-1]['text'].startswith("It's listed")  # preceding review completed
+    preceding_review = events[index-2] if events[index-1]['type'] == 'title-card' else events[index-1]
+    assert preceding_review['text'].startswith("It's listed")  # preceding review completed
     assert events[index+1]['type'] == 'review-preview'  # next review begins after the CTA
     assert events[index+2]['text'].startswith('Review number')
+    cards = [(i, event) for i, event in enumerate(events) if event['type'] == 'title-card']
+    if extra_mode in {'title-cards', 'title-card-fails'}:
+        assert len(records['title_card_plans']) == count
+        assert len(records['title_card_attempts']) == count
+        assert len(cards) == count-(extra_mode == 'title-card-fails')
+        if extra_mode == 'title-card-fails':
+            assert records['title_card_failures'] == 1
+            assert cards[0][1]['film'] == 'Movie 1'
+        for card_index, card in cards:
+            assert card['narration'] is False
+            assert card['duration'] == pytest.approx(1.5)
+            assert len(card['shots']) == 1
+            plan = card['shots'][0]
+            assert plan['title'] == card['film']
+            film = next(film for film in films if film['title'] == card['film'])
+            assert Path(plan['source']).name == f"movie-{film['id']}.mp4"
+            own_review = [(i, event) for i, event in enumerate(events)
+                          if event['type'] == 'narration' and event['section_kind'] == 'film'
+                          and event['film'] == card['film']]
+            assert own_review
+            assert card_index == own_review[-1][0]+1
+            previous = events[card_index-1]
+            assert previous['start']+previous['duration'] == pytest.approx(card['start'])
+            assert previous['text'].startswith("It's listed")
+            following = events[card_index+1]
+            assert following['type'] in {'subscribe', 'review-preview'} or following.get('section_kind') == 'outro'
+            card_start = card['start']/timeline['speed']
+            card_end = (card['start']+card['duration'])/timeline['speed']
+            assert all(cue['end'] <= card_start+.001 or cue['start'] >= card_end-.001
+                       for cue in written_cues)
+    else:
+        assert cards == []
     assert [chapter['title'] for chapter in embedded] == ['Intro',
             *[f"#{i+1} Movie {i+1} (2025)" for i in reversed(range(count))], 'Outro']
     assert all(a['start'] < b['start'] for a, b in pairwise(embedded))
@@ -457,6 +586,67 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert not list(timeline_file.parent.glob('part-*.mp4'))
 
 
+@pytest.mark.parametrize('seconds', [8.5, 10.0, 12.0])
+def test_intro_duration_is_soft_for_complete_unchanged_audio(monkeypatch, seconds):
+    draft = {'sections': [{'kind': 'intro', 'paragraphs': [
+        'These action movies give your next movie night a serious upgrade.',
+    ]}]}
+    speech = {(0, 0): Path('complete-intro.wav')}
+    monkeypatch.setattr(cli, 'duration', lambda path: seconds)
+    writer = SimpleNamespace(refresh_intro=Mock(return_value=draft), unload=Mock())
+    speaker_factory = Mock(side_effect=AssertionError('An unchanged complete take needs no generation'))
+
+    chosen, chosen_audio = cli.refine_intro_timing(
+        writer, 'Top Action Movies', 'Keep the action specific.', [], draft, speech, speaker_factory)
+
+    assert chosen is draft
+    assert chosen_audio is speech
+    assert writer.refresh_intro.call_count == (1 if seconds > 10 else 0)
+    speaker_factory.assert_not_called()
+
+
+@pytest.mark.parametrize('outcome', ['shorter', 'longer', 'rewrite-unavailable', 'voice-unavailable'])
+def test_measured_intro_shortening_keeps_body_audio_and_complete_fallback(monkeypatch, outcome):
+    draft = {'sections': [
+        {'kind': 'intro', 'paragraphs': ['A complete opening that takes time.', 'Another complete opening thought.']},
+        {'kind': 'film', 'paragraphs': ['Keep this review and its verified voice unchanged.']},
+    ]}
+    candidate = copy.deepcopy(draft)
+    candidate['sections'][0]['paragraphs'] = ['Five action picks, with trouble worth watching.']
+    speech = {(0, 0): Path('opening-one.wav'), (0, 1): Path('opening-two.wav'),
+              (1, 0): Path('verified-review.wav')}
+    replacement = Path('shorter-opening.wav')
+    durations = {speech[(0, 0)]: 6, speech[(0, 1)]: 6, speech[(1, 0)]: 120,
+                 replacement: 9 if outcome == 'shorter' else 13}
+    monkeypatch.setattr(cli, 'duration', lambda path: durations[Path(path)])
+    refresh = Mock(return_value=candidate)
+    if outcome == 'rewrite-unavailable':
+        refresh.side_effect = RuntimeError('Optional editorial rewrite is unavailable')
+    writer = SimpleNamespace(refresh_intro=refresh, unload=Mock())
+    speaker = SimpleNamespace(speak=Mock(return_value=replacement), close=Mock())
+    if outcome == 'voice-unavailable':
+        speaker.speak.side_effect = RuntimeError('Optional shorter voice take is unavailable')
+    factory = Mock(return_value=speaker)
+
+    chosen, chosen_audio = cli.refine_intro_timing(
+        writer, 'Top Five Action Movies', 'Steady, specific action.', [], draft, speech, factory)
+
+    refresh.assert_called_once()
+    assert 8 <= refresh.call_args.kwargs['target_words'] <= 16
+    assert chosen_audio[(1, 0)] == speech[(1, 0)]
+    if outcome == 'shorter':
+        # Nine seconds is a valid complete improvement; eight is guidance.
+        assert chosen is candidate
+        assert chosen_audio == {(0, 0): replacement, (1, 0): speech[(1, 0)]}
+    else:
+        assert chosen is draft
+        assert chosen_audio is speech
+    if outcome == 'rewrite-unavailable':
+        factory.assert_not_called()
+    else:
+        speaker.close.assert_called_once_with()
+
+
 def test_media_and_voice_dropdowns_isolate_cached_jobs(monkeypatch, tmp_path):
     """Identical text cannot restore another medium's research or another voice's speech."""
     monkeypatch.setenv('VIDEO_MINUTES', '5')
@@ -464,6 +654,13 @@ def test_media_and_voice_dropdowns_isolate_cached_jobs(monkeypatch, tmp_path):
     reference = tmp_path / 'same-reference.ogg'
     reference.write_bytes(b'same reference bytes for every selected voice')
     monkeypatch.setattr(cli, 'voice_reference', lambda *args: reference)
+    monkeypatch.setitem(sys.modules, 'movie_pipeline.audio_review', SimpleNamespace(
+        verify_export_audio=Mock(side_effect=AssertionError('Research must stop before export QA')),
+    ))
+    monkeypatch.setitem(sys.modules, 'movie_pipeline.previews', SimpleNamespace(
+        choose_preview=Mock(), choose_title_card=Mock(return_value=None),
+        cold_open_plan=Mock(), outro_recap_plan=Mock(),
+    ))
     selected_jobs = []
 
     class StopAfterCacheSelection:

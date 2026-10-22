@@ -108,7 +108,9 @@ def trailer_budget(spec: DurationSpec, count: int) -> float:
 
 def narration_words(seconds: float, count: int, trailer_seconds: float = 0, scale: float = 1) -> tuple[int, int, int]:
     total = max(20, round(max(1, seconds-trailer_seconds) * 145 / 60 * scale))
-    opening = min(65, max(5, round(total*0.055)))
+    # A brief useful opening stays near eight seconds even for a long list.
+    # Timing revisions belong in the reviews, rather than expanding the hook.
+    opening = min(18, max(8, round(total*.055)))
     closing = min(35, max(4, round(total*0.03)))
     body = max(3, round((total-opening-closing)/count))
     return opening, body, closing

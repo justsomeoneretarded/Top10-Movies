@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 
 from .core import PipelineError
+from .shots import duration, frame_text, get_frame, matches_title_card
 
 FPS = 30
 
@@ -59,6 +60,41 @@ def _overlap(start: float, seconds: float, cues: list[tuple[float, float]]) -> b
     return any(start < end + .12 and start + seconds > beginning - .12 for beginning, end in cues)
 
 
+def _freshness(selector, source: Path, start: float, seconds: float) -> float:
+    try:
+        value = float(selector.freshness(source,start,seconds))
+    except (AttributeError,RuntimeError,TypeError,ValueError):
+        value = 1.0
+    try:
+        visual = float(selector.visual_freshness(source,start,seconds))
+        if math.isfinite(visual):
+            value = min(value,visual)
+    except (AttributeError,RuntimeError,TypeError,ValueError):
+        pass
+    return max(0.0,min(1.0,value)) if math.isfinite(value) else 1.0
+
+
+def _unused(selector, source: Path, start: float, end: float) -> list[tuple[float,float]]:
+    try:
+        values = selector.unused_windows(source,start,end)
+        return [(float(low),float(high)) for low,high in values] if isinstance(values,list) else []
+    except (AttributeError,RuntimeError,TypeError,ValueError):
+        return []
+
+
+def _reserve(selector, source, start: float, seconds: float, kind: str):
+    method = getattr(selector,"reserve",None)
+    if callable(method):
+        method(Path(source),start,seconds,kind)
+
+
+def _card(selector, source: Path, index: int) -> bool:
+    try:
+        return selector.card_kind(source,index) in {"title","promo"}
+    except (AttributeError,RuntimeError,TypeError,ValueError):
+        return False
+
+
 def _best_preview(selector, sources, shot_lookup, text, seconds, action, dialogue):
     if not sources:
         raise PipelineError("No footage source is available for a preview.")
@@ -70,7 +106,12 @@ def _best_preview(selector, sources, shot_lookup, text, seconds, action, dialogu
         shots = shot_lookup.get(str(source), [])
         scores = _relevance(selector, source, query, len(shots))
         valid = []
+        blocked = [(_number(shot.get("start")),_number(shot.get("end"))) for i,shot in enumerate(shots)
+                   if isinstance(shot,dict) and _card(selector,source,i)]
+        allowed = [i for i in range(len(shots)) if not _card(selector,source,i)] or list(range(len(shots)))
         for index, shot in enumerate(shots):
+            if index not in allowed:
+                continue
             if not isinstance(shot, dict):
                 continue
             start = max(0.0, _number(shot.get("start"), -1))
@@ -91,25 +132,44 @@ def _best_preview(selector, sources, shot_lookup, text, seconds, action, dialogu
             if not full_window:
                 initial = min(initial, max(0.0, maximum_end - seconds))
             starts = [initial]
+            starts += [low for low,high in _unused(selector,source,start,end) if high-low >= seconds]
             if full_window and speech:
                 starts += [last + .14 for _, last in speech if start <= last + .14 <= end - seconds]
             for candidate_start in dict.fromkeys(starts):
+                still = any(candidate_start < stop and candidate_start+seconds > beginning for beginning,stop in blocked)
+                if still:
+                    # A continuous short-shot fallback must never run through a
+                    # detected title/logo. Hold one clean scene frame instead.
+                    candidate_start = (start+end)/2
                 muted = speech is None or _overlap(candidate_start, seconds, speech)
+                muted = muted or still
                 motion = max(0.0, min(60.0, _number(shot.get("motion")))) / 60
                 score = scores[index] * 1.25
                 score += motion * .8 if action else -.18 * motion
                 score += min(available, 8.0) * .025
                 score += .16 if not muted else 0
-                candidates.append((full_window, score, -source_index, -candidate_start,
-                                   {"source": str(source), "start": candidate_start,
-                                    "duration": seconds, "muted": muted}))
+                freshness = _freshness(selector,source,candidate_start,seconds)
+                whole = _freshness(selector,source,start,available)
+                tier = 3 if freshness >= .999 and whole >= .999 else (2 if freshness >= .999 else (1 if freshness > .2 else 0))
+                try:
+                    score -= float(selector.reuse_penalty(source,candidate_start,seconds))
+                except (AttributeError,RuntimeError,TypeError,ValueError):
+                    pass
+                try:
+                    score -= float(selector.visual_reuse_penalty(source,candidate_start,seconds))
+                except (AttributeError,RuntimeError,TypeError,ValueError):
+                    pass
+                result = {"source":str(source),"start":candidate_start,"duration":seconds,"muted":muted}
+                if still:
+                    result["still"] = True
+                candidates.append((tier,full_window and not still, score, -source_index, -candidate_start,result))
     if not candidates:
         # Analysis may be incomplete even though the source itself is usable.
         # A quiet continuous opening remains preferable to aborting production.
         return 0.0, {"source": str(sources[0]), "start": 0.0,
                      "duration": seconds, "muted": True}
-    full, score, _source, _start, result = max(candidates, key=lambda value: value[:4])
-    return score + (.5 if full else 0), result
+    tier,full,score,_source,_start,result = max(candidates,key=lambda value:value[:5])
+    return score + (.5 if full else 0) + tier*4, result
 
 
 def choose_preview(selector, sources: list[Path], shot_lookup: dict[str, list], text: str,
@@ -120,7 +180,70 @@ def choose_preview(selector, sources: list[Path], shot_lookup: dict[str, list], 
     malformed transcripts and untranscribed extra trailers are muted; the final
     music bed fills those intervals without beginning halfway through dialogue.
     """
-    return _best_preview(selector, sources, shot_lookup, text, _seconds(seconds), action, dialogue)[1]
+    result = _best_preview(selector,sources,shot_lookup,text,_seconds(seconds),action,dialogue)[1]
+    _reserve(selector,result["source"],result["start"],1/FPS if result.get("still") else result["duration"],"review-preview")
+    return result
+
+
+def choose_title_card(selector, sources: list[Path], shot_lookup: dict[str, list], title: str,
+                      seconds: float = 1.5) -> dict | None:
+    """Find the actual title lettering for the end of this title's own review.
+
+    Studio/platform logos never qualify. OCR is optional and limited to likely
+    card images; an unavailable tool or an unreadable title simply skips this
+    embellishment. Holding the verified frame avoids crossing a trailer cut.
+    """
+    seconds = _seconds(seconds)
+    for value in sources:
+        source = Path(value)
+        cards = getattr(selector,"cards",{})
+        texts = getattr(selector,"card_texts",{})
+        kinds = cards.get(str(source),[]) if isinstance(cards,dict) else []
+        known_texts = texts.get(str(source),[]) if isinstance(texts,dict) else []
+        for index,shot in enumerate(shot_lookup.get(str(source),[])):
+            if index >= len(kinds) or kinds[index] != "title":
+                continue
+            text = known_texts[index] if index < len(known_texts) else ""
+            point = (_number(shot.get("start"))+_number(shot.get("end")))/2
+            if not text:
+                try:
+                    text = frame_text(get_frame(source,point))
+                except (PipelineError,OSError,RuntimeError,ValueError):
+                    continue
+            if matches_title_card(text,title):
+                _reserve(selector,source,_number(shot.get("start")),
+                         _number(shot.get("end"))-_number(shot.get("start")),"review-title-card")
+                return {"source":str(source),"start":point,"duration":seconds,"muted":True,"still":True}
+
+    # Normal shot indexing intentionally skips end slates. Sample at most four
+    # frames in the final fifteen seconds; do not add these promos to shot pools.
+    for value in sources:
+        source = Path(value)
+        try:
+            length = duration(source)
+        except (PipelineError,OSError,RuntimeError,ValueError):
+            continue
+        if not math.isfinite(length) or length <= 0:
+            continue
+        low,high = max(0,length-min(15,length*.15)),max(0,length-.3)
+        points = [low+(high-low)*fraction for fraction in (.1,.35,.6,.85)]
+        for point in points:
+            try:
+                image = get_frame(source,point)
+                gray = image.convert("L").resize((160,90))
+                histogram = gray.histogram()
+                pixels = sum(histogram)
+                # A dark slate with sparse bright lettering is much safer than
+                # running OCR over actor subtitles or end-credit sequences.
+                if sum(histogram[:60])/pixels <= .55 or not .01 < sum(histogram[141:])/pixels < .4:
+                    continue
+                if not matches_title_card(frame_text(image),title):
+                    continue
+            except (PipelineError,OSError,RuntimeError,TypeError,ValueError):
+                continue
+            _reserve(selector,source,max(0,point-seconds/2),seconds,"review-title-card")
+            return {"source":str(source),"start":point,"duration":seconds,"muted":True,"still":True}
+    return None
 
 
 def cold_open_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, list], text: str,
@@ -148,6 +271,7 @@ def cold_open_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, lis
     for _, _, film_index, shot in choices[:count]:
         length = min(first_frames, remaining)
         result.append({**shot, "duration": length/FPS, "film_index": film_index})
+        _reserve(selector,shot["source"],shot["start"],1/FPS if shot.get("still") else length/FPS,"cold-open")
         remaining -= length
     return result
 
@@ -189,9 +313,12 @@ def outro_recap_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, l
         # Hold the last frame of a short clean source shot instead of cycling to
         # another scene just to fill a few seconds of the closing sentence.
         playable = max(enclosing, default=sample_seconds)
+        if preview.get("still"):
+            playable = 1/FPS
         live_frames = min(frames, max(1, round(playable * FPS)))
         beats.append({"source": preview["source"], "start": preview["start"],
                       "film_index": film_index, "frames": frames, "live_frames": live_frames})
+        _reserve(selector,preview["source"],preview["start"],live_frames/FPS,"outro-recap")
         remaining -= frames
     plans = []
     beat_index = 0

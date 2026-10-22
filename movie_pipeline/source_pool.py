@@ -42,9 +42,14 @@ def _rank_sources(selector, sources: list[Path], shot_sets: dict[str, list[dict]
             score -= uses.get(str(path), 0)*.03
             if str(path) == last:
                 score -= .03
-        ranked.append((score, index, path))
-    ranked.sort(key=lambda row: (-row[0], row[1]))
-    return [row[2] for row in ranked]
+        try:
+            fresh = float(selector.fresh_seconds(path,shot_sets[str(path)]))
+            fresh_tier = int(math.isfinite(fresh) and fresh >= 1.5)
+        except OPTIONAL_ERRORS:
+            fresh_tier = 1
+        ranked.append((fresh_tier,score,index,path))
+    ranked.sort(key=lambda row:(-row[0],-row[1],row[2]))
+    return [row[3] for row in ranked]
 
 
 def _valid_plan(plan, seconds: float) -> bool:
