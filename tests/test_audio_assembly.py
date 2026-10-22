@@ -127,14 +127,19 @@ def test_foreign_and_legacy_audio_are_normalized_while_video_bytes_stay_unchange
 
 
 def test_corrupt_alac_packets_are_rejected_before_final_music_can_hide_them(source, tmp_path, monkeypatch):
-    preview = tmp_path/'preview.mp4'
-    render.trailer_video(source, 0, 1, preview, muted=True)
     speech = voice_part(source, tone(tmp_path/'voice.wav', 900), tmp_path/'speech.mp4', tmp_path/'speech')
-    legacy = tmp_path/'legacy16.mp4'
-    ffmpeg('-i', speech, '-c:v', 'copy', '-c:a', 'alac', '-sample_fmt', 's16p', legacy)
-    listing, corrupt = tmp_path/'bad.txt', tmp_path/'corrupt.mp4'
-    render.concat_file([preview, legacy], listing)
-    ffmpeg('-f', 'concat', '-safe', '0', '-i', listing, '-c', 'copy', corrupt)
+    # FFmpeg versions differ in how they concatenate mismatched ALAC headers.
+    # Damage an actual packet instead, keeping the MP4 index and codec header valid.
+    packets = json.loads(subprocess.check_output([
+        'ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_packets',
+        '-show_entries', 'packet=pos,size', '-of', 'json', str(speech),
+    ]))['packets']
+    packet = next(packet for packet in packets if int(packet['size']) > 32)
+    payload = bytearray(speech.read_bytes())
+    start, size = int(packet['pos']), int(packet['size'])
+    payload[start:start+size] = bytes(size)
+    corrupt = tmp_path/'corrupt.mp4'
+    corrupt.write_bytes(payload)
     monkeypatch.setattr(render, 'music_bed', Mock(side_effect=AssertionError('Corrupt speech reached the final mix')))
     output = tmp_path/'final.mp4'
     with pytest.raises(PipelineError):
@@ -155,15 +160,16 @@ def test_real_reported_audio_truncation_cannot_pass_duration_validation(monkeypa
 
 def test_valid_packet_timestamp_gaps_keep_late_speech_at_its_original_time(monkeypatch, tmp_path):
     monkeypatch.setenv('VIDEO_RESOLUTION', '320x180')
-    seed, source = tmp_path/'seed.mp4', tmp_path/'looped.mp4'
-    ffmpeg('-f', 'lavfi', '-i', 'color=c=0x16243a:size=320x180:rate=30',
-           '-f', 'lavfi', '-i', 'sine=frequency=180:sample_rate=48000', '-t', 1,
-           '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', seed)
-    ffmpeg('-stream_loop', 19, '-i', seed, '-t', 20, '-c', 'copy', source)
-    # Packets are valid, but their presentation clock includes the AAC seed's
-    # loop gaps. Flattening the decoded sample clock loses over 300 ms here.
+    source = tmp_path/'gapped.mp4'
+    ffmpeg('-f', 'lavfi', '-i', 'color=c=0x16243a:size=320x180:rate=30:duration=20',
+           '-f', 'lavfi', '-i', 'sine=frequency=180:sample_rate=48000:duration=19.6',
+           '-af', "asetpts='PTS+gte(T,10)*0.4/TB'",
+           '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'alac',
+           '-sample_fmt', 's32p', '-ac', '2', source)
+    # Explicitly insert a 400 ms presentation gap; do not depend on AAC loop
+    # behavior, which differs between FFmpeg versions. Samples remain intact.
     assert duration(source) == pytest.approx(20, abs=.04)
-    assert len(decoded(source))/RATE < 19.8
+    assert len(decoded(source))/RATE == pytest.approx(19.6, abs=.01)
     output = tmp_path/'final.mp4'
     seconds, speed = render.finish([source], output, tmp_path, False, DurationSpec(automatic=True))
     assert speed == 1
