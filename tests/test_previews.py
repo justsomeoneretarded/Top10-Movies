@@ -122,12 +122,12 @@ def outro_sources(length=8):
     return pools, lookup
 
 
-def test_outro_revisits_two_movies_in_two_calm_nine_second_beats():
+def test_outro_revisits_two_movies_without_long_motion_or_repeated_freezes():
     pools, lookup = outro_sources()
     plans = outro_recap_plan(selector([.5]), pools, lookup, [9, 9], "Watch our other movie recommendations.", True)
-    assert [[cut["film_index"] for cut in plan] for plan in plans] == [[0], [1]]
-    assert [plan[0]["duration"] for plan in plans] == [9, 9]
-    assert [plan[0]["freeze"] for plan in plans] == [1, 1]
+    assert [[cut["film_index"] for cut in plan] for plan in plans] == [[0, 1], [1, 0]]
+    assert [sum(cut["duration"] for cut in plan) for plan in plans] == [9, 9]
+    assert all(cut["duration"] <= 7 and cut["freeze"] == 0 for plan in plans for cut in plan)
     assert all(cut["visual_reason"] == "calm-outro-recap" for plan in plans for cut in plan)
 
 
@@ -135,20 +135,20 @@ def test_short_outro_continues_the_same_image_across_paragraphs_without_restarti
     pools, lookup = outro_sources()
     plans = outro_recap_plan(selector([.5]), pools, lookup, [3, 4, 5], "Save your next movie night.")
     assert {cut["film_index"] for plan in plans for cut in plan} == {0}
-    assert [plan[0]["start"] for plan in plans] == pytest.approx([10, 13, 17])
-    assert plans[-1][0]["freeze"] == 4
+    assert plans[1][0]["start"] == pytest.approx(plans[0][0]["start"]+3)
+    assert all(cut["duration"] <= 7 and cut["freeze"] == 0 for plan in plans for cut in plan)
     assert sum(cut["duration"] for plan in plans for cut in plan) == 12
 
 
-def test_outro_only_changes_movies_once_even_when_a_paragraph_crosses_the_visual_boundary():
+def test_outro_paragraph_boundary_continues_the_current_excerpt_without_restarting():
     pools, lookup = outro_sources()
     plans = outro_recap_plan(selector([.5]), pools, lookup, [8, 10], "See our other picks.")
-    assert [cut["film_index"] for cut in plans[0]] == [0]
-    assert [cut["film_index"] for cut in plans[1]] == [0, 1]
-    assert plans[1][0]["duration"] == 1
-    assert plans[1][0]["still"] is True  # Continue the held image, not a new source cut.
-    assert plans[1][0]["start"] == pytest.approx(10 + 239 / 30)
-    assert plans[1][1]["duration"] == 9
+    assert [cut["film_index"] for cut in plans[0]] == [0, 1]
+    assert [cut["film_index"] for cut in plans[1]] == [1, 0]
+    assert plans[1][0]["start"] == pytest.approx(plans[0][-1]["start"]+2)
+    assert plans[1][0]["duration"] == 4
+    assert plans[1][0]["still"] is False
+    assert plans[1][1]["duration"] == 6
 
 
 def test_outro_weak_matching_keeps_exact_frame_based_paragraph_lengths():
@@ -161,9 +161,10 @@ def test_outro_weak_matching_keeps_exact_frame_based_paragraph_lengths():
         assert sum(round(cut["duration"] * 30) for cut in plan) == math.ceil(length * 30)
 
 
-def test_long_closing_holds_the_same_two_titles_instead_of_adding_extra_cuts():
+def test_long_closing_uses_readable_excerpts_from_at_most_two_titles():
     pools, lookup = outro_sources()
     plans = outro_recap_plan(selector([.5]), pools, lookup, [26], "Find your next movie.")
-    assert len(plans[0]) == 2
-    assert [cut["duration"] for cut in plans[0]] == [13, 13]
-    assert [cut["freeze"] for cut in plans[0]] == [5, 5]
+    assert len(plans[0]) == 4
+    assert {cut["film_index"] for cut in plans[0]} == {0, 1}
+    assert [cut["duration"] for cut in plans[0]] == [6.5]*4
+    assert all(cut["freeze"] == 0 for cut in plans[0])

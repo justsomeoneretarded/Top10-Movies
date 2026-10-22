@@ -22,7 +22,7 @@ from .core import (
     voice_reference,
     write_srt,
 )
-from .timing import DurationSpec, trailer_budget, workflow_duration
+from .timing import DurationSpec, final_tempo, trailer_budget, workflow_duration
 from .video_settings import (
     choose_output_size,
     download_ceiling,
@@ -34,6 +34,12 @@ from .video_settings import (
 COLD_OPEN_SECONDS = 5.0
 REVIEW_PREVIEW_SECONDS = 3.5
 INTRO_TARGET_SECONDS = 8.0
+
+
+def note_visual_beat(selector, seconds, *, still=False):
+    record = getattr(selector, "note_visual_beat", None)
+    if callable(record):
+        record(seconds, still=still)
 
 
 def refine_intro_timing(writer, title, brief, films, script, speech, speaker_factory):
@@ -395,6 +401,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                  REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
                 for i, section in enumerate(script["sections"]) if section["kind"] == "film"}
     lengths = {coordinates: duration(audio) for coordinates, audio in speech.items()}
+    planned_seconds = (sum(lengths.values())+sum(preview["duration"] for preview in previews.values())
+                       +sum(card["duration"] for card in ending_cards.values() if card)
+                       +sum(beat["end"]-beat["start"] for beat in beats.values() if beat)
+                       +COLD_OPEN_SECONDS+duration(cta_audio))
+    selector.playback_speed = final_tempo(planned_seconds, spec)
     boundary, fraction = subscription_boundary(script["sections"], lengths,
         {i: preview["duration"] + (beats[i]["end"]-beats[i]["start"] if beats.get(i) else 0)
             + (ending_cards[script["sections"][i]["film"]]["duration"] if ending_cards.get(script["sections"][i]["film"]) else 0)
@@ -428,7 +439,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         path = work / f"part-{len(parts):03}.mp4"
         try:
             trailer_video(source, shot["start"], shot["duration"], path, muted=shot["muted"],
-                          still=bool(shot.get("still", False)))
+                          still=bool(shot.get("still", False)), still_motion="zoom_in" if shot.get("still") else None)
         except (PipelineError, OSError, RuntimeError, ValueError):
             if source == trailers[film_index]:
                 raise
@@ -436,13 +447,14 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                     title+". "+brief, shot["duration"], action, dialogue=dialogue), "film_index": film_index}
             source = Path(shot["source"])
             trailer_video(source, shot["start"], shot["duration"], path, muted=shot["muted"],
-                          still=bool(shot.get("still", False)))
+                          still=bool(shot.get("still", False)), still_motion="zoom_in" if shot.get("still") else None)
         seconds = duration(path)
         timeline.append({"start": offset, "duration": seconds, "type": "cold-open", "film": films[film_index]["title"],
                          "source_start": shot["start"], "shots": [shot], "narration": False})
         parts.append(path)
         used_video_sources.add(str(source))
         offset += seconds
+        note_visual_beat(selector, seconds, still=bool(shot.get("still")))
     for section_index, section in enumerate(script["sections"]):
         film_index = section["film"]
         film = films[film_index]
@@ -460,7 +472,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             try:
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
-                              still=bool(preview.get("still", False)))
+                              still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None)
             except (PipelineError, OSError, RuntimeError, ValueError):
                 if source == trailer:
                     raise
@@ -469,13 +481,14 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 source = Path(preview["source"])
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
-                              still=bool(preview.get("still", False)))
+                              still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None)
             seconds = duration(path)
             timeline.append({"start": offset, "duration": seconds, "type": "review-preview", "film": film["title"],
                              "source_start": preview["start"], "shots": [preview], "narration": False})
             parts.append(path)
             used_video_sources.add(str(source))
             offset += seconds
+            note_visual_beat(selector, seconds, still=bool(preview.get("still")))
         montage = None
         if section["kind"] == "intro":
             intro_sources = best_intro_sources(selector, pools, shot_lookup, title+". "+brief, action)
@@ -550,6 +563,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 parts.append(path)
                 used_video_sources.add(str(source))
                 offset += seconds
+                note_visual_beat(selector, seconds, still=True)
     del selector
     gc.collect()
     print("Mixing and exporting final video", flush=True)

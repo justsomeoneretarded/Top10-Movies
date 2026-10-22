@@ -19,6 +19,28 @@ WIDTH, HEIGHT, FPS = 1280, 720, 30
 LOSSLESS_AUDIO = ("-ar", "48000", "-ac", "2", "-channel_layout", "stereo",
                   "-c:a", "alac", "-sample_fmt", "s32p")
 AUDIO_ALIGNMENT_TOLERANCE = .12
+FOOTAGE_GRADE = "eq=contrast=1.015:saturation=1.015"
+
+
+def _hold_motion(frames: int, live_frames: int, width: int, height: int, style: str) -> str:
+    """Move only the frozen portion, by at most 3.5%, without altering time."""
+    seconds = (frames-live_frames)/FPS
+    if seconds < 1.5:
+        return "null"  # A tiny timing hold should not turn into a quick zoom.
+    amount = min(.035, seconds*.012)
+    if live_frames:
+        # A trailing freeze must start at the moving footage's existing framing.
+        style = "zoom_in"
+    progress = f"min(1,max(0,(on-{live_frames})/{max(1, frames-live_frames-1)}))"
+    zoom = f"{1+amount}-{amount}*{progress}" if style == "zoom_out" else f"1+{amount}*{progress}"
+    x, y = "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"
+    if style == "pan_left":
+        zoom = str(1+amount)
+        x = f"(iw-iw/zoom)*(0.7-0.4*{progress})"
+    # With a trailing hold the moving footage stays at its original framing.
+    if live_frames:
+        zoom = f"if(lt(on,{live_frames}),1,{zoom})"
+    return f"zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s={width}x{height}:fps={FPS}"
 
 
 def font(size: int):
@@ -145,6 +167,8 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
             continue
         out = work / f"shot-{index:03}.mp4"
         filters = f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1,fps={FPS}"
+        if not shot.get("image") and not shot.get("animation"):
+            filters += ","+FOOTAGE_GRADE
         hold_frames = min(max(0, round(shot.get("freeze", 0)*FPS)), max(0, frames-1))
         if shot.get("still"):
             filters += f",trim=end_frame=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop={frames+1}"
@@ -154,6 +178,9 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
             # A selected window can approach the source's last decoded frame. Hold
             # that last picture to cover narration instead of shortening the export.
             filters += f",setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop={frames+1}"
+        if (shot.get("still") or hold_frames) and not shot.get("animation"):
+            live_frames = 0 if shot.get("still") else frames-hold_frames
+            filters += ","+_hold_motion(frames, live_frames, width, height, shot.get("still_motion", "zoom_in"))
         if shot.get("animation"):
             inputs = ["-stream_loop", "-1", "-i", shot["source"]]
         elif shot.get("image"):
@@ -193,7 +220,7 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
 
 def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
                   label: Path | None = None, label_seconds: float = 3.5, muted: bool = False,
-                  still: bool = False):
+                  still: bool = False, still_motion: str | None = None):
     """A narration-free preview, optionally carrying the animated rank introduction."""
     frames = max(FPS, round(seconds * FPS))
     actual = frames / FPS
@@ -207,10 +234,11 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
         audio_index = 1
         label_index = 2
     hold = "trim=end_frame=1,setpts=PTS-STARTPTS," if still else ""
+    motion = _hold_motion(frames, 0, width, height, still_motion)+"," if still and still_motion else ""
     graph = (
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
-        f"crop={width}:{height},setsar=1,setpts=PTS-STARTPTS,fps={FPS},"
-        f"{hold}tpad=stop_mode=clone:stop={frames},setpts=N/({FPS}*TB)[v];"
+        f"crop={width}:{height},setsar=1,{FOOTAGE_GRADE},setpts=PTS-STARTPTS,fps={FPS},"
+        f"{hold}tpad=stop_mode=clone:stop={frames},{motion}setpts=N/({FPS}*TB)[v];"
         f"[{audio_index}:a]asetpts=PTS-STARTPTS,afade=t=in:d=0.08,"
         f"afade=t=out:st={max(0,actual-0.15)}:d=0.15,loudnorm=I=-18:TP=-2:LRA=9,apad[a]"
     )

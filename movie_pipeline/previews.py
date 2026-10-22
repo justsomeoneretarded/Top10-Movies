@@ -9,7 +9,13 @@ import math
 from pathlib import Path
 
 from .core import PipelineError
-from .shots import duration, frame_text, get_frame, matches_title_card
+from .shots import (
+    duration,
+    frame_text,
+    get_frame,
+    matches_title_card,
+    moving_limit,
+)
 
 FPS = 30
 
@@ -278,12 +284,11 @@ def cold_open_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, lis
 
 def outro_recap_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, list],
                      paragraph_seconds: list[float], text: str, action: bool = False) -> list[list[dict]]:
-    """Revisit at most two titles calmly across the entire closing narration.
+    """Revisit at most two titles in calm beats no longer than seven seconds.
 
-    Typical 14–20 second outros get two 7–10 second visual beats. Shorter
-    closings stay on one source, and longer closings keep the same two titles
-    rather than adding repetitive cuts. Paragraph boundaries advance within
-    the current shot; they do not restart the scene or force a new movie.
+    Paragraph boundaries advance within the current shot rather than restart
+    it. Longer outros use more fresh windows, not extended motion or a regular
+    play/freeze pattern. The final three-second ending hold is added separately.
 
     ``action`` is accepted for call-site consistency, but the outro deliberately
     favors stable, lower-motion imagery even for an action countdown.
@@ -296,8 +301,9 @@ def outro_recap_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, l
     if not available:
         raise PipelineError("No footage is available for the closing recap.")
     count = 2 if len(available) >= 2 and total_frames >= 14 * FPS else 1
-    first_frames = math.ceil(total_frames / count)
-    sample_seconds = min(8.0, first_frames / FPS)
+    beat_count = max(1, math.ceil(total_frames / (moving_limit(selector) * FPS)))
+    first_frames = math.ceil(total_frames / beat_count)
+    sample_seconds = first_frames / FPS
     choices = []
     for film_index, pool in available:
         score, preview = _best_preview(selector, pool, shot_lookup, text, sample_seconds, False, None)
@@ -305,17 +311,15 @@ def outro_recap_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, l
     choices.sort(key=lambda value: value[:2], reverse=True)
     beats = []
     remaining = total_frames
-    for _, _, film_index, preview in choices[:count]:
+    active = choices[:count]
+    while remaining:
+        _, _, film_index, _ = active[len(beats) % len(active)]
         frames = min(first_frames, remaining)
-        shots = shot_lookup.get(preview["source"], [])
-        enclosing = [_number(shot.get("end")) - preview["start"] for shot in shots
-                     if isinstance(shot, dict) and _number(shot.get("start")) <= preview["start"] < _number(shot.get("end"))]
-        # Hold the last frame of a short clean source shot instead of cycling to
-        # another scene just to fill a few seconds of the closing sentence.
-        playable = max(enclosing, default=sample_seconds)
+        pool = next(pool for index, pool in available if index == film_index)
+        _, preview = _best_preview(selector, pool, shot_lookup, text, frames/FPS, False, None)
         if preview.get("still"):
-            playable = 1/FPS
-        live_frames = min(frames, max(1, round(playable * FPS)))
+            frames = min(frames, 4 * FPS)
+        live_frames = 1 if preview.get("still") else frames
         beats.append({"source": preview["source"], "start": preview["start"],
                       "film_index": film_index, "frames": frames, "live_frames": live_frames})
         _reserve(selector,preview["source"],preview["start"],live_frames/FPS,"outro-recap")

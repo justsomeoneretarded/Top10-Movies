@@ -36,8 +36,8 @@ def test_entirely_unseen_scenes_win_before_replaying_high_scoring_hero():
     source = Path("movie.mp4")
     shots = scenes(0,20,40)
     paragraphs = [selected.choose(source,shots,"The story continues.",6,False) for _ in range(3)]
-    assert [cuts[0]["start"] for cuts in paragraphs] == [0,20,40]
-    assert all(len(cuts) == 1 for cuts in paragraphs)
+    assert [int(cuts[0]["start"]//20) for cuts in paragraphs] == [0,1,2]
+    assert all(cut["duration"] <= 7 for cuts in paragraphs for cut in cuts)
 
 
 def test_separate_paragraphs_advance_within_a_long_scene():
@@ -79,10 +79,10 @@ def test_exhausted_short_footage_reuses_spaced_scenes_without_rapid_cuts():
     source = Path("movie.mp4")
     shots = scenes(0,20)
     plans = [selected.choose(source,shots,"The story.",8,False) for _ in range(6)]
-    starts = [plan[0]["start"] for plan in plans]
+    starts = [cut["start"] for plan in plans for cut in plan]
     assert all(first != second for first,second in pairwise(starts))
     assert all(sum(cut["duration"] for cut in plan) == 8 for plan in plans)
-    assert all(cut["duration"] >= 4.5 for plan in plans for cut in plan)
+    assert all(3 <= cut["duration"] <= 7 for plan in plans for cut in plan)
     assert any(cut["visual_reason"] == "spaced-source-reuse" for plan in plans for cut in plan)
 
 

@@ -16,6 +16,21 @@ from PIL import Image
 
 from .core import PipelineError, duration, save_json
 
+MAX_MOVING_SECONDS = 7.0
+HOLD_COOLDOWN_SECONDS = 20.0
+HOLD_COOLDOWN_BEATS = 3
+
+
+def moving_limit(selector) -> float:
+    """Keep moving excerpts near seven seconds after a global tempo correction."""
+    try:
+        speed = float(getattr(selector, "playback_speed", 1))
+    except (TypeError, ValueError):
+        speed = 1.0
+    if not math.isfinite(speed):
+        speed = 1.0
+    return MAX_MOVING_SECONDS if speed >= 1 else MAX_MOVING_SECONDS*max(.85, speed)-.04
+
 
 def frame_text(image: Image.Image) -> str:
     """Optional bounded OCR of a candidate title card; no service or new AI model."""
@@ -206,6 +221,14 @@ class ShotSelector:
         values = getattr(self,"cards",{}).get(str(path),[])
         return values[index] if index < len(values) else None
 
+    def note_visual_beat(self, seconds: float, *, still: bool = False):
+        """Include displayed previews/cards in the hold cooldown, in edit order."""
+        if still:
+            self._moving_beats_since_hold = self._moving_seconds_since_hold = 0
+        else:
+            self._moving_beats_since_hold = getattr(self, "_moving_beats_since_hold", HOLD_COOLDOWN_BEATS)+1
+            self._moving_seconds_since_hold = getattr(self, "_moving_seconds_since_hold", HOLD_COOLDOWN_SECONDS)+seconds
+
     def relevance(self, path: Path, text: str):
         inputs = self.processor(text=[text], return_tensors="pt", padding=True, truncation=True, max_length=77)
         with self.torch.inference_mode():
@@ -330,15 +353,18 @@ class ShotSelector:
         chosen = []
         last_index = self.last_shots.get(str(path), -1)
         explicit_limit = maximum_shot is not None
-        maximum_shot = maximum_shot or (7.5 if action else 8.5)
+        maximum_shot = min(moving_limit(self), maximum_shot or MAX_MOVING_SECONDS)
         allowed = [i for i in range(len(shots)) if self.card_kind(path,i) is None] or list(range(len(shots)))
         actor_names = getattr(self, "people", {}).get(str(path), [])
         about_person = bool(re.search(r"\b(actor|actress|performance|plays|portrays|starring|character)\b", text, re.IGNORECASE)) or any(name.casefold() in text.casefold() for name in actor_names)
         flags = getattr(self, "faces", {}).get(str(path), [False]*len(shots))
-        held = getattr(self, "held", set())
-        self.held = held
+        moving_beats = getattr(self, "_moving_beats_since_hold", HOLD_COOLDOWN_BEATS)
+        moving_seconds = getattr(self, "_moving_seconds_since_hold", HOLD_COOLDOWN_SECONDS)
+        hold_count = getattr(self, "_editorial_hold_count", 0)
         relevance_cache = {}
         while remaining > 0.01:
+            hold_ready = (not explicit_limit and moving_beats >= HOLD_COOLDOWN_BEATS
+                          and moving_seconds >= HOLD_COOLDOWN_SECONDS)
             position = min(len(sentences)-1, int(np.searchsorted(weights, (seconds-remaining)/seconds * weights[-1], side="right")))
             if position not in relevance_cache:
                 try:
@@ -352,7 +378,8 @@ class ShotSelector:
                     continue
                 used = self.uses.get((str(path), index), 0)
                 raw_start, raw_end = float(shot["start"]), float(shot["end"])
-                fragments = [(low,high) for low,high in self.unused_windows(path,raw_start,raw_end) if high-low >= .75]
+                fragments = [(low,high) for low,high in self.unused_windows(path,raw_start,raw_end)
+                             if high-low >= min(3,remaining)]
                 # Exhaustion is allowed. Revisit the least-recently seen interval rather
                 # than resetting the semantic hero at every new narration paragraph.
                 for start, end in fragments or [(raw_start,raw_end)]:
@@ -363,44 +390,67 @@ class ShotSelector:
                     tier = 2 if virgin and visual_fresh else (1 if unseen and not virgin else 0)
                     score = float(relevance[index]) - used*.04
                     score += min(available,maximum_shot)*.035-min(shot["motion"],60)/600
-                    if about_person and str(path) not in held and flags[index]:
+                    if about_person and hold_ready and flags[index]:
                         score += .22
                     score -= self.reuse_penalty(path,start,min(remaining,available,maximum_shot))
                     score -= self.visual_reuse_penalty(path,start,min(remaining,available,maximum_shot))
                     if index == last_index:
                         score -= .35
                     candidates.append((tier,score,-index,index,start,end,not unseen))
+            # When no hold is due, prefer readable source windows over tiny
+            # fresh fragments, rather than padding every short shot with a freeze.
+            readable = [row for row in candidates if row[5]-row[4] >= min(3, remaining)]
+            if readable and not hold_ready:
+                candidates = readable
+            if all(row[-1] for row in candidates) and any(row[3] != last_index for row in candidates):
+                candidates = [row for row in candidates if row[3] != last_index]
             _tier,_score,_order,index,start,end,reused = max(candidates,key=lambda row: row[:3])
             shot = shots[index]
             available = max(.1,end-start)
-            portrait = about_person and str(path) not in held and flags[index] and remaining >= 3
-            # After genuine exhaustion, a longer calm beat spaces necessary reuse.
+            portrait = about_person and hold_ready and flags[index] and remaining >= 3
+            detail = (hold_ready and not portrait and moving_beats >= 4 and moving_seconds >= 24
+                      and shot["motion"] <= 18 and remaining >= 3)
+            still = portrait or detail
+            if still and 4 < remaining < 6.2:
+                portrait = detail = still = False
             beat_limit = maximum_shot
-            if reused and not explicit_limit:
-                beat_limit = 10.5 if action else 11.5
-            freeze = 0 if portrait else max(0,min(4.5,remaining)-available)
-            if reused:
-                freeze = max(freeze,min(2.5,max(0,remaining-available)))
-            length = min(remaining,3.2 if portrait else available+freeze,beat_limit)
-            if 0 < remaining-length < 2.5:
-                freeze += remaining-length
-                length = remaining
+            # Balance a short tail into two readable beats instead of extending
+            # a moving excerpt beyond seven seconds or adding an extra freeze.
+            if remaining > beat_limit and remaining-beat_limit < 3:
+                beat_limit = remaining/2
+            freeze = 0 if still or not hold_ready else max(0, min(4,remaining)-available)
+            hold_length = remaining if remaining <= 4 else 3.2
+            length = min(remaining, hold_length if still else available+freeze, beat_limit)
+            if not still and hold_ready and 0 < remaining-length < 2.5 and remaining <= maximum_shot:
+                extra = min(remaining-length, max(0, 4-freeze))
+                freeze += extra
+                length += extra
             freeze = min(freeze,max(0,length-.1))
-            chosen_start = (start+end)/2 if portrait else start
-            chosen.append({"start":chosen_start,"duration":length,"freeze":freeze,"still":bool(portrait),
-                           "visual_reason":"portrait-hold" if portrait else ("spaced-source-reuse" if reused else "fresh-script-match")})
+            chosen_start = (start+end)/2 if still else start
+            cut = {"start":chosen_start,"duration":length,"freeze":freeze,"still":bool(still),
+                   "visual_reason":"portrait-hold" if portrait else ("detail-hold" if detail else
+                        ("spaced-source-reuse" if reused else "fresh-script-match"))}
+            if still or freeze:
+                cut["still_motion"] = ("zoom_in", "zoom_out", "zoom_in", "pan_left", "zoom_out")[hold_count % 5]
+                hold_count += 1
+                moving_beats = moving_seconds = 0
+            else:
+                moving_beats += 1
+                moving_seconds += length
+            chosen.append(cut)
             # A portrait hold consumes that visual beat; motion reserves just its
             # live source span, leaving the rest of a long scene available later.
-            self.reserve(path,start if portrait else chosen_start,
-                         available if portrait else max(.1,min(available,length-freeze)),
-                         "portrait" if portrait else "narration")
-            if portrait:
-                held.add(str(path))
+            self.reserve(path,start if still else chosen_start,
+                         available if still else max(.1,min(available,length-freeze)),
+                         "portrait" if portrait else ("detail-hold" if detail else "narration"))
             self.cut_count += 1
             self.uses[(str(path), index)] = self.uses.get((str(path), index), 0)+1
             remaining -= length
             last_index = index
         self.last_shots[str(path)] = last_index
+        self._moving_beats_since_hold = moving_beats
+        self._moving_seconds_since_hold = moving_seconds
+        self._editorial_hold_count = hold_count
         return chosen
 
 
