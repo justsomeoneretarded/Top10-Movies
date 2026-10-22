@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import shutil
 import tempfile
 import wave
 from pathlib import Path
@@ -150,9 +149,14 @@ def embed_chapters(path: Path, chapters: list[dict], total: float, work: Path):
     target.replace(path)
 
 
-def concat_file(paths: list[Path], listing: Path):
+def concat_file(paths: list[Path], listing: Path, durations: list[float] | None = None):
     # Paths are generated internally; apostrophe escaping follows FFmpeg concat syntax.
-    listing.write_text("".join("file '" + str(p.resolve()).replace("'", "'\\''") + "'\n" for p in paths))
+    entries = []
+    for index, path in enumerate(paths):
+        entries.append("file '" + str(path.resolve()).replace("'", "'\\''") + "'\n")
+        if durations is not None:
+            entries.append(f"duration {durations[index]:.9f}\n")
+    listing.write_text("".join(entries))
 
 
 def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, label: Path | None, work: Path, *, label_seconds: float = 3.5):
@@ -305,9 +309,9 @@ def _strict_audio_decode(path: Path):
     ffmpeg("-xerror", "-err_detect", "explode", "-i", path, "-map", "0:a:0", "-vn", "-f", "null", "-")
 
 
-def validate_audio_video_duration(path: Path, expected_seconds: float | None = None) -> float:
+def validate_audio_video_duration(path: Path, expected_seconds: float | None = None, *, metadata: dict | None = None) -> float:
     """Require complete, aligned audio/video streams, including the ending hold."""
-    metadata = probe(path)
+    metadata = probe(path) if metadata is None else metadata
     video = next((stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "video"), None)
     audio = next((stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "audio"), None)
     if video is None or audio is None:
@@ -367,64 +371,79 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
 
     record("normalizing")
     listing = work / "final-concat.txt"
-    combined = work / "combined.mp4"
-    normalization = Path(tempfile.mkdtemp(prefix="audio-normalized-", dir=work))
-    try:
-        normalized = _normalized_audio_parts(parts, normalization)
-        record("concatenating", normalized_part_count=sum(Path(old) != new for old, new in zip(parts, normalized)))
-        concat_file(normalized, listing)
-        ffmpeg("-xerror", "-f", "concat", "-safe", "0", "-i", listing, "-c", "copy", combined)
-    except Exception as exc:
-        failed(exc)
-        raise
-    finally:
-        shutil.rmtree(normalization, ignore_errors=True)
-    try:
-        record("checking-concatenated-audio", concatenated_strict_decode="running")
-        _strict_audio_decode(combined)
-        record("checking-concatenated-duration", concatenated_strict_decode="passed")
-        original = validate_audio_video_duration(combined)
-    except Exception as exc:
-        failed(exc)
-        raise
-    speed = final_tempo(original, spec, ending_hold)
-    if not spec.automatic and not spec.minimum <= original/speed+ending_hold <= spec.maximum:
-        print("Keeping the complete video at a natural pace outside the soft runtime target.", flush=True)
-    spoken_duration = original / speed
-    final_duration = spoken_duration + ending_hold
-    music = work / "music.wav"
-    music_bed(music, final_duration + 1, action)
-    graph = (
-        f"[0:v]setpts=(PTS-STARTPTS)/{speed},fps={FPS},tpad=stop_mode=clone:stop_duration={ending_hold},fade=t=out:st={final_duration-1.2}:d=1.2[v];"
-        # Honor timestamp-declared silence before converting the audio clock to
-        # sample counts. Stream-looped AAC can contain small gaps between valid
-        # packets; dropping those gaps would pull later speech forward. Strict
-        # decoding and duration checks above already reject missing/corrupt audio.
-        f"[0:a]asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0:min_hard_comp=0.0001,atempo={speed},"
-        f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
-        "[1:a]volume=0.13[bed];"
-        "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
-        f"[voice][duck]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
-    )
-    try:
-        record("encoding", planned_duration=final_duration)
-        ffmpeg("-xerror", "-err_detect", "explode", "-i", combined, "-i", music, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
-               "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS,
-               "-threads", "2", "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", final_duration, output)
-        record("checking-final-audio", final_strict_decode="running")
-        _strict_audio_decode(output)
-        metadata = probe(output)
-        record("checking-final-duration", final_strict_decode="passed", final_stream_durations={
-            stream["codec_type"]: stream.get("duration") for stream in metadata.get("streams", [])
-            if stream.get("codec_type") in ("audio", "video")})
-        actual_duration = validate_audio_video_duration(output, final_duration)
-    except Exception as exc:
-        failed(exc)
-        raise
-    record("complete", status="passed", final_duration=actual_duration)
-    music.unlink(missing_ok=True)
-    combined.unlink(missing_ok=True)
-    return actual_duration, speed
+    # Independent H.264 encodes may use different B-frame reorder delays.
+    # Stream-copying their packets into one MP4 can produce backwards DTS.
+    # Decode the parts sequentially in the existing final encode instead;
+    # keep only the compatible, lossless audio joined before that encode.
+    with tempfile.TemporaryDirectory(prefix="audio-normalized-", dir=work) as directory:
+        normalization = Path(directory)
+        combined_audio = normalization / "joined-audio.m4a"
+        try:
+            normalized = _normalized_audio_parts(parts, normalization)
+            lengths = []
+            for path in normalized:
+                metadata = probe(path)
+                validate_audio_video_duration(path, metadata=metadata)
+                # Container durations round to milliseconds; accumulating those
+                # across many parts can shift captions and narration. Use the
+                # precise stream ends. An audio tail or VFR video track can
+                # legitimately extend a frame beyond the other stream's header.
+                lengths.append(max(float(stream["duration"])+max(0, float(stream.get("start_time", 0)))
+                                   for stream in metadata["streams"] if stream["codec_type"] in {"audio", "video"}))
+            original = sum(lengths)
+            record("concatenating", assembly_mode="direct-video-encode",
+                   normalized_part_count=sum(Path(old) != new for old, new in zip(parts, normalized)),
+                   part_durations=lengths)
+            concat_file(normalized, listing, durations=lengths)
+            ffmpeg("-xerror", "-f", "concat", "-safe", "0", "-i", listing,
+                   "-map", "0:a:0", "-vn", "-c:a", "copy", combined_audio)
+            record("checking-concatenated-audio", concatenated_strict_decode="running")
+            _strict_audio_decode(combined_audio)
+            record("checking-concatenated-duration", concatenated_strict_decode="passed")
+            metadata = probe(combined_audio)
+            audio = next(stream for stream in metadata["streams"] if stream["codec_type"] == "audio")
+            audio_start, audio_seconds = float(audio.get("start_time", 0)), float(audio["duration"])
+            if (not all(math.isfinite(value) for value in (audio_start, audio_seconds))
+                    or abs(audio_start) > AUDIO_ALIGNMENT_TOLERANCE
+                    or abs(audio_start+audio_seconds-original) > AUDIO_ALIGNMENT_TOLERANCE):
+                raise PipelineError("Joined narration does not cover the complete planned edit.")
+            record("timing", joined_audio_seconds=audio_seconds)
+            speed = final_tempo(original, spec, ending_hold)
+            if not spec.automatic and not spec.minimum <= original/speed+ending_hold <= spec.maximum:
+                print("Keeping the complete video at a natural pace outside the soft runtime target.", flush=True)
+            final_duration = original/speed + ending_hold
+            music = work / "music.wav"
+            music_bed(music, final_duration + 1, action)
+            graph = (
+                # Honor legitimate display gaps first, then rebuild the clock.
+                # Packet reorder delays never become final output timestamps.
+                f"[0:v]fps=fps={FPS}:start_time=0,setpts=N/({FPS}*TB*{speed}),fps={FPS},tpad=stop_mode=clone:stop_duration={ending_hold},fade=t=out:st={final_duration-1.2}:d=1.2[v];"
+                # Preserve declared silence before changing the sample clock.
+                f"[1:a]asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0:min_hard_comp=0.0001,atempo={speed},"
+                f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
+                "[2:a]volume=0.13[bed];"
+                "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
+                f"[voice][duck]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
+            )
+            record("encoding", planned_duration=final_duration)
+            ffmpeg("-xerror", "-err_detect", "explode", "-f", "concat", "-safe", "0", "-i", listing,
+                   "-i", combined_audio, "-i", music, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+                   "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS,
+                   "-threads", "2", "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", final_duration, output)
+            record("checking-final-audio", final_strict_decode="running")
+            _strict_audio_decode(output)
+            metadata = probe(output)
+            record("checking-final-duration", final_strict_decode="passed", final_stream_durations={
+                stream["codec_type"]: stream.get("duration") for stream in metadata.get("streams", [])
+                if stream.get("codec_type") in ("audio", "video")})
+            actual_duration = validate_audio_video_duration(output, final_duration)
+        except Exception as exc:
+            failed(exc)
+            raise
+        record("complete", status="passed", final_duration=actual_duration)
+        music.unlink(missing_ok=True)
+        return actual_duration, speed
+
 
 
 def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str], output: Path, **options):
