@@ -77,15 +77,34 @@ def add_cta_animation(video: Path, text: str, cues: list[dict], work: Path):
     visible_start = max(0, times[0]-.4)
     visible_end = min(seconds, max(times[-1]+1.2, visible_start+3.5))
     graph = ("[1:v][0:v]scale2ref=w=iw*0.72:h=ow*130/900[ui][base];"
-             f"[base][ui]overlay=(W-w)/2:H-h-H*0.045:shortest=1:enable='between(t,{visible_start},{visible_end})'[v];"
-             "[0:a][2:a]amix=inputs=2:duration=first:normalize=0[a]")
+             f"[base][ui]overlay=(W-w)/2:H-h-H*0.045:shortest=1:enable='between(t,{visible_start},{visible_end})'[v]")
+    mixed, silent = work / "mixed.wav", work / "interaction-video.mp4"
     try:
-        ffmpeg("-i", video, "-framerate", FPS, "-i", work / "ui-%04d.png", "-i", sound,
+        # FFmpeg 6 amix duration=first can end early with unequal input packet
+        # sizes. Both inputs cover the full edit: drain both and mix independently,
+        # then mux it without -shortest or an output -t. Never conceal missing
+        # samples by padding the result after the fact.
+        audio_graph = (
+            "[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=N/SR/TB[voice];"
+            "[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=N/SR/TB[sfx];"
+            "[voice][sfx]amix=inputs=2:duration=longest:normalize=0[a]"
+        )
+        ffmpeg("-i", video, "-i", sound, "-filter_complex", audio_graph,
+               "-map", "[a]", "-vn", "-c:a", "pcm_s24le", mixed)
+        ffmpeg("-i", video, "-framerate", FPS, "-i", work / "ui-%04d.png",
                "-filter_complex_threads", "1", "-filter_complex", graph,
-               "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-               "-pix_fmt", "yuv420p", "-threads", "2", *LOSSLESS_AUDIO, "-t", seconds, temporary)
+               "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+               "-pix_fmt", "yuv420p", "-threads", "2", "-frames:v", round(seconds*FPS), silent)
+        ffmpeg("-i", silent, "-i", mixed, "-map", "0:v", "-map", "1:a",
+               "-c:v", "copy", *LOSSLESS_AUDIO, temporary)
+        from .render import _strict_audio_decode, validate_audio_video_duration
+        _strict_audio_decode(temporary)
+        validate_audio_video_duration(temporary, seconds)
         temporary.replace(video)
     finally:
         for image in work.glob("ui-*.png"):
             image.unlink(missing_ok=True)
         sound.unlink(missing_ok=True)
+        mixed.unlink(missing_ok=True)
+        silent.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)

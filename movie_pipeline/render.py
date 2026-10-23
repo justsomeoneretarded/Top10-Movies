@@ -405,7 +405,7 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
                 f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
                 "[2:a]volume=0.38[bed];"
                 "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
-                f"[voice][duck]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
+                f"[voice][duck]amix=inputs=2:duration=longest:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
             )
             record("encoding", planned_duration=final_duration, music_theme=music_theme or ("action" if action else "drama"))
             for source, name in ((combined_audio, "edit-without-music.wav"), (music, "background-only.wav")):

@@ -287,3 +287,5 @@ Named cast mentions may use the matching TMDB profile image, composed without cr
 The midroll and spoken outro request include a visible like/subscribe/bell interaction, with short synchronized UI sounds. Short, factual provider lines collapse ad-tier duplicates such as Prime Video / Prime Video with Ads. Script prompts and cleanup remove forced stock phrases, repeated spoiler reassurance and empty wrap-up language.
 
 A separate `audio-inspection` artifact contains bounded background-only and edit-without-music samples plus audio checks. It expires after 48 hours. Temporary audio samples are removed before saving production caches; model and Python caches are unchanged.
+
+The CTA mixer renders its full audio separately from the animated image sequence. Both mixing inputs cover the complete section and are drained with `amix duration=longest`, avoiding FFmpeg 6's early EOF with unequal input packet sizes. The mux does not hide missing samples with padding; strict audio/video duration checks run before replacement. The final music mix also drains both inputs before the existing explicit output boundary.
