@@ -148,7 +148,7 @@ jobs:
               manifest.append({'file': f'frames/{name}', 'source_seconds': time})
 
           if any(stream.get('codec_type') == 'audio' for stream in metadata.get('streams', [])):
-              for name, start in [('opening-audio.wav', 0), ('ending-audio.wav', max(0., seconds - 20))]:
+              for name, start in [('opening-audio.wav', 0), ('middle-audio.wav', seconds * .5), ('ending-audio.wav', max(0., seconds - 20))]:
                   ffmpeg('-ss', start, '-i', video, '-t', min(20, seconds - start),
                          '-vn', '-ar', 16000, '-ac', 1, '-c:a', 'pcm_s16le', output / name)
 
