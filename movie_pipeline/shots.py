@@ -16,13 +16,13 @@ from PIL import Image
 
 from .core import PipelineError, duration, save_json
 
-MAX_MOVING_SECONDS = 7.0
-HOLD_COOLDOWN_SECONDS = 20.0
-HOLD_COOLDOWN_BEATS = 3
+MAX_MOVING_SECONDS = 12.0
+HOLD_COOLDOWN_SECONDS = 14.0
+HOLD_COOLDOWN_BEATS = 2
 
 
 def moving_limit(selector) -> float:
-    """Keep moving excerpts near seven seconds after a global tempo correction."""
+    """Keep moving excerpts near twelve seconds after a global tempo correction."""
     try:
         speed = float(getattr(selector, "playback_speed", 1))
     except (TypeError, ValueError):
@@ -75,12 +75,13 @@ def scene_hash(image: Image.Image) -> int | None:
 
 def analyse(path: Path, cache: Path) -> list[dict]:
     """Sample cuts and motion at 2fps; preserve source timestamps, excluding end slates."""
-    cache = cache.with_name(cache.stem + ".calm-v2.json")
+    cache = cache.with_name(cache.stem + ".calm-v3.json")
     if cache.exists():
         return json.loads(cache.read_text())
     cap = cv2.VideoCapture(str(path))
     length = duration(path)
     previous = None
+    previous_hist = None
     boundaries = [max(2.0, length * 0.04)]
     samples = []
     for tick in np.arange(boundaries[0], length * 0.90, 0.5):
@@ -90,17 +91,23 @@ def analyse(path: Path, cache: Path) -> list[dict]:
             continue
         gray = cv2.cvtColor(cv2.resize(frame, (160, 90)), cv2.COLOR_BGR2GRAY)
         motion = float(np.abs(gray.astype(float) - previous.astype(float)).mean()) if previous is not None else 0
-        if motion > 38 and tick - boundaries[-1] >= 1.5:
+        hsv = cv2.cvtColor(cv2.resize(frame, (160, 90)), cv2.COLOR_BGR2HSV)
+        histogram = cv2.calcHist([hsv], [0, 1], None, [24, 16], [0, 180, 0, 256])
+        cv2.normalize(histogram, histogram)
+        correlation = cv2.compareHist(previous_hist, histogram, cv2.HISTCMP_CORREL) if previous_hist is not None else 1
+        # Large movement alone is not a scene cut. Require an appearance change.
+        if motion > 38 and correlation < .65 and tick - boundaries[-1] >= 1.5:
             boundaries.append(float(tick))
         samples.append((float(tick), motion, float(gray.mean()), float(gray.std())))
         previous = gray
+        previous_hist = histogram
     boundaries.append(length * 0.90)
     cap.release()
     shots = []
     for start, end in pairwise(boundaries):
         # Long uncut shots are subdivided to provide useful choices.
-        for point in np.arange(start, end - 1.2, 8.0):
-            stop = min(float(point + 8.0), end)
+        for point in np.arange(start, end - 1.2, 12.0):
+            stop = min(float(point + 12.0), end)
             metrics = [s for s in samples if point <= s[0] < stop]
             if not metrics or np.mean([s[2] for s in metrics]) < 15 or np.mean([s[3] for s in metrics]) < 12:
                 continue
@@ -379,7 +386,7 @@ class ShotSelector:
                 used = self.uses.get((str(path), index), 0)
                 raw_start, raw_end = float(shot["start"]), float(shot["end"])
                 fragments = [(low,high) for low,high in self.unused_windows(path,raw_start,raw_end)
-                             if high-low >= min(3,remaining)]
+                             if high-low >= min(5,remaining)]
                 # Exhaustion is allowed. Revisit the least-recently seen interval rather
                 # than resetting the semantic hero at every new narration paragraph.
                 for start, end in fragments or [(raw_start,raw_end)]:
@@ -399,7 +406,7 @@ class ShotSelector:
                     candidates.append((tier,score,-index,index,start,end,not unseen))
             # When no hold is due, prefer readable source windows over tiny
             # fresh fragments, rather than padding every short shot with a freeze.
-            readable = [row for row in candidates if row[5]-row[4] >= min(3, remaining)]
+            readable = [row for row in candidates if row[5]-row[4] >= min(5, remaining)]
             if readable and not hold_ready:
                 candidates = readable
             if all(row[-1] for row in candidates) and any(row[3] != last_index for row in candidates):
@@ -408,21 +415,21 @@ class ShotSelector:
             shot = shots[index]
             available = max(.1,end-start)
             portrait = about_person and hold_ready and flags[index] and remaining >= 3
-            detail = (hold_ready and not portrait and moving_beats >= 4 and moving_seconds >= 24
+            detail = (hold_ready and not portrait and moving_beats >= 3 and moving_seconds >= 18
                       and shot["motion"] <= 18 and remaining >= 3)
             still = portrait or detail
-            if still and 4 < remaining < 6.2:
+            if still and 7 < remaining < 8.5:
                 portrait = detail = still = False
             beat_limit = maximum_shot
             # Balance a short tail into two readable beats instead of extending
-            # a moving excerpt beyond seven seconds or adding an extra freeze.
+            # a moving excerpt beyond twelve seconds or adding an extra freeze.
             if remaining > beat_limit and remaining-beat_limit < 3:
                 beat_limit = remaining/2
-            freeze = 0 if still or not hold_ready else max(0, min(4,remaining)-available)
-            hold_length = remaining if remaining <= 4 else 3.2
+            freeze = 0 if still or not hold_ready else max(0, min(7,remaining)-available)
+            hold_length = remaining if remaining <= 7 else 5.5
             length = min(remaining, hold_length if still else available+freeze, beat_limit)
             if not still and hold_ready and 0 < remaining-length < 2.5 and remaining <= maximum_shot:
-                extra = min(remaining-length, max(0, 4-freeze))
+                extra = min(remaining-length, max(0, 7-freeze))
                 freeze += extra
                 length += extra
             freeze = min(freeze,max(0,length-.1))

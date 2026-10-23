@@ -5,7 +5,7 @@ import os
 import re
 from pathlib import Path
 
-from .core import PipelineError, duration, ffmpeg, key
+from .core import PipelineError, duration, ffmpeg, key, run
 
 
 class Narrator:
@@ -301,3 +301,19 @@ def speech_check(expected: str, cues: list[dict]) -> dict:
 def speech_verified(expected: str, cues: list[dict]) -> bool:
     """Compatibility wrapper for callers that only need the acceptance decision."""
     return speech_check(expected, cues)["accepted"]
+
+
+def paced_take(source: Path, speed: float) -> Path:
+    """Pitch-preserving narration pacing before edit and subtitle assembly."""
+    from .render import _strict_audio_decode
+    if speed == 1:
+        return source
+    output = source.with_name(source.stem+f"-pace-v2-{speed:.3f}.wav")
+    if not output.exists():
+        filters = run(["ffmpeg", "-hide_banner", "-filters"])
+        tempo = (f"rubberband=tempo={speed}:pitch=1:formant=preserved:transients=crisp:detector=compound"
+                 if "rubberband" in filters else f"atempo={speed}")
+        ffmpeg("-i", source, "-af", f"{tempo},asetpts=N/SR/TB",
+               "-ar", "48000", "-ac", "1", "-c:a", "pcm_s24le", output)
+    _strict_audio_decode(output)
+    return output

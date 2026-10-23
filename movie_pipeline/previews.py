@@ -141,13 +141,18 @@ def _best_preview(selector, sources, shot_lookup, text, seconds, action, dialogu
             starts += [low for low,high in _unused(selector,source,start,end) if high-low >= seconds]
             if full_window and speech:
                 starts += [last + .14 for _, last in speech if start <= last + .14 <= end - seconds]
+                starts += [first - .14 for first, last in speech
+                           if start <= first-.14 <= end-seconds and last+.14 <= first-.14+seconds]
             for candidate_start in dict.fromkeys(starts):
                 still = any(candidate_start < stop and candidate_start+seconds > beginning for beginning,stop in blocked)
                 if still:
                     # A continuous short-shot fallback must never run through a
                     # detected title/logo. Hold one clean scene frame instead.
                     candidate_start = (start+end)/2
-                muted = speech is None or _overlap(candidate_start, seconds, speech)
+                muted = speech is None or any(
+                    (beginning-.12 < candidate_start < stop+.12)
+                    or (beginning-.12 < candidate_start+seconds < stop+.12)
+                    for beginning, stop in speech or [])
                 muted = muted or still
                 motion = max(0.0, min(60.0, _number(shot.get("motion")))) / 60
                 score = scores[index] * 1.25
@@ -284,7 +289,7 @@ def cold_open_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, lis
 
 def outro_recap_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, list],
                      paragraph_seconds: list[float], text: str, action: bool = False) -> list[list[dict]]:
-    """Revisit at most two titles in calm beats no longer than seven seconds.
+    """Revisit at most two titles in calm beats no longer than twelve seconds.
 
     Paragraph boundaries advance within the current shot rather than restart
     it. Longer outros use more fresh windows, not extended motion or a regular

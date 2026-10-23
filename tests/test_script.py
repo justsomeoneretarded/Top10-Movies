@@ -25,7 +25,7 @@ def test_invalid_closing_uses_bounded_fallback(draft):
     result = writer.narration("Top 5", "Action", CLOSING, {}, 35)
     assert writer.ask.call_count == 3
     assert 18 <= len(" ".join(result).split()) <= 65
-    assert "countdown" in result[0]
+    assert "like" in result[0].lower() and "subscribe" in result[0].lower()
 
 
 def test_movie_length_variation_uses_best_draft_without_aborting():
@@ -246,3 +246,11 @@ def test_editorial_repair_with_sparse_facts_never_fails_just_over_bad_draft():
     assert "Example" in " ".join(result)
     assert "fantasy" in " ".join(result)
     assert "something special" not in " ".join(result)
+
+
+def test_rank_lead_in_is_short_without_removing_the_actual_premise():
+    from movie_pipeline.script import short_rank_opening
+    assert short_rank_opening('At number 7 on our action countdown is Arrival. A translator faces an impossible choice.', 7, 'Arrival') == 'Number 7: Arrival. A translator faces an impossible choice.'
+    assert short_rank_opening('Arrival follows a translator.', 7, 'Arrival') == 'Number 7: Arrival follows a translator.'
+    original = 'A translator faces a choice in Arrival.'
+    assert short_rank_opening(original, 7, 'Arrival') == original

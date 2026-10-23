@@ -130,6 +130,8 @@ class Research:
             "genres": [g["name"] for g in details.get("genres", [])],
             "directors": [c["name"] for c in crew if c.get("job") == "Director"],
             "cast": [c["name"] for c in details.get("credits", {}).get("cast", [])[:5]],
+            "cast_profiles": [{"name": c["name"], "profile_path": c.get("profile_path", ""),
+                               "character": c.get("character", "")} for c in details.get("credits", {}).get("cast", [])[:5]],
             "status": details.get("status"), "trailers": videos,
             "year_evidence": match.get("_year_evidence", "TMDB search release date"),
             "imdb_id": match.get("_imdb_id") or details.get("imdb_id") or details.get("external_ids", {}).get("imdb_id"),

@@ -33,7 +33,7 @@ def test_us_listings_preserve_offer_types_and_do_not_leak_auth(monkeypatch, tmp_
     assert record["ads"] == ["Tubi"]
     assert record["region"] == "US" and record["status"] == "found"
     assert "US" not in availability_line(record)
-    assert "with a subscription" in availability_line(record)
+    assert availability_line(record) == "You can find it on Netflix and Hulu."
     assert "watch_availability" not in films[0]
     assert session.get.call_args.args[0] == "https://api.themoviedb.org/3/movie/1/watch/providers"
     assert session.get.call_args.kwargs["allow_redirects"] is False
@@ -93,3 +93,8 @@ def test_spoken_lines_do_not_turn_rental_into_subscription(record, expected):
     assert expected in line
     if "rent" in record or "buy" in record:
         assert "subscription" not in line
+
+
+def test_provider_variants_are_deduplicated_in_short_spoken_line():
+    assert availability_line({"subscription": ["Amazon Prime Video", "Amazon Prime Video with Ads"]}) == "You can find it on Prime Video."
+    assert availability_line({"subscription": ["Netflix", "Netflix Standard with Ads"]}) == "You can find it on Netflix."

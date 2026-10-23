@@ -41,9 +41,9 @@ def test_more_holds_are_spaced_across_paragraphs_and_different_reviews(faces):
     assert len({cuts[i]["still_motion"] for i in holds}) >= 2
     for previous, current in pairwise(holds):
         moving = cuts[previous+1:current]
-        assert len(moving) >= 3
-        assert sum(cut["duration"] for cut in moving) >= 20
-    assert all(2 <= cuts[i]["duration"] <= 4 for i in holds)
+        assert len(moving) >= 2
+        assert sum(cut["duration"] for cut in moving) >= 14
+    assert all(2 <= cuts[i]["duration"] <= 12 for i in holds)
 
 
 def test_title_card_or_frozen_preview_delays_the_next_narrated_hold():
@@ -53,21 +53,21 @@ def test_title_card_or_frozen_preview_delays_the_next_narrated_hold():
     selected.note_visual_beat(3.5)
     cuts = selected.choose(path, scenes(), "The actor gives a great performance.", 40, False)
     first_hold = next(i for i, cut in enumerate(cuts) if cut["still"])
-    assert sum(cut["duration"] for cut in cuts[:first_hold])+3.5 >= 20
-    assert first_hold+1 >= 3
+    assert sum(cut["duration"] for cut in cuts[:first_hold])+3.5 >= 14
+    assert first_hold+1 >= 2
 
 
 @pytest.mark.parametrize("speed", [.85, 1, 1.18])
 @pytest.mark.parametrize("action", [False, True])
-def test_moving_excerpts_stay_under_seven_seconds_after_final_tempo(speed, action):
+def test_moving_excerpts_stay_under_twelve_seconds_after_final_tempo(speed, action):
     path = Path("movie.mp4")
     selected = selector([path], speed=speed)
     selected.reserve(path, 0, 1000, "previous-review")  # Exercise footage exhaustion too.
     cuts = selected.choose(path, scenes(), "The story takes a turn.", 40, action)
     assert sum(cut["duration"] for cut in cuts) == pytest.approx(40)
-    assert all((cut["duration"]-cut["freeze"])/speed <= 7 for cut in cuts if not cut["still"])
+    assert all((cut["duration"]-cut["freeze"])/speed <= 12 for cut in cuts if not cut["still"])
     plans = outro_recap_plan(selected, [[path]], {str(path): scenes()}, [8, 10], "See our other picks.")
-    assert all(cut["duration"]/speed <= 7 for plan in plans for cut in plan)
+    assert all(cut["duration"]/speed <= 12 for plan in plans for cut in plan)
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg is required")

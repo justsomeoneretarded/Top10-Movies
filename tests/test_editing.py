@@ -70,7 +70,7 @@ def test_readable_long_beats_and_face_still_without_similarity_threshold():
     shots = [{'start': 12, 'end': 20, 'motion': 8}, {'start': 40, 'end': 48, 'motion': 40}]
     cuts = selector.choose(path, shots, 'Example Actor gives a great performance.', 20, True)
     assert cuts[0]['still']
-    assert cuts[0]['duration'] == pytest.approx(3.2)
+    assert cuts[0]['duration'] == pytest.approx(5.5)
     assert cuts[0]['start'] == 16
     assert sum(c['duration'] for c in cuts) == pytest.approx(20)
     assert sum(bool(c['still']) for c in cuts) == 1

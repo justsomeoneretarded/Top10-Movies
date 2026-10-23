@@ -32,7 +32,7 @@ from .video_settings import (
 )
 
 COLD_OPEN_SECONDS = 5.0
-REVIEW_PREVIEW_SECONDS = 3.5
+REVIEW_PREVIEW_SECONDS = 5.0
 INTRO_TARGET_SECONDS = 8.0
 
 
@@ -85,7 +85,15 @@ def chapter_time(seconds):
 def choose_beat(cues: list[dict], shots: list[dict], trailer_duration: float, action: bool,
                 maximum: float = 4.5, *, excluded: list[dict] | None = None) -> dict | None:
     candidates = []
-    for cue in cues:
+    for index, initial in enumerate(cues):
+        if index and initial["start"]-cues[index-1]["end"] < .4 and not re.search(r"[.!?][\"’']?$", cues[index-1]["text"].strip()):
+            continue  # Do not begin with the second subtitle chunk of a sentence.
+        cue = dict(initial)
+        for following in cues[index+1:]:
+            if re.search(r"[.!?][\"’']?$", cue["text"].strip()) or following["start"]-cue["end"] >= .4:
+                break
+            cue["text"] += " "+following["text"]
+            cue["end"] = following["end"]
         start = max(0, cue["start"] - 0.08)
         end = cue["end"] + 0.12
         if start < trailer_duration * 0.08 or end > trailer_duration * 0.85:
@@ -104,7 +112,7 @@ def choose_beat(cues: list[dict], shots: list[dict], trailer_duration: float, ac
 
 def validate_package(output: Path, spec: DurationSpec | None = None):
     spec = spec or DurationSpec()
-    required = ["final-video.mp4", "subtitles.srt", "description.txt", "recommended-title.txt", *[f"thumbnail-{n:02}.jpg" for n in range(1, 4)]]
+    required = ["final-video.mp4", "final-video-augmented.mp4", "subtitles.srt", "description.txt", "recommended-title.txt", *[f"thumbnail-{n:02}.jpg" for n in range(1, 4)]]
     for name in required:
         path = output / name
         if not path.exists() or path.stat().st_size == 0:
@@ -130,12 +138,15 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
 
 def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .audio_review import verify_export_audio
+    from .augmentation import export_augmented
     from .availability import enrich_availability
     from .cta import cta_variants, prepare_cta, render_cta
+    from .cta_animation import add_cta_animation
     from .editorial import place_intro_meme, subscription_boundary
     from .footage import download
     from .memes import prepare_intro_meme
     from .packaging import build_description, refresh_availability
+    from .people import insert_portrait, portrait_for
     from .previews import (
         choose_preview,
         choose_title_card,
@@ -154,6 +165,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .script import Writer
     from .secondary_footage import download_secondary
     from .shots import ShotSelector, analyse, intro_montage
+    from .soundtrack import narration_rate, theme_for
     from .source_pool import (
         best_intro_sources,
         choose_from_sources,
@@ -172,14 +184,14 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     ceiling = download_ceiling()
     os.environ["VIDEO_RESOLUTION"] = str(ceiling)
     spec = workflow_duration(title, len(items))
-    max_beat = trailer_budget(spec, len(items))
+    max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
     expected_breaks = min(3, max_beat) * len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
     print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
     narrator = selected_narrator(brief)
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
-    run_key = key("pipeline-v8-cinematic-boundaries", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v9-clean-comparison", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -193,7 +205,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
     films = enrich_availability(films, research, work / "availability")
     spec = workflow_duration(title, len(items), films)
-    max_beat = trailer_budget(spec, len(items))
+    max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
     expected_breaks = min(3, max_beat)*len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
     print(f"Runtime mode: {'Auto' if spec.automatic else 'selected minutes'}; soft plan {spec.target/60:.1f} minutes.", flush=True)
     save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "content_type": content_type or "auto", "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
@@ -353,6 +365,22 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 aligned[coordinate] = cues
     finally:
         recovery.close()
+    music_theme = theme_for(title, brief)
+    voice_speed = narration_rate(music_theme)
+    if voice_speed != 1:
+        from .voice import paced_take
+        paced = {}
+        for coordinate, audio in speech.items():
+            if audio not in paced:
+                paced[audio] = paced_take(audio, voice_speed)
+            speech[coordinate] = paced[audio]
+            aligned[coordinate] = [{**cue, "start": cue["start"]/voice_speed,
+                                    "end": cue["end"]/voice_speed} for cue in aligned[coordinate]]
+        cta_audio = paced_take(cta_audio, voice_speed)
+        cta_cues = [{**cue, "start": cue["start"]/voice_speed,
+                    "end": cue["end"]/voice_speed} for cue in cta_cues]
+    save_json(work / "soundtrack-report.json", {"theme": music_theme, "narration_rate": voice_speed,
+              "music_source": "original smooth instrumental arrangement", "trailer_under_narration": False})
     trailer_cues = []
     for trailer in trailers:
         cache = trailer.with_suffix(".dialogue.json")
@@ -388,9 +416,17 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     beats = {i: choose_beat(trailer_cues[section["film"]], shot_sets[section["film"]], duration(trailers[section["film"]]), action,
                            maximum=max_beat, excluded=excluded_cards[section["film"]])
              for i, section in enumerate(script["sections"]) if section["kind"] == "film" and max_beat}
+    extra_beats = {}
+    for i, section in enumerate(script["sections"]):
+        first = beats.get(i)
+        if section["kind"] == "film" and first and len(section["paragraphs"]) >= 3:
+            film_index = section["film"]
+            extra_beats[i] = choose_beat(trailer_cues[film_index], shot_sets[film_index],
+                duration(trailers[film_index]), action, maximum=max_beat,
+                excluded=[*excluded_cards[film_index], first])
     reserve = getattr(selector, "reserve", None)
     if callable(reserve):
-        for i, beat in beats.items():
+        for i, beat in [*beats.items(), *extra_beats.items()]:
             if beat:
                 reserve(trailers[script["sections"][i]["film"]], beat["start"], beat["end"]-beat["start"], "trailer-audio")
     dialogue = {str(trailer): cues for trailer, cues in zip(trailers, trailer_cues)}
@@ -403,11 +439,12 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     lengths = {coordinates: duration(audio) for coordinates, audio in speech.items()}
     planned_seconds = (sum(lengths.values())+sum(preview["duration"] for preview in previews.values())
                        +sum(card["duration"] for card in ending_cards.values() if card)
-                       +sum(beat["end"]-beat["start"] for beat in beats.values() if beat)
+                       +sum(beat["end"]-beat["start"] for beat in [*beats.values(), *extra_beats.values()] if beat)
                        +COLD_OPEN_SECONDS+duration(cta_audio))
     selector.playback_speed = final_tempo(planned_seconds, spec)
     boundary, fraction = subscription_boundary(script["sections"], lengths,
         {i: preview["duration"] + (beats[i]["end"]-beats[i]["start"] if beats.get(i) else 0)
+            + (extra_beats[i]["end"]-extra_beats[i]["start"] if extra_beats.get(i) else 0)
             + (ending_cards[script["sections"][i]["film"]]["duration"] if ending_cards.get(script["sections"][i]["film"]) else 0)
          for i, preview in previews.items()}, duration(cta_audio), opening_seconds=COLD_OPEN_SECONDS)
     print(f"Like/subscribe break before a review at {fraction:.0%} of the measured video.", flush=True)
@@ -422,6 +459,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     script["sections"].insert(boundary, {"kind": "subscribe", "film": script["sections"][boundary]["film"], "paragraphs": [cta_text]})
     beats = {i+(i >= boundary): beat for i, beat in beats.items()}
     previews = {i+(i >= boundary): preview for i, preview in previews.items()}
+    extra_beats = {i+(i >= boundary): beat for i, beat in extra_beats.items()}
     require_disk(work, spec.target)
     intro_text = " ".join(script["sections"][0]["paragraphs"])
     meme = prepare_intro_meme(intro_text, title+brief+movies, work / "memes")
@@ -432,6 +470,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     timeline = []
     used_video_sources = set()
     cta_rendered = {}
+    portraits_used = set()
     offset = 0.0
     for shot in opening:
         film_index = shot["film_index"]
@@ -505,6 +544,15 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
             chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), action)
+            if is_film and duration(audio) >= 4:
+                portrait = portrait_for(text, film, work / "portraits")
+                if portrait and portrait["person"] not in portraits_used:
+                    name = portrait["person"].split()[-1].casefold()
+                    mention = next((cue["start"] for cue in aligned[(section_index, paragraph_index)]
+                                    if name in cue["text"].casefold()), 0)
+                    chosen = insert_portrait(chosen, portrait, when=mention)
+                    portraits_used.add(portrait["person"])
+                    note_visual_beat(selector, min(5.5, duration(audio)), still=True)
             if meme and section["kind"] == "intro" and montage is not None and not meme_used:
                 chosen, meme_used = place_intro_meme(chosen, text, aligned[(section_index, paragraph_index)], meme)
             path = work / f"part-{len(parts):03}.mp4"
@@ -525,6 +573,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                     for pool in pools:
                         pool[:] = [source for source in pool if str(source) not in failed]
                     speech_video(trailer, audio, chosen, path, None, work / f"render-{len(parts):03}")
+            if section["kind"] in {"subscribe", "outro"} and re.search(r"\bsubscribe\b", text, re.IGNORECASE):
+                add_cta_animation(path, text, aligned[(section_index, paragraph_index)], work / f"cta-animation-{len(parts):03}")
             used_video_sources.update(str(cut.get("source", trailer)) for cut in chosen if not cut.get("image"))
             seconds = duration(path)
             for cue in aligned[(section_index, paragraph_index)]:
@@ -534,7 +584,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                              "film": section["kind"].title()+" montage" if montage is not None else film["title"], "films": sorted({films[cut.get("film_index", film_index)]["title"] for cut in chosen}), "text": text, "shots": chosen})
             parts.append(path)
             offset += seconds
-            if beat and paragraph_index + 1 == midpoint:
+            active_beat = (beat if paragraph_index+1 == midpoint else
+                           extra_beats.get(section_index) if paragraph_index+1 == max(midpoint+1, len(section["paragraphs"])-1) else None)
+            if active_beat:
+                beat = active_beat
                 path = work / f"part-{len(parts):03}.mp4"
                 trailer_video(trailer, beat["start"], beat["end"]-beat["start"], path)
                 seconds = duration(path)
@@ -567,7 +620,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     del selector
     gc.collect()
     print("Mixing and exporting final video", flush=True)
-    final_duration, speed = finish(parts, output / "final-video.mp4", work, action, spec=spec)
+    final_duration, speed = finish(parts, output / "final-video.mp4", work, action, spec=spec, music_theme=music_theme)
     export_recovery = SpeechRecovery(None, lambda: Narrator(reference, work / "speech"),
         work / "export-audio-checks", fallback_factory=lambda: WhisperModel(
             "small.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4),
@@ -598,6 +651,23 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     source_links = [json.loads(t.with_suffix('.json').read_text())["source"] for t in credited_trailers]
     (output / "description.txt").write_text(build_description(script, films, chapters, source_links))
     embed_chapters(output / "final-video.mp4", chapters, final_duration, work)
+    print("Exporting the augmented comparison with the same timeline", flush=True)
+    comparison = export_augmented(output / "final-video.mp4", output / "final-video-augmented.mp4", work / "comparison")
+    comparison_recovery = SpeechRecovery(None, lambda: Narrator(reference, work / "speech"),
+        work / "comparison-audio-checks", fallback_factory=lambda: WhisperModel(
+            "small.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4),
+            download_root=os.getenv("SPEECH_VERIFY_MODEL_DIR") or None))
+    try:
+        report = verify_export_audio(output / "final-video-augmented.mp4", timeline, speed, comparison_recovery, work)
+        save_json(work / "comparison-audio-review.json", report)
+        if not report.get("accepted"):
+            raise PipelineError("The augmented comparison did not preserve verified narration; see comparison-audio-review.json.")
+    finally:
+        comparison_recovery.close()
+    save_json(output / "comparison-settings.json", comparison)
+    (output / "comparison-readme.txt").write_text(
+        "final-video.mp4: clean version.\nfinal-video-augmented.mp4: the same edit with visual/audio augmentation.\n"
+        "Both use subtitles.srt and the same chapters. Augmentation is not anonymization or copyright protection.\n")
     credits = "Film metadata: TMDB — https://www.themoviedb.org/\nWatch listings: JustWatch via TMDB — https://www.justwatch.com/us\n"
     if meme_used:
         credits += str(meme.get("attribution", "Intro meme"))+" — "+str(meme.get("source", ""))+"\n"

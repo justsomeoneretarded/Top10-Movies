@@ -4,13 +4,12 @@ import json
 import math
 import os
 import tempfile
-import wave
 from pathlib import Path
 
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .core import PipelineError, duration, ffmpeg, probe, run, save_json
+from .soundtrack import music_bed
 from .timing import DurationSpec, final_tempo
 from .video_settings import export_size
 
@@ -335,26 +334,9 @@ def validate_audio_video_duration(path: Path, expected_seconds: float | None = N
     return total
 
 
-def music_bed(path: Path, seconds: float, action: bool):
-    """Generate an original, understated instrumental pad; no licensed music downloads."""
-    rate = 48000
-    with wave.open(str(path), "wb") as stream:
-        stream.setnchannels(2)
-        stream.setsampwidth(2)
-        stream.setframerate(rate)
-        for block in range(math.ceil(seconds)):
-            count = min(rate, round(seconds * rate) - block * rate)
-            t = (np.arange(count) + block * rate) / rate
-            root = [110.0, 87.307, 103.826, 97.999][int(block // 8) % 4]
-            envelope = np.minimum(1, t / 3) * np.minimum(1, np.maximum(0, (seconds - t) / 3))
-            chord = sum(np.sin(2*np.pi*root*ratio*t) / (j+2) for j, ratio in enumerate((1, 1.5, 2)))
-            pulse = np.exp(-((t * (2 if action else 1)) % 1) * 12) * np.sin(2*np.pi*55*t)
-            values = (0.12 * chord + 0.07 * pulse) * envelope
-            stereo = np.column_stack((values, values * 0.97))
-            stream.writeframes((np.clip(stereo, -1, 1) * 32767).astype("<i2").tobytes())
 
 
-def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: DurationSpec | None = None, *, ending_hold: float = 3.0) -> tuple[float, float]:
+def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: DurationSpec | None = None, *, ending_hold: float = 3.0, music_theme: str | None = None) -> tuple[float, float]:
     spec = spec or DurationSpec()
     work.mkdir(parents=True, exist_ok=True)
     report = {"status": "pending", "canonical_audio": {"codec": "alac", "sample_format": "s32p",
@@ -413,7 +395,7 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
                 print("Keeping the complete video at a natural pace outside the soft runtime target.", flush=True)
             final_duration = original/speed + ending_hold
             music = work / "music.wav"
-            music_bed(music, final_duration + 1, action)
+            music_bed(music, final_duration + 1, action, **({"theme": music_theme} if music_theme else {}))
             graph = (
                 # Honor legitimate display gaps first, then rebuild the clock.
                 # Packet reorder delays never become final output timestamps.
@@ -421,11 +403,13 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
                 # Preserve declared silence before changing the sample clock.
                 f"[1:a]asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0:min_hard_comp=0.0001,atempo={speed},"
                 f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
-                "[2:a]volume=0.13[bed];"
+                "[2:a]volume=0.38[bed];"
                 "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
                 f"[voice][duck]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
             )
-            record("encoding", planned_duration=final_duration)
+            record("encoding", planned_duration=final_duration, music_theme=music_theme or ("action" if action else "drama"))
+            for source, name in ((combined_audio, "edit-without-music.wav"), (music, "background-only.wav")):
+                ffmpeg("-i", source, "-t", min(20, original), "-c:a", "pcm_s16le", work / name)
             ffmpeg("-xerror", "-err_detect", "explode", "-f", "concat", "-safe", "0", "-i", listing,
                    "-i", combined_audio, "-i", music, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
                    "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS,
@@ -440,6 +424,11 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
         except Exception as exc:
             failed(exc)
             raise
+        for name, start, length in (("finished-mix.wav", 0, min(20, actual_duration)),
+                                    ("ending-music-only.wav", max(0, actual_duration-ending_hold), ending_hold)):
+            if length > 0:
+                ffmpeg("-ss", start, "-i", output, "-t", length, "-vn", "-ar", "48000",
+                       "-ac", "2", "-c:a", "pcm_s16le", work / name)
         record("complete", status="passed", final_duration=actual_duration)
         music.unlink(missing_ok=True)
         return actual_duration, speed

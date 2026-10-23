@@ -123,11 +123,15 @@ def availability_line(record: dict | None) -> str:
         values = record.get(category, [])
         if not isinstance(values, list):
             return ""
-        names = list(dict.fromkeys(n for n in values if isinstance(n, str) and n.strip()))[:2]
+        aliases = {"amazon prime video": "Prime Video", "amazon prime video with ads": "Prime Video",
+                   "netflix standard with ads": "Netflix", "netflix": "Netflix",
+                   "hulu with ads": "Hulu", "hulu": "Hulu"}
+        names = list(dict.fromkeys(aliases.get(n.strip().casefold(), n.strip())
+                                   for n in values if isinstance(n, str) and n.strip()))[:2]
         return " and ".join(names)
 
     if names := providers("subscription"):
-        return f"It's listed on {names} with a subscription."
+        return f"You can find it on {names}."
     if names := providers("free"):
         return f"It's listed free to watch on {names}."
     if names := providers("ads"):

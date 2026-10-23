@@ -166,6 +166,22 @@ jobs:
           path: output/
           if-no-files-found: error
           retention-days: 2
+      - name: Bounded audio inspection samples
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-inspection-${{ github.run_number }}
+          path: |
+            work/jobs/*/finished-mix.wav
+            work/jobs/*/ending-music-only.wav
+            work/jobs/*/background-only.wav
+            work/jobs/*/edit-without-music.wav
+            work/jobs/*/soundtrack-report.json
+            work/jobs/*/audio-review.json
+            work/jobs/*/comparison-audio-review.json
+            work/jobs/*/comparison/augmentation-report.json
+          if-no-files-found: ignore
+          retention-days: 2
       - name: Telegram completion reminder
         if: success()
         continue-on-error: true
@@ -183,6 +199,7 @@ jobs:
             work/jobs/*/speech-checks/last-unverified.wav
             work/jobs/*/audio-assembly.json
             work/jobs/*/audio-review.json
+            work/jobs/*/comparison-audio-review.json
           if-no-files-found: ignore
           retention-days: 2
       - name: Remove downloaded trailers and rendered intermediates

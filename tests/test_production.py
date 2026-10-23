@@ -142,7 +142,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 seconds = 6
             elif text.startswith("Review number"):
                 seconds = 120 if count == 2 else 47
-            elif text.startswith("It's listed"):
+            elif text.startswith(("It's listed", "You can find it")):
                 seconds = 3
                 if kwargs.get('attempt_offset'):
                     records['shared_regenerations'] = records.get('shared_regenerations', 0)+1
@@ -200,7 +200,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 # hypothesis verifies the actual beginning and end of the take.
                 heard = ' '.join(text.split()[:-3] if kwargs.get('vad_filter', True) else text.split()[3:])
                 return [{'start': 0, 'end': durations[str(audio)], 'text': heard}]
-            if extra_mode == 'shared-audio-retry' and text.startswith("It's listed"):
+            if extra_mode == 'shared-audio-retry' and text.startswith(("It's listed", "You can find it")):
                 records['shared_transcriptions'] = records.get('shared_transcriptions', 0)+1
                 if not records.get('shared_regenerations'):
                     return [{'start': 0, 'end': durations[str(audio)], 'text': 'Missing the expected availability sentence.'}]
@@ -256,7 +256,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         return [{'source': str(pools[0][0]), 'start': 40, 'duration': seconds, 'muted': True, 'film_index': 0}]
 
     def choose_preview(selector, sources, shot_lookup, text, seconds, action, dialogue=None):
-        assert seconds == 3.5
+        assert seconds == 5.0
         records.setdefault('review_previews', []).append(str(sources[0]))
         return {'source': str(sources[0]), 'start': 40, 'duration': seconds, 'muted': True}
 
@@ -297,7 +297,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 'image': True, 'animation': True, 'still': False,
                 'credit_source': plan['source'], 'attribution': plan['attribution']}
 
-    def finish(parts, target, work, action, spec):
+    def finish(parts, target, work, action, spec, music_theme=None):
+        assert music_theme == "action"
         records['ending_hold'] = 3
         records['parts'] = [str(part) for part in parts]
         seconds = (sum(durations[str(part)] for part in parts)+3)/1.02
@@ -378,6 +379,14 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(render, 'label_image', label_image)
     monkeypatch.setattr(render, 'subscribe_image', Mock(side_effect=AssertionError('The old static CTA card must not render')))
     monkeypatch.setattr(render, 'finish', finish)
+    monkeypatch.setattr('movie_pipeline.soundtrack.narration_rate', lambda theme: 1)
+    monkeypatch.setattr('movie_pipeline.cta_animation.add_cta_animation', Mock())
+    def augmented(source, target, work):
+        assert Path(source).exists()
+        make(target, durations[str(source)])
+        records['comparison'] = str(target)
+        return {'same_timeline': True}
+    monkeypatch.setattr('movie_pipeline.augmentation.export_augmented', augmented)
     monkeypatch.setattr(render, 'embed_chapters', embed)
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
     monkeypatch.setitem(sys.modules, 'movie_pipeline.previews', SimpleNamespace(
@@ -434,7 +443,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert saved_input['content_type'] == (expected_kind if content_type else 'auto')
     assert saved_input['narrator'] == expected_narrator
     # Cold opening and title previews add intentional screen time to the old plan.
-    added_visual_seconds = 5 + count*3.5
+    added_visual_seconds = 5 + count*5.0
     if extra_mode in {'title-cards', 'title-card-fails'}:
         added_visual_seconds += (count-(extra_mode == 'title-card-fails'))*1.5
     assert 285 <= records['final_duration']-added_visual_seconds/1.02 <= 315
@@ -500,10 +509,10 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert written_cues[0]['text'] == first
     previews = [event for event in events if event['type'] == 'review-preview']
     assert len(previews) == count
-    assert all(event['duration'] == pytest.approx(3.5) for event in previews)
+    assert all(event['duration'] == pytest.approx(5.0) for event in previews)
     labelled = [event for event in records['trailer_renders'] if event.get('label') is not None]
     assert len(labelled) == count
-    assert all(event['label_seconds'] == 3.5 for event in labelled)
+    assert all(event['label_seconds'] == 5.0 for event in labelled)
     ctas = [(i, event) for i, event in enumerate(events) if event.get('type') == 'subscribe']
     assert len(ctas) == 1
     index, cta = ctas[0]
@@ -512,7 +521,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert cta['duration']/timeline['speed'] < 10
     assert events[index-1]['film'] != events[index+1]['film']
     preceding_review = events[index-2] if events[index-1]['type'] == 'title-card' else events[index-1]
-    assert preceding_review['text'].startswith("It's listed")  # preceding review completed
+    assert preceding_review['text'].startswith("You can find it")  # preceding review completed
     assert events[index+1]['type'] == 'review-preview'  # next review begins after the CTA
     assert events[index+2]['text'].startswith('Review number')
     cards = [(i, event) for i, event in enumerate(events) if event['type'] == 'title-card']
@@ -538,7 +547,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             assert card_index == own_review[-1][0]+1
             previous = events[card_index-1]
             assert previous['start']+previous['duration'] == pytest.approx(card['start'])
-            assert previous['text'].startswith("It's listed")
+            assert previous['text'].startswith("You can find it")
             following = events[card_index+1]
             assert following['type'] in {'subscribe', 'review-preview'} or following.get('section_kind') == 'outro'
             card_start = card['start']/timeline['speed']
@@ -557,7 +566,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert chapter['start'] == pytest.approx(preview['start']/timeline['speed'])
         following = next(event for event in events if event['type'] == 'narration'
                          and event.get('section_kind') == 'film' and event['film'] == preview['film'])
-        assert following['start'] == pytest.approx(preview['start']+3.5)
+        assert following['start'] == pytest.approx(preview['start']+5.0)
         cue = next(cue for cue in written_cues if cue['text'] == following['text'])
         assert cue['start'] == pytest.approx(following['start']/timeline['speed'])
     cta_cue = next(cue for cue in written_cues if cue['text'] == records['cta_text'])

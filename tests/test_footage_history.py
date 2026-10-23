@@ -82,7 +82,7 @@ def test_exhausted_short_footage_reuses_spaced_scenes_without_rapid_cuts():
     starts = [cut["start"] for plan in plans for cut in plan]
     assert all(first != second for first,second in pairwise(starts))
     assert all(sum(cut["duration"] for cut in plan) == 8 for plan in plans)
-    assert all(3 <= cut["duration"] <= 7 for plan in plans for cut in plan)
+    assert all(3 <= cut["duration"] <= 12 for plan in plans for cut in plan)
     assert any(cut["visual_reason"] == "spaced-source-reuse" for plan in plans for cut in plan)
 
 

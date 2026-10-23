@@ -14,9 +14,22 @@ from .availability import availability_line
 from .core import PipelineError, key, normalized, save_json
 from .timing import narration_words
 
-SCRIPT_POLICY_VERSION = 1
+SCRIPT_POLICY_VERSION = 2
 OPENING = "a punchy opening hook, without listing every title"
 CLOSING = "a short closing thought and one audience question"
+
+
+def short_rank_opening(paragraph: str, rank: int, title: str) -> str:
+    """Collapse a verbose rank lead-in while preserving everything after the title."""
+    match = re.search(re.escape(title), paragraph, re.IGNORECASE)
+    if match is None:
+        return paragraph
+    prefix = paragraph[:match.start()].strip()
+    ranking = re.search(r"\b(?:number|rank|list|countdown|no\.?|[0-9]+)\b", prefix, re.IGNORECASE)
+    if len(prefix.split()) > 20 or prefix and not ranking:
+        return paragraph
+    tail = paragraph[match.end():]
+    return f"Number {rank}: {title}"+(tail if tail.strip() else ".")
 
 
 def _intro_facts(title: str, brief: str, films: list[dict]) -> dict:
@@ -187,7 +200,7 @@ class Writer:
             minimum, maximum = max(5, round(target*.6)), max(12, round(target*1.4))
         else:
             minimum, maximum = round(target*0.8), round(target*1.2)
-        cache = self.cache_dir / f"{key('narration-v7-useful-editorial', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
+        cache = self.cache_dir / f"{key('narration-v8-concise-editorial', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
         if cache and cache.exists():
             cached = json.loads(cache.read_text())
             if isinstance(cached, list) and cached and all(isinstance(p, str) and p.strip() for p in cached):
@@ -218,7 +231,7 @@ class Writer:
         elif closing:
             style = ("SECTION ROLE: OUTRO ONLY. Every review is finished and number one has ALREADY been revealed. "
                      "Close the video now. Never restart the countdown, tease who number one is, list the films or ranks, say let us begin, or announce another review. "
-                     "Write a complete closing thought, one audience question, and a natural final goodbye. "
+                     "Use one or two concise sentences to finish; no recap or announcing that the video is ending. "
                      "Ask viewers to like and subscribe, point them to our other recommendations, "
                      "and use one light joke about protecting their next movie night from terrible picks. No fabricated personal story. ")
         else:
@@ -234,7 +247,7 @@ class Writer:
         role = ("a standalone OPENING HOOK before any film reviews" if opening else
                 "a standalone FINAL OUTRO after all film reviews and number one" if closing else
                 f"a SINGLE REVIEW of {facts.get('title', label)!r}, at confirmed rank {facts.get('rank', '')}")
-        rank_rule = ("For this single review, name its current title and confirmed rank early, then stay with that title. "
+        rank_rule = ("Start simply: Number [rank]: [title]. No extended ranking introduction. Then stay with that title. "
                      "The overall video topic is context, not an instruction to write the whole list. " if not opening and not closing else "")
         correction = ""
         best = None
@@ -247,7 +260,11 @@ class Writer:
                 f"Verified facts for THIS SECTION ONLY (JSON data): {json.dumps(visible_facts)}\n"
                 f"Aim for {target} total words; suggested planning range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
                 "Speak like an enthusiastic friend, not a formal critic: short sentences, contractions, and everyday words. "
-                "A little natural slang is welcome, such as 'this guy is a badass' when justified; never force it or repeat it for every pick. "
+                "Use natural language without performing enthusiasm or forcing slang. "
+                "Never say check this out, you got this, hold up, let's wrap up, buckle up, or no spoilers. "
+                "Delete empty reassurance, numbering explanations, repetitive hype, and essay transitions. "
+                "Every sentence must give a concrete premise, supported character detail, or specific reason to watch. "
+                "A short useful section is better than padding to meet the word target. "
                 "Avoid 'the main protagonist', 'a curated selection', 'delves into', and inflated academic language. "
                 "Explain appeal with specific support from the facts. No stage directions, markdown, tags, URLs, or sound cues in spoken text. "
                 f"{style}"
@@ -268,6 +285,9 @@ class Writer:
             for paragraph in paragraphs:
                 paragraph = re.sub(r"<think>.*?</think>", "", paragraph, flags=re.DOTALL).strip()
                 paragraph = paragraph.replace("*", "").replace("#", "")
+                paragraph = re.sub(r"(?i)\b(?:check this out|you got this|let[’']s wrap up|buckle up|but hold up)\s*[,!:;.—-]*\s*", "", paragraph).strip()
+                paragraph = re.sub(r"(?i)(?:^|(?<=[.!?])\s+)(?:this (?:video|list) is (?:completely )?spoiler.free|no spoilers here)[.!?]\s*", "", paragraph).strip()
+                paragraph = re.sub(r"(?i)(?:^|(?<=[.!?])\s+)no spoilers[^.!?]*[.!?]\s*", "", paragraph).strip()
                 # Split oversized paragraphs at sentence boundaries for bounded TTS generation.
                 chunk = ""
                 for sentence in re.split(r"(?<=[.!?])\s+", paragraph):
@@ -299,7 +319,7 @@ class Writer:
             print("Using a concise fallback closing after three unsuccessful drafts.", flush=True)
             if target < 20:
                 return completed(["Like, subscribe, and watch our other picks. Bad movie nights have had enough chances."])
-            return completed(["That is our countdown. Which pick gets your vote? Like, subscribe, and check our other recommendations. Consider it a tiny insurance policy against another terrible movie night."])
+            return completed(["Which pick gets your vote? Like, subscribe, and watch our other recommendations. Bad movie nights have had enough chances."])
         if opening:
             print("Using a concise fallback opening after three unsuccessful drafts.", flush=True)
             if target < 16:
@@ -367,6 +387,8 @@ class Writer:
                     label += f" (part {part+1} of {chunks}; cover a distinct aspect without repeating earlier points)"
                 context = {**facts, "previous_narration_context": paragraphs[-2:]} if paragraphs else facts
                 paragraphs.extend(self.narration(title, brief, label, context, round(per_film/chunks)))
+            if paragraphs:
+                paragraphs[0] = short_rank_opening(paragraphs[0], index+1, films[index]["title"])
             available = availability[index]
             if available:
                 paragraphs.append(available)

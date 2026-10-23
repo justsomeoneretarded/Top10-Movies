@@ -71,7 +71,7 @@ def require_disk(path: Path, seconds: float = 0):
     # Parts, concatenated input, and final encode coexist. This is a reserve, not a size guarantee.
     height = export_size()[1]
     rate = {1080: 10, 1440: 16, 2160: 28}.get(height, 6) * 1_000_000 / 8
-    needed = max(1_500_000_000, seconds * rate * 3 + 1_000_000_000)
+    needed = max(1_500_000_000, seconds * (rate * 3 + 576_000) + 1_000_000_000)
     free = shutil.disk_usage(path).free
     if free < needed:
         raise PipelineError(f"Not enough working disk for {height}p: {free/1e9:.1f} GB free, about {needed/1e9:.1f} GB reserved. Uncheck Try 4K or use fewer titles; artifact expiry does not free running-job disk.")
