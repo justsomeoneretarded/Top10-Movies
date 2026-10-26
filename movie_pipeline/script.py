@@ -404,7 +404,8 @@ class Writer:
              opening: bool = False, closing: bool = False, rank: int | None = None, kind: str = "film") -> tuple[list[str], list[str]]:
         """Editor and fact-check pass. The edit is used only when it passes every check; otherwise the draft stays."""
         defaults = [default_delivery(kind, i, rank) for i in range(len(paragraphs))]
-        if not paragraphs:
+        if not paragraphs or os.getenv("FACT_CHECK", "true").strip().lower() == "false":
+            # Workflow checkbox off: keep drafts as written (the code check on figures still applies while drafting).
             return paragraphs, defaults
         cache = self.cache_dir / f"{key('edit-v1', self.model, topic, brief, role, facts, paragraphs)}.json" if self.cache_dir else None
         if cache and cache.exists():

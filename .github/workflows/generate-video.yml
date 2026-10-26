@@ -75,6 +75,11 @@ on:
         required: true
         type: boolean
         default: true
+      fact_check:
+        description: "Fact-check the script against TMDB/Wikipedia (about 10-15 minutes longer; uncheck for a faster run)"
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -98,6 +103,7 @@ jobs:
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
+      FACT_CHECK: "${{ inputs.fact_check }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       THUMBNAIL_AI: 'true'
       # 'stills' (default): official TMDB stills with face-aware framing; 'ai': the generated-scene designs.

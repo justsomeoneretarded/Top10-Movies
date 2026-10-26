@@ -171,3 +171,12 @@ def test_strong_genre_openings_are_not_rejected_for_missing_the_label():
     assert _editorial_issue(good, opening=True, theme="sci-fi") is None
     vague = ["Five movies you should watch tonight. Here's why each one is worth your time."]
     assert _editorial_issue(vague, opening=True, theme="sci-fi") is not None
+
+
+def test_fact_check_checkbox_off_keeps_drafts_without_model_calls(monkeypatch):
+    monkeypatch.setenv("FACT_CHECK", "false")
+    writer = Writer()
+    writer.ask = lambda *a, **k: (_ for _ in ()).throw(AssertionError("editor must not run"))
+    draft = ["Number 1: Inception. A thief plants an idea inside a dream."]
+    paragraphs, delivery = writer.edit("Top 2", "Casual", "the review", film_facts(FILMS[0]), draft, rank=1)
+    assert paragraphs == draft and delivery == ["hype"]

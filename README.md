@@ -26,7 +26,7 @@ Open **[Actions → Generate Video](https://github.com/justsomeoneretarded/Top10
 
 After a code update, start a **new run** with branch **main** selected. GitHub's **Re-run jobs** button repeats the original run's commit; it does not use the latest fixes from main.
 
-There are seven inputs: title, description / creative brief, movies, a **Movies or Shows** dropdown, a **Narrator** dropdown, a **Video length in minutes** selector, and a **Try 4K** checkbox. Defaults are **Movies**, **Warguy**, **Auto**, and Try 4K checked. Select the type, voice, length, and resolution in the workflow; they do not need to be written in the brief.
+There are eight inputs: title, description / creative brief, movies, a **Movies or Shows** dropdown, a **Narrator** dropdown, a **Video length in minutes** selector, a **Try 4K** checkbox, and a **Fact-check** checkbox. Defaults are **Movies**, **Warguy**, **Auto**, Try 4K checked, and Fact-check checked. Fact-check runs an editor pass that removes script claims not supported by the TMDB/Wikipedia facts (about 10–15 minutes); uncheck it for a faster run. Figures missing from the facts are rejected either way. Select the type, voice, length, and resolution in the workflow; they do not need to be written in the brief.
 
 ```text
 Title:
