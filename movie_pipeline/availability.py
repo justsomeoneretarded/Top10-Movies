@@ -6,6 +6,7 @@ subscription, free-with-ads, rental, and purchase offers remain distinct.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -114,33 +115,35 @@ def enrich_availability(films: list[dict], research, cache: Path) -> list[dict]:
     return result
 
 
+BRAND_SUFFIX = re.compile(
+    r"\s+(?:(?:amazon|apple\s+tv|roku\s+premium|youtube)\s+channel|channel|with\s+ads|standard(?:\s+with\s+ads)?|"
+    r"basic(?:\s+with\s+ads)?|premium(?:\s+plus)?|essential|ad[- ]free|kids|store)$", re.IGNORECASE)
+BRAND_ALIASES = {"amazon prime video": "Prime Video", "amazon video": "Prime Video", "max": "Max", "hbo max": "Max",
+                 "fandango at home": "Fandango at Home", "vudu": "Fandango at Home", "google play movies": "Google Play"}
+
+
+def brand_name(name: str) -> str:
+    """The plain service name a viewer recognizes: no tier, ads, add-on channel or store wording."""
+    text = " ".join(str(name).split())
+    previous = None
+    while previous != text:
+        previous = text
+        text = BRAND_SUFFIX.sub("", text).strip()
+    text = text.replace("+", " Plus").replace("  ", " ").strip()
+    return BRAND_ALIASES.get(text.casefold(), text)
+
+
 def availability_line(record: dict | None) -> str:
-    """A short factual line for narration, omitting the country as requested."""
+    """One short spoken line with just the service names: 'You can find it on Paramount Plus and Prime Video.'"""
     if not isinstance(record, dict) or record.get("status") not in {"found", None}:
         return ""
-
-    def providers(category):
+    names = []
+    for category in ("subscription", "free", "ads", "rent", "buy"):
         values = record.get(category, [])
-        if not isinstance(values, list):
-            return ""
-        aliases = {"amazon prime video": "Prime Video", "amazon prime video with ads": "Prime Video",
-                   "netflix standard with ads": "Netflix", "netflix": "Netflix",
-                   "hulu with ads": "Hulu", "hulu": "Hulu"}
-        names = list(dict.fromkeys(aliases.get(n.strip().casefold(), n.strip())
-                                   for n in values if isinstance(n, str) and n.strip()))[:2]
-        return " and ".join(names)
-
-    if names := providers("subscription"):
-        return f"You can find it on {names}."
-    if names := providers("free"):
-        return f"It's listed free to watch on {names}."
-    if names := providers("ads"):
-        return f"It's listed free with ads on {names}."
-    rentals, purchases = providers("rent"), providers("buy")
-    if rentals and rentals == purchases:
-        return f"It's listed to rent or buy on {rentals}."
-    if rentals:
-        return f"It's listed to rent on {rentals}."
-    if purchases:
-        return f"It's listed to buy on {purchases}."
-    return ""
+        for value in values if isinstance(values, list) else []:
+            if isinstance(value, str) and value.strip():
+                name = brand_name(value)
+                if name and name.casefold() not in {n.casefold() for n in names}:
+                    names.append(name)
+    names = names[:2]
+    return f"You can find it on {' and '.join(names)}." if names else ""

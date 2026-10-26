@@ -81,18 +81,16 @@ def test_untrusted_provider_links_are_dropped(monkeypatch, tmp_path, link):
 
 
 @pytest.mark.parametrize("record, expected", [
-    ({"rent": ["Prime Video"], "buy": ["Prime Video"]}, "rent or buy"),
-    ({"rent": ["Prime Video"]}, "rent on Prime Video"),
-    ({"buy": ["Apple TV"]}, "buy on Apple TV"),
-    ({"free": ["Plex"]}, "free to watch"),
-    ({"ads": ["Tubi"]}, "free with ads"),
+    ({"rent": ["Amazon Video"], "buy": ["Amazon Video"]}, "You can find it on Prime Video."),
+    ({"subscription": ["Paramount Plus Premium", "Paramount+ Amazon Channel"], "rent": ["Apple TV"]},
+     "You can find it on Paramount Plus and Apple TV."),
+    ({"subscription": ["Sony Pictures Core Amazon Channel"]}, "You can find it on Sony Pictures Core."),
+    ({"ads": ["Tubi"]}, "You can find it on Tubi."),
+    ({"subscription": ["Peacock Premium Plus"], "free": ["Pluto TV"]}, "You can find it on Peacock and Pluto TV."),
     ({}, ""),
 ])
-def test_spoken_lines_do_not_turn_rental_into_subscription(record, expected):
-    line = availability_line(record)
-    assert expected in line
-    if "rent" in record or "buy" in record:
-        assert "subscription" not in line
+def test_spoken_lines_name_only_the_services(record, expected):
+    assert availability_line(record) == expected
 
 
 def test_provider_variants_are_deduplicated_in_short_spoken_line():
