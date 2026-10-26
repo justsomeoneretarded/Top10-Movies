@@ -577,9 +577,14 @@ def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str]
     films = options.pop("films", None)
     if films and os.getenv("THUMBNAIL_SOURCE", "stills").lower() != "ai":
         from .still_thumbnails import build_still_thumbnails
-        work = options.get("work") or output / ".thumbnail-work"
+        from .thumbnail_studio import build as build_studio
+        work = Path(options.get("work") or output / ".thumbnail-work")
         try:
-            return build_still_thumbnails(films, phrases, output, Path(work))
+            return build_studio(films, trailers, shots, phrases, output, work)
+        except Exception as exc:  # noqa: BLE001 -- the headline designs remain available
+            print(f"Studio thumbnails unavailable ({type(exc).__name__}: {exc}); using headline still designs.", flush=True)
+        try:
+            return build_still_thumbnails(films, phrases, output, work)
         except Exception as exc:  # noqa: BLE001 -- stills are preferred, never required
             print(f"Still-based thumbnails unavailable ({type(exc).__name__}); using the generated designs.", flush=True)
     return build_thumbnails(trailers, shots, phrases, output, **options)

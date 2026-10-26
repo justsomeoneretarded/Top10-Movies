@@ -294,6 +294,8 @@ jobs:
       THUMBNAIL_AI: 'true'
       # 'stills' (default): official TMDB stills with face-aware framing; 'ai': the generated-scene designs.
       THUMBNAIL_SOURCE: ${{ vars.THUMBNAIL_SOURCE || 'stills' }}
+      # 'none' (default): text-free thumbnails; 'minimal': a 2-3 word label on the panels option.
+      THUMBNAIL_TEXT: ${{ vars.THUMBNAIL_TEXT || 'none' }}
       # Optional second, augmented video (doubles final encode time). Set repository variable COMPARISON_EXPORT=true to enable.
       COMPARISON_EXPORT: ${{ vars.COMPARISON_EXPORT || 'false' }}
       U2NET_HOME: ${{ github.workspace }}/work/models/rembg

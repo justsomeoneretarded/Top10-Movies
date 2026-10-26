@@ -54,7 +54,14 @@ def faces(image: Image.Image) -> list[tuple[int, int, int, int]]:
         return []
     scale = 640 / image.width
     small = cv2.cvtColor(np.asarray(image.resize((640, max(1, round(image.height * scale))))), cv2.COLOR_RGB2GRAY)
-    found = _FACES.detectMultiScale(small, 1.1, 5, minSize=(28, 28))
+    found = list(_FACES.detectMultiScale(small, 1.1, 5, minSize=(28, 28)))
+    if not found:
+        # Dramatic stills often show faces at an angle: try profile detection, both directions.
+        profile = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / "haarcascade_profileface.xml"))
+        if not profile.empty():
+            found = list(profile.detectMultiScale(small, 1.1, 5, minSize=(28, 28)))
+            flipped = profile.detectMultiScale(cv2.flip(small, 1), 1.1, 5, minSize=(28, 28))
+            found += [(small.shape[1] - x - w, y, w, h) for x, y, w, h in flipped]
     return [(round(x / scale), round(y / scale), round(w / scale), round(h / scale)) for x, y, w, h in found]
 
 

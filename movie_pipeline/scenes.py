@@ -111,3 +111,35 @@ def unload():
             requests.post(_url() + "/api/generate", json={"model": model, "keep_alive": 0}, timeout=30)
         except requests.RequestException:
             pass
+
+
+THUMBNAIL_PROMPT = ("You are choosing a YouTube thumbnail for a movie countdown. Judge this frame: "
+                    "does it show a large, clear human face? how intense is the emotion (fear, rage, shock, focus)? "
+                    "is there visible action, a weapon, a creature, an explosion or spectacle? "
+                    "Return JSON only.")
+
+
+def rate_thumbnail(image) -> dict | None:
+    """Vision-model judgement of a frame as thumbnail material; None when the model is unavailable."""
+    small = image.convert("RGB").copy()
+    small.thumbnail((512, 288))
+    buffer = io.BytesIO()
+    small.save(buffer, format="JPEG", quality=88)
+    schema = {"type": "object", "properties": {
+        "large_face": {"type": "boolean"}, "emotion_intensity": {"type": "integer", "minimum": 0, "maximum": 10},
+        "action_or_spectacle": {"type": "integer", "minimum": 0, "maximum": 10},
+        "thumbnail_score": {"type": "integer", "minimum": 0, "maximum": 10}},
+        "required": ["large_face", "emotion_intensity", "action_or_spectacle", "thumbnail_score"]}
+    try:
+        response = requests.post(_url() + "/api/generate", json={
+            "model": VISION_MODEL, "prompt": THUMBNAIL_PROMPT, "images": [base64.b64encode(buffer.getvalue()).decode()],
+            "format": schema, "stream": False, "think": False, "keep_alive": "10m",
+            "options": {"temperature": 0.1, "num_predict": 80, "num_ctx": 2048}}, timeout=300)
+        response.raise_for_status()
+        data = json.loads(response.json().get("response", "{}"))
+        return {"large_face": bool(data.get("large_face")),
+                "emotion": max(0, min(10, int(data.get("emotion_intensity", 0)))),
+                "action": max(0, min(10, int(data.get("action_or_spectacle", 0)))),
+                "score": max(0, min(10, int(data.get("thumbnail_score", 0))))}
+    except (requests.RequestException, ValueError, TypeError, KeyError):
+        return None
