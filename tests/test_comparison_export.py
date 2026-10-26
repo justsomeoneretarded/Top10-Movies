@@ -8,7 +8,7 @@ import soundfile as sf
 from movie_pipeline.augmentation import FrameAugmenter, augment_audio, export_augmented
 from movie_pipeline.core import duration, ffmpeg, probe
 from movie_pipeline.cta_animation import add_cta_animation, interaction_frame
-from movie_pipeline.people import insert_portrait
+from movie_pipeline.people import insert_trailer_hold
 from movie_pipeline.soundtrack import music_bed, narration_rate, theme_for
 from movie_pipeline.voice import paced_take
 
@@ -35,7 +35,7 @@ def test_music_is_continuous_across_blocks_and_chord_changes(tmp_path, theme):
     assert np.isfinite(samples).all()
     assert np.max(np.abs(np.diff(samples[:, 0]))) < .015
     assert np.max(np.abs(samples)) < .5
-    assert np.sqrt(np.mean(samples[rate:-rate]**2)) > .01
+    assert .003 < np.sqrt(np.mean(samples[rate:-rate]**2)) < .025
     assert np.max(np.abs(samples[:10])) < .0001
     assert np.max(np.abs(samples[-10:])) < .0001
 
@@ -65,7 +65,7 @@ def test_audio_overlap_preserves_length_and_silence(tmp_path):
 
 def test_portrait_replaces_time_without_repeating_or_shortening_scene():
     plan = [{"start": 10, "duration": 8}, {"start": 40, "duration": 8}]
-    result = insert_portrait(plan, {"source": "verified.jpg", "still": True}, 5.5)
+    result = insert_trailer_hold(plan, {"source": "trailer.mp4", "start": 14, "still": True, "image": False}, 5.5)
     assert sum(cut["duration"] for cut in result) == 16
     assert result[1]["start"] == 15.5
     assert plan[0]["start"] == 10
@@ -135,18 +135,24 @@ def test_actual_reference_voice_remains_identifiable_after_comparison(tmp_path):
             os.environ['VIDEO_RESOLUTION'] = old
 
 
-def test_only_metadata_matched_full_names_receive_portraits(tmp_path):
-    from PIL import Image
+def test_character_hold_is_a_frame_from_the_same_trailer_and_ambiguity_is_skipped():
+    from pathlib import Path
+    from types import SimpleNamespace
 
-    from movie_pipeline.people import portrait_for
-    Image.new('RGB', (200, 300), 'navy').save(tmp_path/'known.jpg')
-    film = {'cast_profiles': [{'name':'Jane Example', 'profile_path':'/known.jpg'}]}
-    assert portrait_for('Another actor plays the lead.', film, tmp_path) is None
-    assert portrait_for('Example is the lead.', film, tmp_path) is None
-    portrait = portrait_for('Jane Example plays the lead.', film, tmp_path)
-    assert portrait['person'] == 'Jane Example'
-    with Image.open(portrait['source']) as image:
-        assert image.size == (1920, 1080)
+    from movie_pipeline.people import trailer_still_for
+    source = Path("film-trailer.mp4")
+    film = {"title":"Film", "cast_profiles":[{"name":"Jane Example", "character":"Detective Lane"},
+                                           {"name":"John Other", "character":"Inspector"}]}
+    selector = SimpleNamespace(faces={str(source):[True, True]}, card_kind=lambda *args: None,
+                               reuse_penalty=lambda *args: 0,
+                               relevance=lambda path, text: [.6, .3] if "Jane Example" in text else [.3, .6])
+    lookup = {str(source):[{"start":10, "end":18}, {"start":30, "end":38}]}
+    hold = trailer_still_for("Detective Lane has to choose.", film, selector, [source], lookup)
+    assert hold['source'] == str(source) and hold['start'] == 14
+    assert hold['still'] and hold['image'] is False
+    assert trailer_still_for("An unknown actor.", film, selector, [source], lookup) is None
+    selector.relevance = lambda *args: [.3, .3]
+    assert trailer_still_for("Jane Example plays the lead.", film, selector, [source], lookup) is None
 
 
 def test_trailer_audio_breaks_use_whole_utterances_and_distinct_windows():
@@ -161,3 +167,17 @@ def test_trailer_audio_breaks_use_whole_utterances_and_distinct_windows():
     assert second['text'] == 'This is our last chance.'
     assert second['start'] > first['end']
     assert choose_beat(cues[:2], shots, 100, True, maximum=3) is None
+
+
+def test_augmented_audio_does_not_change_protected_narration_samples(tmp_path):
+    rate = 16000
+    time = np.arange(rate*11)/rate
+    samples = np.column_stack((.1*np.sin(2*np.pi*220*time), .1*np.sin(2*np.pi*330*time)))
+    source, target = tmp_path/'original.wav', tmp_path/'protected.wav'
+    sf.write(source, samples, rate, subtype='PCM_24')
+    original, _ = sf.read(source)
+    augment_audio(source, target, protected_intervals=[(2, 9)])
+    changed, _ = sf.read(target)
+    assert len(changed) == len(original)
+    assert np.max(np.abs(changed[rate*2:rate*9]-original[rate*2:rate*9])) < 2e-7
+    assert np.max(np.abs(changed[:rate]-original[:rate])) > .001

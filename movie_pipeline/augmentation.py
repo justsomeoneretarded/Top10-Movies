@@ -115,7 +115,7 @@ def augment_audio_block(samples: np.ndarray, rate: int) -> np.ndarray:
     return np.stack(result, axis=1).astype(np.float32)
 
 
-def augment_audio(source: Path, target: Path):
+def augment_audio(source: Path, target: Path, *, protected_intervals: list[tuple[float, float]] | None = None):
     import soundfile as sf
     with sf.SoundFile(source) as reader, sf.SoundFile(target, "w", samplerate=reader.samplerate,
                   channels=reader.channels, subtype="PCM_24") as writer:
@@ -127,7 +127,19 @@ def augment_audio(source: Path, target: Path):
         while position < len(reader):
             reader.seek(position)
             samples = reader.read(block, dtype="float32", always_2d=True)
-            changed = augment_audio_block(samples, rate)
+            weight = None
+            if protected_intervals:
+                time = (np.arange(len(samples))+position)/rate
+                weight = np.ones(len(samples), dtype=np.float32)
+                for low, high in protected_intervals:
+                    if high < position/rate-.12 or low > (position+len(samples))/rate+.12:
+                        continue
+                    # Transition outside speech; every protected sample is untouched.
+                    allowed = np.clip((low-time)/.12, 0, 1)+np.clip((time-high)/.12, 0, 1)
+                    weight = np.minimum(weight, allowed)
+            changed = samples.copy() if weight is not None and not np.any(weight) else augment_audio_block(samples, rate)
+            if weight is not None:
+                changed = samples+(changed-samples)*weight[:, None]
             if pending is not None:
                 count = min(len(pending), len(changed), overlap)
                 weight = np.linspace(0, 1, count, dtype=np.float32)[:, None]
@@ -140,7 +152,7 @@ def augment_audio(source: Path, target: Path):
             position += step
 
 
-def export_augmented(source: Path, target: Path, work: Path):
+def export_augmented(source: Path, target: Path, work: Path, *, protected_intervals: list[tuple[float, float]] | None = None):
     """Stream modified frames to FFmpeg; never create a raw intermediate video."""
     from .render import _strict_audio_decode, validate_audio_video_duration
     work.mkdir(parents=True, exist_ok=True)
@@ -156,7 +168,7 @@ def export_augmented(source: Path, target: Path, work: Path):
     frames = 0
     try:
         ffmpeg("-i", source, "-vn", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s24le", original)
-        augment_audio(original, changed)
+        augment_audio(original, changed, protected_intervals=protected_intervals)
         augmenter = FrameAugmenter(height, width)
         with (work / "augmentation-encode.log").open("w+") as log:
             process = subprocess.Popen([
@@ -192,7 +204,8 @@ def export_augmented(source: Path, target: Path, work: Path):
                   "warp_pixels": .6, "noise_amplitude_8bit": 1.5,
                   "swap_fraction": 2*len(augmenter.first)/(width*height),
                   "variable_tempo": .008, "formant_envelope_semitones": .15,
-                  "same_timeline": True, "privacy_guarantee": False}
+                  "same_timeline": True, "narration_protected": protected_intervals is not None,
+                  "protected_intervals": protected_intervals or [], "privacy_guarantee": False}
         save_json(work / "augmentation-report.json", report)
         return report
     finally:

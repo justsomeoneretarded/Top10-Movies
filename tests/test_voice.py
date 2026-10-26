@@ -25,7 +25,7 @@ class Wave:
 
 def setup_speaker(monkeypatch, tmp_path, seconds, samples):
     torch = SimpleNamespace(manual_seed=Mock(), inference_mode=nullcontext)
-    soundfile = SimpleNamespace(write=lambda path, data, sr: path.write_bytes(b"raw"))
+    soundfile = SimpleNamespace(write=lambda path, data, sr, **kwargs: path.write_bytes(b"raw"))
     monkeypatch.setitem(__import__("sys").modules, "torch", torch)
     monkeypatch.setitem(__import__("sys").modules, "soundfile", soundfile)
     monkeypatch.setattr("movie_pipeline.voice.duration", lambda path: seconds)

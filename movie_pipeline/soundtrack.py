@@ -1,8 +1,4 @@
-"""Deterministic original instrumental beds with smooth, click-free note envelopes.
-
-No downloaded music, noise layers, square pulses, or hard oscillator resets.
-A single arrangement is chosen for the complete video's theme.
-"""
+"""Bundled licensed recorded instrumentals; one quiet musical theme per episode."""
 from __future__ import annotations
 
 import math
@@ -32,53 +28,51 @@ def narration_rate(theme: str) -> float:
     return {"action": 1.15, "mystery": 1.08, "drama": 1.0, "romance": 1.0}.get(theme, 1.0)
 
 
-def music_bed(path: Path, seconds: float, action: bool = False, *, theme: str | None = None):
-    """Stream a softly plucked/piano-like arrangement with overlapping chords.
+MUSIC_ROOT = Path(__file__).resolve().parents[1] / "assets" / "music"
 
-    Smooth attacks/releases ensure continuity at every note and WAV block.
-    This is synthesized instrumental music, not a commercial recording.
-    """
-    theme = theme or ("action" if action else "drama")
-    bpm = {"action": 108, "mystery": 76, "romance": 66, "drama": 74}[theme]
-    beat = 60 / bpm
-    minor = theme in {"action", "mystery"}
-    roots = [45, 41, 48, 43] if minor else [48, 45, 41, 43]
-    third = 3 if minor else 4
-    events = []
-    for bar in range(math.ceil(seconds / (beat * 4))):
-        start = bar * beat * 4
-        root = roots[(bar // 2) % len(roots)]
-        # Overlapping soft chord voices, and a quiet arpeggiated upper line.
-        for note in (root, root + third, root + 7):
-            events.append((start, beat * 5, note, .024, "pad"))
-        step = beat / 2 if theme == "action" else beat
-        notes = (root + 12, root + 7, root + third + 12, root + 7)
-        for j in range(round(beat * 4 / step)):
-            events.append((start + j * step, beat * 2.5, notes[j % 4], .038, "pluck"))
+
+def selected_track(theme: str) -> dict:
+    import json
+    name = {"action": "titan", "mystery": "celestial", "romance": "aurora", "drama": "aurora"}.get(theme, "aurora")
+    return json.loads((MUSIC_ROOT / "catalog.json").read_text())[name]
+
+
+def music_credit(theme: str) -> str:
+    track = selected_track(theme)
+    return (f"Music: '{track['title']}' by Scott Buckley — CC BY 4.0. "
+            f"{track['source']} License: {track['license_url']} "
+            "Excerpt, volume adjustment and crossfaded repetition.")
+
+
+def music_bed(path: Path, seconds: float, action: bool = False, *, theme: str | None = None):
+    """Quiet licensed recorded music, with smooth loops and no synthesized bed."""
+    import hashlib
+
+    import soundfile as sf
+
+    from .core import PipelineError
+    track = selected_track(theme or ("action" if action else "drama"))
+    source = MUSIC_ROOT / track["file"]
+    if hashlib.sha256(source.read_bytes()).hexdigest() != track["sha256"]:
+        raise PipelineError("Bundled music failed its integrity check.")
+    samples, rate = sf.read(source, dtype="float32", always_2d=True)
+    if rate != RATE or len(samples) < RATE*8 or samples.shape[1] != 2:
+        raise PipelineError("Bundled music must be stereo 48 kHz with a readable loop.")
+    overlap = RATE*3
+    weight = np.linspace(0, 1, overlap, dtype=np.float32)[:, None]
+    loop = np.concatenate((samples[overlap:-overlap],
+                           samples[-overlap:]*(1-weight)+samples[:overlap]*weight))
+    rms = float(np.sqrt(np.mean(loop.astype(np.float64)**2)))
+    peak = float(np.max(np.abs(loop)))
+    gain = min(.0126/max(rms, 1e-9), .08/max(peak, 1e-9))
     with wave.open(str(path), "wb") as stream:
         stream.setnchannels(2)
         stream.setsampwidth(2)
         stream.setframerate(RATE)
         for block in range(math.ceil(seconds)):
-            count = min(RATE, round(seconds * RATE) - block * RATE)
-            time = (np.arange(count) + block * RATE) / RATE
-            signal = np.zeros(count, dtype=np.float64)
-            for start, length, note, gain, instrument in events:
-                if start >= time[-1] or start + length <= time[0]:
-                    continue
-                age = time - start
-                valid = (age >= 0) & (age < length)
-                t = age[valid]
-                frequency = 440 * 2 ** ((note - 69) / 12)
-                attack = .22 if instrument == "pad" else .025
-                envelope = np.minimum(1, t / attack) ** 2
-                envelope *= np.minimum(1, (length - t) / .35) ** 2
-                if instrument == "pluck":
-                    envelope *= np.exp(-t / (beat * .8))
-                voice = (np.sin(2 * np.pi * frequency * t)
-                         + .22 * np.sin(2 * np.pi * frequency * 2 * t)
-                         + .07 * np.sin(2 * np.pi * frequency * 3 * t))
-                signal[valid] += gain * envelope * voice
-            signal *= np.minimum(1, time / 2) * np.minimum(1, np.maximum(0, seconds-time) / 2)
-            stereo = np.column_stack((signal, signal * .98))
-            stream.writeframes((np.clip(stereo, -.95, .95) * 32767).astype("<i2").tobytes())
+            count = min(RATE, round(seconds*RATE)-block*RATE)
+            indices = np.arange(count)+block*RATE
+            time = indices/RATE
+            envelope = np.minimum(1, time/2)*np.minimum(1, np.maximum(0, seconds-time)/2)
+            audio = loop[indices % len(loop)]*gain*envelope[:, None]
+            stream.writeframes((audio*32767).astype("<i2").tobytes())

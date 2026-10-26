@@ -22,7 +22,7 @@ def clean_work(root: Path = Path("work"), keep_jobs: int = 2) -> dict:
                 if path.is_dir():
                     shutil.rmtree(path)
             for path in job.rglob("*"):
-                if path.is_file() and (path.suffix in {".mp4", ".tmp"} or path.name in {"music.wav", "finished-mix.wav", "ending-music-only.wav", "background-only.wav", "edit-without-music.wav", "comparison-original.wav", "comparison-augmented.wav"}):
+                if path.is_file() and (path.suffix in {".mp4", ".tmp"} or path.name in {"music.wav", "voice-before-pacing.wav", "voice-after-pacing.wav", "finished-mix.wav", "ending-music-only.wav", "background-only.wav", "edit-without-music.wav", "comparison-original.wav", "comparison-augmented.wav"}):
                     path.unlink(missing_ok=True)
             modified = max((p.stat().st_mtime for p in job.rglob("*") if p.is_file()), default=job.stat().st_mtime)
             size = sum(p.stat().st_size for p in job.rglob("*") if p.is_file())

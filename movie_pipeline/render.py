@@ -403,9 +403,9 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
                 # Preserve declared silence before changing the sample clock.
                 f"[1:a]asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0:min_hard_comp=0.0001,atempo={speed},"
                 f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
-                "[2:a]volume=0.38[bed];"
+                "[2:a]equalizer=f=220:t=q:w=0.8:g=-3,equalizer=f=2400:t=q:w=0.7:g=-4[bed];"
                 "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
-                f"[voice][duck]amix=inputs=2:duration=longest:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
+                f"[voice][duck]amix=inputs=2:duration=longest:normalize=0,volume=1.26,alimiter=limit=0.84:attack=5:release=50:level=0:latency=1,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
             )
             record("encoding", planned_duration=final_duration, music_theme=music_theme or ("action" if action else "drama"))
             for source, name in ((combined_audio, "edit-without-music.wav"), (music, "background-only.wav")):

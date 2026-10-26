@@ -146,7 +146,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .footage import download
     from .memes import prepare_intro_meme
     from .packaging import build_description, refresh_availability
-    from .people import insert_portrait, portrait_for
+    from .people import insert_trailer_hold, trailer_still_for
     from .previews import (
         choose_preview,
         choose_title_card,
@@ -165,7 +165,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .script import Writer
     from .secondary_footage import download_secondary
     from .shots import ShotSelector, analyse, intro_montage
-    from .soundtrack import narration_rate, theme_for
+    from .soundtrack import music_credit, narration_rate, theme_for
     from .source_pool import (
         best_intro_sources,
         choose_from_sources,
@@ -191,7 +191,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "qwen3:4b")
-    run_key = key("pipeline-v9-clean-comparison", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v10-clean-voice-trailer-holds", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -365,6 +365,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 aligned[coordinate] = cues
     finally:
         recovery.close()
+    unpaced_take = next(iter(speech.values()), None)
+    if unpaced_take is not None:
+        ffmpeg("-i", unpaced_take, "-t", 12, "-c:a", "pcm_s24le", work / "voice-before-pacing.wav")
     music_theme = theme_for(title, brief)
     voice_speed = narration_rate(music_theme)
     if voice_speed != 1:
@@ -379,8 +382,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         cta_audio = paced_take(cta_audio, voice_speed)
         cta_cues = [{**cue, "start": cue["start"]/voice_speed,
                     "end": cue["end"]/voice_speed} for cue in cta_cues]
+    paced_example = next(iter(speech.values()), None)
+    if paced_example is not None:
+        ffmpeg("-i", paced_example, "-t", 12, "-c:a", "pcm_s24le", work / "voice-after-pacing.wav")
     save_json(work / "soundtrack-report.json", {"theme": music_theme, "narration_rate": voice_speed,
-              "music_source": "original smooth instrumental arrangement", "trailer_under_narration": False})
+              "music_source": music_credit(music_theme), "trailer_under_narration": False})
     trailer_cues = []
     for trailer in trailers:
         cache = trailer.with_suffix(".dialogue.json")
@@ -545,13 +551,16 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             audio = speech[(section_index, paragraph_index)]
             chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), action)
             if is_film and duration(audio) >= 4:
-                portrait = portrait_for(text, film, work / "portraits")
-                if portrait and portrait["person"] not in portraits_used:
+                portrait = trailer_still_for(text, film, selector, pools[film_index], shot_lookup)
+                if portrait and (film_index, portrait["person"]) not in portraits_used:
                     name = portrait["person"].split()[-1].casefold()
                     mention = next((cue["start"] for cue in aligned[(section_index, paragraph_index)]
                                     if name in cue["text"].casefold()), 0)
-                    chosen = insert_portrait(chosen, portrait, when=mention)
-                    portraits_used.add(portrait["person"])
+                    chosen = insert_trailer_hold(chosen, portrait, when=mention)
+                    portraits_used.add((film_index, portrait["person"]))
+                    reserve_hold = getattr(selector, "reserve", None)
+                    if callable(reserve_hold):
+                        reserve_hold(Path(portrait["source"]), portrait["start"], 1/30, "character-hold")
                     note_visual_beat(selector, min(5.5, duration(audio)), still=True)
             if meme and section["kind"] == "intro" and montage is not None and not meme_used:
                 chosen, meme_used = place_intro_meme(chosen, text, aligned[(section_index, paragraph_index)], meme)
@@ -649,10 +658,12 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     quality_report["sources"] = [source for source in sources if source["file"] in active_files]
     save_json(work / "quality-report.json", quality_report)
     source_links = [json.loads(t.with_suffix('.json').read_text())["source"] for t in credited_trailers]
-    (output / "description.txt").write_text(build_description(script, films, chapters, source_links))
+    (output / "description.txt").write_text(build_description(script, films, chapters, source_links)+"\n\n"+music_credit(music_theme)+"\n")
     embed_chapters(output / "final-video.mp4", chapters, final_duration, work)
     print("Exporting the augmented comparison with the same timeline", flush=True)
-    comparison = export_augmented(output / "final-video.mp4", output / "final-video-augmented.mp4", work / "comparison")
+    protected = [(max(0, event["start"]/speed-.25), (event["start"]+event["duration"])/speed+.25)
+                 for event in timeline if event.get("type") in {"narration", "subscribe"}]
+    comparison = export_augmented(output / "final-video.mp4", output / "final-video-augmented.mp4", work / "comparison", protected_intervals=protected)
     comparison_recovery = SpeechRecovery(None, lambda: Narrator(reference, work / "speech"),
         work / "comparison-audio-checks", fallback_factory=lambda: WhisperModel(
             "small.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4),
@@ -667,8 +678,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     save_json(output / "comparison-settings.json", comparison)
     (output / "comparison-readme.txt").write_text(
         "final-video.mp4: clean version.\nfinal-video-augmented.mp4: the same edit with visual/audio augmentation.\n"
-        "Both use subtitles.srt and the same chapters. Augmentation is not anonymization or copyright protection.\n")
-    credits = "Film metadata: TMDB — https://www.themoviedb.org/\nWatch listings: JustWatch via TMDB — https://www.justwatch.com/us\n"
+        "Both use subtitles.srt and the same chapters. Narration is protected from audio augmentation. Augmentation is not anonymization or copyright protection.\n")
+    credits = music_credit(music_theme)+"\nFilm metadata: TMDB — https://www.themoviedb.org/\nWatch listings: JustWatch via TMDB — https://www.justwatch.com/us\n"
     if meme_used:
         credits += str(meme.get("attribution", "Intro meme"))+" — "+str(meme.get("source", ""))+"\n"
     if cta_rendered.get("credit_source"):

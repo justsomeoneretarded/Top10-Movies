@@ -172,6 +172,8 @@ jobs:
         with:
           name: audio-inspection-${{ github.run_number }}
           path: |
+            work/jobs/*/voice-before-pacing.wav
+            work/jobs/*/voice-after-pacing.wav
             work/jobs/*/finished-mix.wav
             work/jobs/*/ending-music-only.wav
             work/jobs/*/background-only.wav

@@ -191,7 +191,7 @@ def fake_speaker(monkeypatch, tmp_path: Path, samples):
     return speaker
 
 
-def write_wav(path, samples, rate):
+def write_wav(path, samples, rate, **kwargs):
     with wave.open(str(path), "wb") as stream:
         stream.setnchannels(1)
         stream.setsampwidth(2)

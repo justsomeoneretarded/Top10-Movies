@@ -1,53 +1,61 @@
-"""Optional, metadata-identified portraits when narration explicitly names cast."""
+"""Conservative character holds sourced only from the reviewed film's trailers."""
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
-import requests
-from PIL import Image, ImageFilter, ImageOps
+
+def _mentions(text: str, person: dict) -> bool:
+    aliases = [person.get("name") or "", *re.split(r"\s*/\s*", person.get("character") or "")]
+    return any(len(alias.strip()) >= 4 and re.search(r"(?<!\w)"+re.escape(alias.strip())+r"(?!\w)", text, re.IGNORECASE)
+               for alias in aliases)
 
 
-def portrait_for(text: str, film: dict, cache: Path) -> dict | None:
-    """Never infer identity from a generic face detector or a CLIP face match."""
-    for person in film.get("cast_profiles", []):
-        name, profile = person.get("name", ""), person.get("profile_path", "")
-        if not name or not re.search(r"(?<!\w)"+re.escape(name)+r"(?!\w)", text, re.IGNORECASE):
-            continue
-        if not re.fullmatch(r"/[A-Za-z0-9_-]+\.(?:jpg|png)", profile):
-            continue
-        cache.mkdir(parents=True, exist_ok=True)
-        target = cache / profile[1:]
+def trailer_still_for(text: str, film: dict, selector, sources: list[Path], shot_lookup: dict) -> dict | None:
+    """Soft CLIP cast matching; skip ambiguity instead of fetching a headshot.
+
+    A face detector alone does not identify an actor. Require a visible face,
+    a positive target match and separation from other cast descriptions.
+    This is an editorial preference, not a face-identity verification claim.
+    """
+    cast = [person for person in film.get("cast_profiles", []) if isinstance(person, dict)]
+    target = next((person for person in cast if _mentions(text, person)), None)
+    if target is None:
+        return None
+    candidates = []
+    for source in sources:
+        shots = shot_lookup.get(str(source), [])
+        faces = getattr(selector, "faces", {}).get(str(source), [])
         try:
-            if not target.exists():
-                with requests.get("https://image.tmdb.org/t/p/w500"+profile, timeout=(3, 8), stream=True) as response:
-                    response.raise_for_status()
-                    content = bytearray()
-                    for block in response.iter_content(65536):
-                        content.extend(block)
-                        if len(content) > 3_000_000:
-                            raise ValueError("Oversized portrait")
-                target.write_bytes(content)
-            with Image.open(target) as image:
-                image.verify()
-            widescreen = target.with_name(target.stem+"-wide.jpg")
-            if not widescreen.exists():
-                with Image.open(target) as image:
-                    image = image.convert("RGB")
-                    canvas = ImageOps.fit(image, (1920, 1080)).filter(ImageFilter.GaussianBlur(35))
-                    foreground = ImageOps.contain(image, (1920, 1080))
-                    canvas.paste(foreground, ((1920-foreground.width)//2, (1080-foreground.height)//2))
-                    canvas.save(widescreen, quality=95)
-            return {"source": str(widescreen), "start": 0, "image": True, "still": True,
-                    "still_motion": "zoom_in", "person": name,
-                    "visual_reason": "metadata-identified-cast-portrait"}
-        except (OSError, ValueError, requests.RequestException):
-            target.unlink(missing_ok=True)
-    return None
+            query = f"A close-up of {target['name']} as {target.get('character', '')} in {film['title']}."
+            scores = selector.relevance(source, query)
+            alternatives = [selector.relevance(source, f"A close-up of {p['name']} as {p.get('character', '')} in {film['title']}.")
+                            for p in cast if p is not target]
+            for i, shot in enumerate(shots):
+                if selector.card_kind(source, i) is not None:
+                    continue
+                score = float(scores[i])
+                other = max((float(values[i]) for values in alternatives), default=score-.03)
+                face = i < len(faces) and faces[i]
+                recognizable_character = target.get("character") and score >= .34 and score-other >= .07
+                if not (face or recognizable_character) or not math.isfinite(score) or not math.isfinite(other) or score < .25 or score-other < .025:
+                    continue
+                when = (shot['start']+shot['end'])/2
+                score -= selector.reuse_penalty(source, shot['start'], shot['end']-shot['start'])
+                candidates.append((score, str(source), when))
+        except (AttributeError, RuntimeError, ValueError, IndexError, KeyError, TypeError):
+            continue
+    if not candidates:
+        return None
+    _, source, when = max(candidates)
+    return {"source":source, "start":when, "image":False, "still":True,
+            "still_motion":"zoom_in", "person":target['name'],
+            "visual_reason":"trailer-character-hold"}
 
 
-def insert_portrait(plan: list[dict], portrait: dict, seconds: float = 5.5, *, when: float = 0) -> list[dict]:
-    """Replace time at the named person's mention, never add or repeat footage."""
+def insert_trailer_hold(plan: list[dict], portrait: dict, seconds: float = 5.5, *, when: float = 0) -> list[dict]:
+    """Replace time with a trailer freeze without adding or repeating footage."""
     total = sum(shot["duration"] for shot in plan)
     beginning = max(0, min(when, max(0, total-4)))
     end = min(total, beginning+seconds)

@@ -381,7 +381,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(render, 'finish', finish)
     monkeypatch.setattr('movie_pipeline.soundtrack.narration_rate', lambda theme: 1)
     monkeypatch.setattr('movie_pipeline.cta_animation.add_cta_animation', Mock())
-    def augmented(source, target, work):
+    def augmented(source, target, work, *, protected_intervals=None):
+        assert protected_intervals and all(end > start for start, end in protected_intervals)
         assert Path(source).exists()
         make(target, durations[str(source)])
         records['comparison'] = str(target)

@@ -5,7 +5,7 @@ import os
 import re
 from pathlib import Path
 
-from .core import PipelineError, duration, ffmpeg, key, run
+from .core import PipelineError, duration, ffmpeg, key
 
 
 class Narrator:
@@ -26,7 +26,7 @@ class Narrator:
         import numpy as np
         import soundfile as sf
         import torch
-        baseline = key("voice-v2-padded-boundaries", text, self.reference_hash, self.model_name)
+        baseline = key("voice-v3-clean-presence", text, self.reference_hash, self.model_name)
         token = key("voice-retry-v1", baseline, attempt_offset) if force else baseline
         output = self.cache / f"{token}.wav"
         suffix = 0
@@ -47,11 +47,11 @@ class Narrator:
             if not np.isfinite(samples).all() or not samples.size or np.max(np.abs(samples)) < 1e-5:
                 print(f"Voice attempt {attempt+1}: empty, silent, or invalid audio; retrying.", flush=True)
                 continue
-            sf.write(raw, samples, self.model.sr)
+            sf.write(raw, samples, self.model.sr, subtype="PCM_24")
             # Keep the first/last phonemes clear of encoder and edit boundaries.
             # Padding adds real silence; it never trims or shifts speech out of the file.
             ffmpeg("-i", raw, "-af",
-                   "asetpts=PTS-STARTPTS,adelay=160:all=1,apad=pad_dur=0.26,loudnorm=I=-18:TP=-2:LRA=9",
+                   "asetpts=PTS-STARTPTS,highpass=f=65,agate=threshold=0.001:ratio=1.5:range=0.25:attack=5:release=180:knee=4,equalizer=f=3000:t=q:w=0.8:g=1.5,adelay=160:all=1,apad=pad_dur=0.26,loudnorm=I=-18:TP=-2:LRA=9",
                    "-ar", "48000", "-ac", "1", output)
             raw.unlink(missing_ok=True)
             seconds = duration(output)
@@ -308,11 +308,9 @@ def paced_take(source: Path, speed: float) -> Path:
     from .render import _strict_audio_decode
     if speed == 1:
         return source
-    output = source.with_name(source.stem+f"-pace-v2-{speed:.3f}.wav")
+    output = source.with_name(source.stem+f"-pace-v3-{speed:.3f}.wav")
     if not output.exists():
-        filters = run(["ffmpeg", "-hide_banner", "-filters"])
-        tempo = (f"rubberband=tempo={speed}:pitch=1:formant=preserved:transients=crisp:detector=compound"
-                 if "rubberband" in filters else f"atempo={speed}")
+        tempo = f"atempo={speed}"  # Preserve articulation without spectral/formant reconstruction.
         ffmpeg("-i", source, "-af", f"{tempo},asetpts=N/SR/TB",
                "-ar", "48000", "-ac", "1", "-c:a", "pcm_s24le", output)
     _strict_audio_decode(output)
