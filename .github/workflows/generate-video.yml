@@ -107,6 +107,11 @@ jobs:
       U2NET_HOME: ${{ github.workspace }}/work/models/rembg
       OLLAMA_HOST: 127.0.0.1:11435
       OLLAMA_URL: http://127.0.0.1:11435
+      # Keep the 12B script model within the runner's 16 GB: one model, one request, compressed KV cache.
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_FLASH_ATTENTION: '1'
+      OLLAMA_KV_CACHE_TYPE: q8_0
       HF_HOME: ${{ github.workspace }}/work/models/huggingface
       SPEECH_VERIFY_MODEL_DIR: ${{ github.workspace }}/work/speech-verifier-model
       # Pulled fresh each run (about 40 seconds); too large for the shared 10 GB Actions cache.
@@ -123,6 +128,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Add swap space as a memory safety margin
+        continue-on-error: true
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 12G /mnt/swapfile && sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
+          free -h
       - name: System dependencies
         run: |
           sudo apt-get update -qq

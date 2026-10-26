@@ -48,6 +48,20 @@ def film_facts(film: dict) -> dict:
     return facts
 
 
+def plan_facts(film: dict) -> dict:
+    """Condensed facts for the whole-list planning pass, so 10-15 titles fit a modest context."""
+    from .wiki import trim
+    facts = film_facts(film)
+    limits = {"overview": 400, "wiki_summary": 350, "wiki_production": 350, "wiki_reception": 300}
+    for name, limit in limits.items():
+        if isinstance(facts.get(name), str):
+            facts[name] = trim(facts[name], limit)
+    facts.pop("keywords", None)
+    if isinstance(facts.get("cast"), list):
+        facts["cast"] = facts["cast"][:3]
+    return facts
+
+
 def _numbers_issue(paragraphs: list[str], facts: dict) -> str | None:
     """Flag figures (years, counts, money, runtimes) that do not appear anywhere in the facts."""
     allowed = set(re.findall(r"\d+", json.dumps(facts, ensure_ascii=False)))
@@ -333,7 +347,7 @@ class Writer:
             "entries": {"type": "array", "items": entry, "minItems": len(films), "maxItems": len(films)},
             "comment_question": {"type": "string"}},
             "required": ["angle", "opening_hook", "open_loop", "entries", "comment_question"], "additionalProperties": False}
-        data = [{**film_facts(film), "rank": index + 1} for index, film in enumerate(films)]
+        data = [{**plan_facts(film), "rank": index + 1} for index, film in enumerate(films)]
         prompt = (
             f"Plan a YouTube countdown episode titled {title!r}. Creative direction: {brief}\n"
             f"Ranked titles with verified facts (rank 1 is the best and is revealed last): {json.dumps(data, ensure_ascii=False)}\n"
@@ -347,7 +361,7 @@ class Writer:
             "- comment_question: one specific question viewers can answer in the comments.\n"
             "Use only facts in the data; spoiler-light; casual spoken English; no markdown.")
         try:
-            plan = self.ask(prompt, schema, temperature=0.6, num_ctx=16384, num_predict=220 * len(films) + 400)
+            plan = self.ask(prompt, schema, temperature=0.6, num_ctx=8192, num_predict=min(2600, 200 * len(films) + 400))
         except (requests.RequestException, ValueError, TypeError) as exc:
             print(f"Episode planning unavailable ({type(exc).__name__}); writing sections without a shared plan.", flush=True)
             return {}
@@ -364,6 +378,12 @@ class Writer:
                   "comment_question": _clean_plan_text(plan.get("comment_question"), [], 30),
                   "entries": {str(rank): value for rank, value in entries.items()}}
         print(f"Episode plan: {len(entries)}/{len(films)} entries planned. Angle: {result['angle']}", flush=True)
+        try:
+            available = next(int(line.split()[1]) for line in open("/proc/meminfo") if line.startswith("MemAvailable")) / 1e6
+        except (OSError, StopIteration, ValueError):
+            available = float("nan")
+        from .core import notice
+        notice("Episode plan", f"{len(entries)}/{len(films)} entries planned with {self.model}; {available:.1f} GB RAM available. Angle: {result['angle']}")
         if cache:
             save_json(cache, result)
         return result
