@@ -7,6 +7,12 @@ run-name: "Benchmark — free models on the CPU runner"
 on:
   workflow_dispatch:
     inputs:
+      only:
+        description: "Run every benchmark, or one family"
+        required: true
+        type: choice
+        default: all
+        options: [all, llm, voice, music]
       music_seconds:
         description: "Seconds of music to generate per ACE-Step sample"
         required: true
@@ -19,6 +25,7 @@ permissions:
 
 jobs:
   llm:
+    if: inputs.only == 'all' || inputs.only == 'llm'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -47,6 +54,7 @@ jobs:
           retention-days: 2
 
   chatterbox:
+    if: inputs.only == 'all' || inputs.only == 'voice'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -70,6 +78,7 @@ jobs:
           retention-days: 2
 
   qwen-tts:
+    if: inputs.only == 'all' || inputs.only == 'voice'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -92,6 +101,7 @@ jobs:
           retention-days: 2
 
   acestep:
+    if: inputs.only == 'all' || inputs.only == 'music'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -107,23 +117,33 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install ACE-Step 1.5 (CPU)
+        shell: bash
         run: |
+          set -o pipefail
           sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
           git clone --depth 1 https://github.com/ACE-Step/ACE-Step-1.5 "$RUNNER_TEMP/acestep"
-          python -m pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -3
           cd "$RUNNER_TEMP/acestep"
-          # Install declared dependencies except the CUDA-pinned torch wheels already satisfied above.
           python - <<'PY'
-          import importlib.metadata as md, tomllib, subprocess, sys
+          import importlib.metadata as md, subprocess, sys, tomllib
           deps = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]
           skip = ("torch==", "torch>", "torch;", "torchvision", "torchaudio", "nano-vllm", "mlx")
           keep = [d for d in deps if not d.replace(" ", "").lower().startswith(skip) and d.split(";")[0].strip().lower() != "torch"]
           # Pin the CPU torch wheels so no dependency swaps in a CUDA build.
           pins = [f"{name}=={md.version(name)}" for name in ("torch", "torchvision", "torchaudio")]
           open("cpu-constraints.txt", "w").write("\n".join(pins) + "\n")
-          subprocess.check_call([sys.executable, "-m", "pip", "install", "-c", "cpu-constraints.txt", *keep])
+          print("::notice title=ACE-Step CPU torch::" + ", ".join(pins))
+          failed = []
+          for dep in keep:
+              done = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-c", "cpu-constraints.txt", dep],
+                                    capture_output=True, text=True)
+              if done.returncode:
+                  failed.append(dep)
+                  tail = (done.stdout + done.stderr).strip().splitlines()[-6:]
+                  print(f"::warning title=ACE-Step dependency skipped: {dep}::" + "%0A".join(tail))
+          print(f"::notice title=ACE-Step dependencies::{len(keep)-len(failed)} installed, {len(failed)} skipped: {failed}")
           PY
-          python -m pip install --no-deps -e .
+          python -m pip install -q --no-deps -e . 2>&1 | tail -3
       - name: Generate instrumental samples
         run: python scripts/benchmark_models.py acestep "$RUNNER_TEMP/acestep" --seconds "$MUSIC_SECONDS"
       - uses: actions/upload-artifact@v4
