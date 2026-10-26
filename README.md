@@ -96,6 +96,17 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 
 No approval or publication steps occur. Successful runs deliver downloadable files; this repository does not upload to YouTube.
 
+## How a run is split across machines
+
+One **Run workflow** press starts several jobs on separate free runners:
+
+1. **prepare** — research (TMDB, Wikipedia, watch listings) and the episode plan.
+2. **script** — one job per title plus one for the intro and outro, all at once: each writes and fact-checks its section.
+3. **footage** — one job per title, at the same time as script: trailer download, end-slate scan, shot analysis and AI scene descriptions.
+4. **produce** — the full pipeline. It finds the warm-up results already cached and continues with narration, editing, mixing, thumbnails and packaging, then uploads the single **movie-video-N** artifact.
+
+Warm-up jobs are optional: if one fails, produce does that part itself, so a failed warm-up only costs time.
+
 ## Optional repository variables
 
 Set these in **Settings → Secrets and variables → Actions → Variables**. None are required.
@@ -105,6 +116,8 @@ Set these in **Settings → Secrets and variables → Actions → Variables**. N
 | `TTS_MODEL` | `turbo` | `nano` uses the smaller Chatterbox model for faster CPU runs. |
 | `THUMBNAIL_SOURCE` | `stills` | `ai` uses the generated-scene thumbnail designs instead of TMDB stills. |
 | `COMPARISON_EXPORT` | `false` | `true` also exports the augmented comparison video (roughly doubles final encode time). |
+| `SCENE_DESCRIPTIONS` | `true` | `false` skips the AI scene descriptions (Qwen3-VL) used for matching footage to narration. |
+| `DIALOGUE_SEPARATION` | `true` | `false` plays trailer dialogue moments with the trailer's own music instead of separating voices (Demucs). |
 
 ## Trailer download fallbacks
 

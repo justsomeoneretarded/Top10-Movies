@@ -89,7 +89,194 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ---- Parallel warm-up jobs: they fill the run's caches so "produce" can skip most heavy work.
+  # Each is optional; if one fails, produce simply does that part itself.
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      script_parts: ${{ steps.plan.outputs.script_parts }}
+      footage_parts: ${{ steps.plan.outputs.footage_parts }}
+    env:
+      VIDEO_TITLE: ${{ inputs.title }}
+      VIDEO_BRIEF: ${{ inputs.description }}
+      MOVIE_LIST: ${{ inputs.movies }}
+      VIDEO_TYPE: ${{ inputs.content_type }}
+      NARRATOR: ${{ inputs.narrator }}
+      TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
+      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      SCRIPT_MODEL: gemma4:12b
+      TRY_4K: "${{ inputs.try_4k }}"
+      FACT_CHECK: "${{ inputs.fact_check }}"
+      VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
+      OLLAMA_HOST: 127.0.0.1:11435
+      OLLAMA_URL: http://127.0.0.1:11435
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_FLASH_ATTENTION: '1'
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_MODELS: ${{ github.workspace }}/work/ollama-models
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install light dependencies and validate inputs
+        run: |
+          python -m pip install -e .
+          python -m scripts.preflight
+      - name: Prepare local script model
+        run: bash scripts/bootstrap_ollama.sh
+      - name: Research and plan the episode
+        id: plan
+        run: python -m movie_pipeline.cli --stage prepare
+      - name: Package research and plan
+        run: tar -czf warm-prepare.tgz work/jobs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warm-prepare
+          path: warm-prepare.tgz
+          retention-days: 1
+
+  script:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ${{ fromJson(needs.prepare.outputs.script_parts) }}
+    env:
+      VIDEO_TITLE: ${{ inputs.title }}
+      VIDEO_BRIEF: ${{ inputs.description }}
+      MOVIE_LIST: ${{ inputs.movies }}
+      VIDEO_TYPE: ${{ inputs.content_type }}
+      NARRATOR: ${{ inputs.narrator }}
+      TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
+      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      SCRIPT_MODEL: gemma4:12b
+      TRY_4K: "${{ inputs.try_4k }}"
+      FACT_CHECK: "${{ inputs.fact_check }}"
+      VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
+      OLLAMA_HOST: 127.0.0.1:11435
+      OLLAMA_URL: http://127.0.0.1:11435
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_FLASH_ATTENTION: '1'
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_MODELS: ${{ github.workspace }}/work/ollama-models
+      PYTHONUNBUFFERED: '1'
+      PIPELINE_PART: ${{ matrix.part }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v4
+        with:
+          name: warm-prepare
+      - run: tar -xzf warm-prepare.tgz && rm warm-prepare.tgz
+      - name: Prepare local script model
+        run: bash scripts/bootstrap_ollama.sh
+      - name: Write and fact-check one section
+        run: python -m movie_pipeline.cli --stage script
+      - name: Package the section
+        run: tar -czf "warm-script-$PIPELINE_PART.tgz" work/jobs/*/script-sections
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warm-script-${{ matrix.part }}
+          path: warm-script-*.tgz
+          retention-days: 1
+
+  footage:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ${{ fromJson(needs.prepare.outputs.footage_parts) }}
+    env:
+      VIDEO_TITLE: ${{ inputs.title }}
+      VIDEO_BRIEF: ${{ inputs.description }}
+      MOVIE_LIST: ${{ inputs.movies }}
+      VIDEO_TYPE: ${{ inputs.content_type }}
+      NARRATOR: ${{ inputs.narrator }}
+      TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
+      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      SCRIPT_MODEL: gemma4:12b
+      TRY_4K: "${{ inputs.try_4k }}"
+      FACT_CHECK: "${{ inputs.fact_check }}"
+      VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
+      OLLAMA_HOST: 127.0.0.1:11435
+      OLLAMA_URL: http://127.0.0.1:11435
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_FLASH_ATTENTION: '1'
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_MODELS: ${{ github.workspace }}/work/ollama-models
+      PYTHONUNBUFFERED: '1'
+      PIPELINE_PART: ${{ matrix.part }}
+      SCENE_DESCRIPTIONS: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: System dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg tesseract-ocr
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v4
+        with:
+          name: warm-prepare
+      - run: tar -xzf warm-prepare.tgz && rm warm-prepare.tgz
+      - name: Configure optional YouTube authentication
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: python -m scripts.prepare_cookies
+      - name: Start YouTube proof-of-origin token provider
+        continue-on-error: true
+        run: docker run --name bgutil-provider -d --init -p 127.0.0.1:4416:4416 brainicism/bgutil-ytdlp-pot-provider
+      - name: Prepare optional WARP fallback route for trailer downloads
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/warp_proxy.sh
+      - name: Start local Ollama for scene descriptions
+        run: |
+          curl --fail --show-error --location --retry 3 https://ollama.com/install.sh -o "$RUNNER_TEMP/ollama.sh"
+          sh "$RUNNER_TEMP/ollama.sh"
+          (ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &)
+          for i in $(seq 1 60); do curl -sf "$OLLAMA_URL/api/tags" >/dev/null && break; sleep 1; done
+      - name: Download and analyse one title's trailer
+        run: python -m movie_pipeline.cli --stage footage
+      - name: Package the footage
+        run: tar -czf "warm-footage-$PIPELINE_PART.tgz" work/footage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warm-footage-${{ matrix.part }}
+          path: warm-footage-*.tgz
+          retention-days: 1
+      - name: Remove temporary YouTube cookies
+        if: always()
+        run: rm -f "$RUNNER_TEMP/youtube-cookies.txt"
+
   produce:
+    needs: [prepare, script, footage]
+    # Runs even if some warm-up jobs failed; it does any missing work itself.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     env:
@@ -194,6 +381,20 @@ jobs:
           python -m pip install dora-search julius einops omegaconf tqdm pyyaml
       - name: Prepare local script model
         run: bash scripts/bootstrap_ollama.sh
+      - name: Collect warm-up results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: warm-*
+          path: warm-results
+          merge-multiple: true
+      - name: Unpack warm-up results
+        continue-on-error: true
+        run: |
+          shopt -s nullglob
+          for archive in warm-results/*.tgz; do tar -xzf "$archive"; done
+          rm -rf warm-results
+          echo "Warm-up archives unpacked: $(ls work/footage 2>/dev/null | grep -c '\.mp4$' || true) trailers ready."
       - name: Produce the complete package
         run: python -m movie_pipeline.cli
       - name: Downloadable video package

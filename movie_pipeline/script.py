@@ -648,7 +648,12 @@ class Writer:
             save_json(cache, concepts)
         return concepts
 
-    def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0, target_seconds: float = 540, trailer_seconds: float = 0) -> dict:
+    def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0, target_seconds: float = 540, trailer_seconds: float = 0,
+              only: set[str] | None = None) -> dict:
+        """Write the whole script, or (with ``only``) just some sections to warm the cache in parallel jobs.
+
+        Section names for ``only``: "intro", "outro" and "film-<index>" (0 is number one).
+        """
         availability = [availability_line(film.get("watch_availability", {})) for film in films]
         provider_seconds = sum(len(line.split()) for line in availability) * 60/145
         opening_words, per_film, closing_words = narration_words(max(1, target_seconds-11-provider_seconds), len(films), trailer_seconds, word_scale)
@@ -659,10 +664,14 @@ class Writer:
         for name, source in (("opening_hook_idea", "opening_hook"), ("open_loop_idea", "open_loop"), ("list_angle", "angle")):
             if plan.get(source):
                 intro_facts[name] = plan[source]
-        intro = self.narration(title, brief, OPENING, intro_facts, opening_words)
-        intro, intro_delivery = self.edit(title, brief, "the opening hook", intro_facts, intro, opening=True, kind="intro")
-        sections.append({"kind": "intro", "film": 0, "paragraphs": intro, "delivery": intro_delivery})
+        wanted = (lambda name: only is None or name in only)
+        if wanted("intro"):
+            intro = self.narration(title, brief, OPENING, intro_facts, opening_words)
+            intro, intro_delivery = self.edit(title, brief, "the opening hook", intro_facts, intro, opening=True, kind="intro")
+            sections.append({"kind": "intro", "film": 0, "paragraphs": intro, "delivery": intro_delivery})
         for index in reversed(range(len(films))):
+            if not wanted(f"film-{index}"):
+                continue
             print(f"Script: #{index+1} {films[index]['title']}", flush=True)
             facts = film_facts(films[index])
             facts["rank"] = index + 1
@@ -690,6 +699,14 @@ class Writer:
                 paragraphs.append(available)
                 delivery = [*delivery, "normal"]
             sections.append({"kind": "film", "film": index, "paragraphs": paragraphs, "availability_text": available, "delivery": delivery})
+        if only is not None:
+            if "outro" in only:
+                outro_facts = {"topic": title, "titles": [film["title"] for film in films]}
+                if plan.get("comment_question"):
+                    outro_facts["comment_question"] = plan["comment_question"]
+                outro = self.narration(title, brief, CLOSING, outro_facts, closing_words)
+                self.edit(title, brief, "the closing goodbye", outro_facts, outro, closing=True, kind="outro")
+            return {"sections": sections, "package": {}, "partial": sorted(only)}
         outro_facts = {"topic": title, "titles": [film["title"] for film in films]}
         if plan.get("comment_question"):
             outro_facts["comment_question"] = plan["comment_question"]

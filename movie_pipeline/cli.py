@@ -9,6 +9,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from .core import (
     PipelineError,
@@ -186,6 +187,52 @@ def export_comparison(output: Path, work: Path, timeline: list[dict], speed: flo
         "Both use subtitles.srt and the same chapters. Narration is protected from audio augmentation. Augmentation is not anonymization or copyright protection.\n")
 
 
+def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, started: float) -> SimpleNamespace:
+    """Validate inputs, resolve research and compute the run's cache folder (shared by every workflow job)."""
+    from .availability import enrich_availability
+    from .research import Research
+    if not title.strip() or len(title) > 200 or not brief.strip() or len(brief) > 4000:
+        raise PipelineError("Provide a title (max 200 characters) and creative brief (max 4,000 characters).")
+    items = parse_movies(movies)
+    content_type = selected_content_type()
+    count_match = re.search(r"\btop\s*(\d+)\b", title, re.IGNORECASE)
+    if count_match and int(count_match[1]) != len(items):
+        raise PipelineError("The title's countdown number must match the number of movies/shows.")
+    ceiling = download_ceiling()
+    os.environ["VIDEO_RESOLUTION"] = str(ceiling)
+    spec = workflow_duration(title, len(items))
+    max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
+    expected_breaks = min(3, max_beat) * len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
+    print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
+    narrator = selected_narrator(brief)
+    reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
+    # Include the resolver policy and writing model so stale identities/scripts are not reused.
+    script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
+    run_key = key("pipeline-v11-planned-story", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    work = work / run_key
+    work.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=True)
+    research = Research()
+    # An explicit dropdown limits lookup to that medium. Local legacy runs can infer it.
+    shows_title = re.search(r"\b(?:shows?|series|tv)\b", title, re.IGNORECASE)
+    movies_title = re.search(r"\b(?:movies?|films?)\b", title, re.IGNORECASE)
+    research.preferred_kind = content_type or ("tv" if shows_title and not movies_title else "movie")
+    research.selected_kind = content_type
+    facts_path = work / "research.json"
+    films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
+    films = enrich_availability(films, research, work / "availability")
+    notice("Research", f"{len(films)} titles resolved; Wikipedia notes for {sum(1 for f in films if f.get('wiki_summary'))}; "
+           f"TMDB stills for {sum(1 for f in films if f.get('backdrops'))}. Elapsed {(time.time()-started)/60:.0f} min.")
+    spec = workflow_duration(title, len(items), films)
+    max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
+    expected_breaks = min(3, max_beat)*len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
+    print(f"Runtime mode: {'Auto' if spec.automatic else 'selected minutes'}; soft plan {spec.target/60:.1f} minutes.", flush=True)
+    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "content_type": content_type or "auto", "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
+    return SimpleNamespace(items=items, content_type=content_type, ceiling=ceiling, spec=spec, max_beat=max_beat,
+                           expected_breaks=expected_breaks, narrator=narrator, reference=reference, script_model=script_model,
+                           work=work, research=research, films=films)
+
+
 def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     started = time.time()
     from .audio_review import verify_export_audio
@@ -228,43 +275,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .speech_recovery import SpeechRecovery, SpeechRecoveryError
     from .voice import Narrator, captions
 
-    if not title.strip() or len(title) > 200 or not brief.strip() or len(brief) > 4000:
-        raise PipelineError("Provide a title (max 200 characters) and creative brief (max 4,000 characters).")
-    items = parse_movies(movies)
-    content_type = selected_content_type()
-    count_match = re.search(r"\btop\s*(\d+)\b", title, re.IGNORECASE)
-    if count_match and int(count_match[1]) != len(items):
-        raise PipelineError("The title's countdown number must match the number of movies/shows.")
-    ceiling = download_ceiling()
-    os.environ["VIDEO_RESOLUTION"] = str(ceiling)
-    spec = workflow_duration(title, len(items))
-    max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
-    expected_breaks = min(3, max_beat) * len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
-    print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
-    narrator = selected_narrator(brief)
-    reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
-    # Include the resolver policy and writing model so stale identities/scripts are not reused.
-    script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v11-planned-story", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
-    work = work / run_key
-    work.mkdir(parents=True, exist_ok=True)
-    output.mkdir(parents=True, exist_ok=True)
-    research = Research()
-    # An explicit dropdown limits lookup to that medium. Local legacy runs can infer it.
-    shows_title = re.search(r"\b(?:shows?|series|tv)\b", title, re.IGNORECASE)
-    movies_title = re.search(r"\b(?:movies?|films?)\b", title, re.IGNORECASE)
-    research.preferred_kind = content_type or ("tv" if shows_title and not movies_title else "movie")
-    research.selected_kind = content_type
-    facts_path = work / "research.json"
-    films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
-    films = enrich_availability(films, research, work / "availability")
-    notice("Research", f"{len(films)} titles resolved; Wikipedia notes for {sum(1 for f in films if f.get('wiki_summary'))}; "
-           f"TMDB stills for {sum(1 for f in films if f.get('backdrops'))}. Elapsed {(time.time()-started)/60:.0f} min.")
-    spec = workflow_duration(title, len(items), films)
-    max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
-    expected_breaks = min(3, max_beat)*len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
-    print(f"Runtime mode: {'Auto' if spec.automatic else 'selected minutes'}; soft plan {spec.target/60:.1f} minutes.", flush=True)
-    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "content_type": content_type or "auto", "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
+    ctx = setup_run(title, brief, movies, work, output, started)
+    items, content_type, ceiling, spec = ctx.items, ctx.content_type, ctx.ceiling, ctx.spec
+    max_beat, expected_breaks, narrator, reference = ctx.max_beat, ctx.expected_breaks, ctx.narrator, ctx.reference
+    script_model, work, research, films = ctx.script_model, ctx.work, ctx.research, ctx.films
     trailers = []
     shot_sets = []
     print("Footage round 1: fetch a primary trailer for every title.", flush=True)
@@ -802,6 +816,49 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Complete: {final_duration/60:.2f} minutes. Package: {output}", flush=True)
 
 
+def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path, output: Path) -> dict:
+    """Fill the run's caches in a parallel workflow job; the final produce job then reuses them.
+
+    prepare  research and the episode plan; reports the parts for the other jobs
+    script   one script section: "intro", "outro" or "film-<index>" (0 is number one)
+    footage  one title's primary trailer: download, end-slate scan, shot analysis, scene descriptions
+    """
+    from . import scenes
+    from .script import Writer
+    started = time.time()
+    ctx = setup_run(title, brief, movies, work, output, started)
+    films = ctx.films
+    if stage == "prepare":
+        writer = Writer(cache_dir=ctx.work / "script-sections")
+        writer.plan(title, brief, films)
+        writer.unload()
+        parts = {"script_parts": ["intro", "outro", *[f"film-{i}" for i in range(len(films))]],
+                 "footage_parts": [str(i) for i in range(len(films))]}
+        target = os.getenv("GITHUB_OUTPUT")
+        if target:
+            with open(target, "a", encoding="utf-8") as stream:
+                for name, value in parts.items():
+                    stream.write(f"{name}={json.dumps(value)}\n")
+        return parts
+    if stage == "script":
+        writer = Writer(cache_dir=ctx.work / "script-sections")
+        writer.write(title, brief, films, target_seconds=ctx.spec.target, trailer_seconds=ctx.expected_breaks, only={part})
+        writer.unload()
+        print(f"Warmed script section {part}.", flush=True)
+        return {"section": part}
+    if stage == "footage":
+        from .footage import download
+        from .shots import analyse
+        film = films[int(part)]
+        trailer = download(film, Path("work/footage"))
+        shots = analyse(trailer, trailer.with_suffix(".shots.json"))
+        scenes.describe_trailer(trailer, shots)
+        scenes.unload()
+        print(f"Warmed footage for {film['title']}: {trailer.name}, {len(shots)} shots.", flush=True)
+        return {"trailer": str(trailer)}
+    raise PipelineError(f"Unknown stage {stage!r}.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Produce an unattended movie/show countdown using the workflow selectors.")
     parser.add_argument("--title", default=os.getenv("VIDEO_TITLE", ""))
@@ -809,7 +866,16 @@ def main():
     parser.add_argument("--movies", default=os.getenv("MOVIE_LIST", ""))
     parser.add_argument("--work", type=Path, default=Path("work/jobs"))
     parser.add_argument("--output", type=Path, default=Path("output"))
+    parser.add_argument("--stage", choices=["produce", "prepare", "script", "footage"], default=os.getenv("PIPELINE_STAGE", "produce"))
+    parser.add_argument("--part", default=os.getenv("PIPELINE_PART", ""))
     args = parser.parse_args()
+    if args.stage != "produce":
+        try:
+            warm(args.stage, args.part, args.title, args.brief, args.movies, args.work, args.output)
+        except Exception as exc:  # noqa: BLE001 -- warm-up jobs are optional; produce does any missing work
+            notice(f"Warm-up {args.stage} {args.part}".strip(), f"{type(exc).__name__}: {str(exc)[-800:]}", "warning")
+            return 1
+        return 0
     try:
         produce(args.title, args.brief, args.movies, args.work, args.output)
     except Exception as exc:  # noqa: BLE001 -- CLI boundary reports failure without uploading partial output.

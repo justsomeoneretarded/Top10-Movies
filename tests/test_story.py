@@ -180,3 +180,32 @@ def test_fact_check_checkbox_off_keeps_drafts_without_model_calls(monkeypatch):
     draft = ["Number 1: Inception. A thief plants an idea inside a dream."]
     paragraphs, delivery = writer.edit("Top 2", "Casual", "the review", film_facts(FILMS[0]), draft, rank=1)
     assert paragraphs == draft and delivery == ["hype"]
+
+
+def test_partial_write_warms_the_cache_for_the_full_script(tmp_path):
+    warm = Writer(cache_dir=tmp_path)
+    warm.ask, calls = fake_model()
+    partial = warm.write("Top 2 Mind-Bending Movies", "Casual", FILMS, target_seconds=120, only={"film-1", "outro"})
+    assert partial["package"] == {} and [s["film"] for s in partial["sections"]] == [1]
+    final = Writer(cache_dir=tmp_path)
+    final.ask, final_calls = fake_model()
+    final.thumbnail_concepts = lambda *args: []
+    original = final.ask
+
+    def ask(prompt, schema, **options):
+        if "titles" in schema["properties"]:
+            return {"titles": ["Top 2 Mind-Bending Movies"], "description": "Two picks.", "tags": [],
+                    "thumbnail_texts": ["Mind Benders", "Reality Breaks", "Watch These"]}
+        return original(prompt, schema, **options)
+    prompts = []
+
+    def recording(prompt, schema, **options):
+        prompts.append(prompt)
+        return ask(prompt, schema, **options)
+    final.ask = recording
+    final.write("Top 2 Mind-Bending Movies", "Casual", FILMS, target_seconds=120)
+    # Plan, number two's review and the outro came from the cache; only the intro and number one were new.
+    assert final_calls["plan"] == 0
+    assert not any("'Arrival'" in p and "SINGLE REVIEW" in p for p in prompts)
+    assert not any("OUTRO ONLY" in p for p in prompts)
+    assert any("'Inception'" in p and "SINGLE REVIEW" in p for p in prompts)
