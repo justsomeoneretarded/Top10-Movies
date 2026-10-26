@@ -136,9 +136,36 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
     return seconds
 
 
-def produce(title: str, brief: str, movies: str, work: Path, output: Path):
+def export_comparison(output: Path, work: Path, timeline: list[dict], speed: float, reference: Path):
+    from faster_whisper import WhisperModel
+
     from .audio_review import verify_export_audio
     from .augmentation import export_augmented
+    from .speech_recovery import SpeechRecovery
+    from .voice import Narrator
+    print("Exporting the augmented comparison with the same timeline", flush=True)
+    protected = [(max(0, event["start"]/speed-.25), (event["start"]+event["duration"])/speed+.25)
+                 for event in timeline if event.get("type") in {"narration", "subscribe"}]
+    comparison = export_augmented(output / "final-video.mp4", output / "final-video-augmented.mp4", work / "comparison", protected_intervals=protected)
+    comparison_recovery = SpeechRecovery(None, lambda: Narrator(reference, work / "speech"),
+        work / "comparison-audio-checks", fallback_factory=lambda: WhisperModel(
+            "small.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4),
+            download_root=os.getenv("SPEECH_VERIFY_MODEL_DIR") or None))
+    try:
+        report = verify_export_audio(output / "final-video-augmented.mp4", timeline, speed, comparison_recovery, work)
+        save_json(work / "comparison-audio-review.json", report)
+        if not report.get("accepted"):
+            raise PipelineError("The augmented comparison did not preserve verified narration; see comparison-audio-review.json.")
+    finally:
+        comparison_recovery.close()
+    save_json(output / "comparison-settings.json", comparison)
+    (output / "comparison-readme.txt").write_text(
+        "final-video.mp4: clean version.\nfinal-video-augmented.mp4: the same edit with visual/audio augmentation.\n"
+        "Both use subtitles.srt and the same chapters. Narration is protected from audio augmentation. Augmentation is not anonymization or copyright protection.\n")
+
+
+def produce(title: str, brief: str, movies: str, work: Path, output: Path):
+    from .audio_review import verify_export_audio
     from .availability import enrich_availability
     from .cta import cta_variants, prepare_cta, render_cta
     from .cta_animation import add_cta_animation
@@ -370,22 +397,31 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         ffmpeg("-i", unpaced_take, "-t", 12, "-c:a", "pcm_s24le", work / "voice-before-pacing.wav")
     music_theme = theme_for(title, brief)
     voice_speed = narration_rate(music_theme)
+    from .script import aligned_delivery
+    from .sound_design import delivery_speed
+    from .voice import paced_take
+    paced = {}
+    delivery_report = {}
+    for coordinate, audio in speech.items():
+        section = script["sections"][coordinate[0]]
+        label = aligned_delivery(section)[coordinate[1]]
+        # Hooks and reveals move a little faster; tense or emotional lines breathe.
+        paragraph_speed = delivery_speed(voice_speed, label)
+        delivery_report[label] = delivery_report.get(label, 0) + 1
+        if (audio, paragraph_speed) not in paced:
+            paced[(audio, paragraph_speed)] = paced_take(audio, paragraph_speed)
+        speech[coordinate] = paced[(audio, paragraph_speed)]
+        aligned[coordinate] = [{**cue, "start": cue["start"]/paragraph_speed,
+                                "end": cue["end"]/paragraph_speed} for cue in aligned[coordinate]]
+    print(f"Narration delivery: {delivery_report}.", flush=True)
     if voice_speed != 1:
-        from .voice import paced_take
-        paced = {}
-        for coordinate, audio in speech.items():
-            if audio not in paced:
-                paced[audio] = paced_take(audio, voice_speed)
-            speech[coordinate] = paced[audio]
-            aligned[coordinate] = [{**cue, "start": cue["start"]/voice_speed,
-                                    "end": cue["end"]/voice_speed} for cue in aligned[coordinate]]
         cta_audio = paced_take(cta_audio, voice_speed)
         cta_cues = [{**cue, "start": cue["start"]/voice_speed,
                     "end": cue["end"]/voice_speed} for cue in cta_cues]
     paced_example = next(iter(speech.values()), None)
     if paced_example is not None:
         ffmpeg("-i", paced_example, "-t", 12, "-c:a", "pcm_s24le", work / "voice-after-pacing.wav")
-    save_json(work / "soundtrack-report.json", {"theme": music_theme, "narration_rate": voice_speed,
+    save_json(work / "soundtrack-report.json", {"theme": music_theme, "narration_rate": voice_speed, "delivery": delivery_report,
               "music_source": music_credit(music_theme), "trailer_under_narration": False})
     trailer_cues = []
     for trailer in trailers:
@@ -629,7 +665,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     del selector
     gc.collect()
     print("Mixing and exporting final video", flush=True)
-    final_duration, speed = finish(parts, output / "final-video.mp4", work, action, spec=spec, music_theme=music_theme)
+    final_duration, speed = finish(parts, output / "final-video.mp4", work, action, spec=spec, music_theme=music_theme,
+                                   timeline=timeline, top_title=films[0]["title"])
     export_recovery = SpeechRecovery(None, lambda: Narrator(reference, work / "speech"),
         work / "export-audio-checks", fallback_factory=lambda: WhisperModel(
             "small.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4),
@@ -660,25 +697,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     source_links = [json.loads(t.with_suffix('.json').read_text())["source"] for t in credited_trailers]
     (output / "description.txt").write_text(build_description(script, films, chapters, source_links)+"\n\n"+music_credit(music_theme)+"\n")
     embed_chapters(output / "final-video.mp4", chapters, final_duration, work)
-    print("Exporting the augmented comparison with the same timeline", flush=True)
-    protected = [(max(0, event["start"]/speed-.25), (event["start"]+event["duration"])/speed+.25)
-                 for event in timeline if event.get("type") in {"narration", "subscribe"}]
-    comparison = export_augmented(output / "final-video.mp4", output / "final-video-augmented.mp4", work / "comparison", protected_intervals=protected)
-    comparison_recovery = SpeechRecovery(None, lambda: Narrator(reference, work / "speech"),
-        work / "comparison-audio-checks", fallback_factory=lambda: WhisperModel(
-            "small.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4),
-            download_root=os.getenv("SPEECH_VERIFY_MODEL_DIR") or None))
-    try:
-        report = verify_export_audio(output / "final-video-augmented.mp4", timeline, speed, comparison_recovery, work)
-        save_json(work / "comparison-audio-review.json", report)
-        if not report.get("accepted"):
-            raise PipelineError("The augmented comparison did not preserve verified narration; see comparison-audio-review.json.")
-    finally:
-        comparison_recovery.close()
-    save_json(output / "comparison-settings.json", comparison)
-    (output / "comparison-readme.txt").write_text(
-        "final-video.mp4: clean version.\nfinal-video-augmented.mp4: the same edit with visual/audio augmentation.\n"
-        "Both use subtitles.srt and the same chapters. Narration is protected from audio augmentation. Augmentation is not anonymization or copyright protection.\n")
+    if os.getenv("COMPARISON_EXPORT", "false").lower() == "true":
+        # Optional (repository variable COMPARISON_EXPORT=true): roughly doubles the final encode time.
+        export_comparison(output, work, timeline, speed, reference)
     credits = music_credit(music_theme)+"\nFilm metadata: TMDB — https://www.themoviedb.org/\nWatch listings: JustWatch via TMDB — https://www.justwatch.com/us\n"
     if meme_used:
         credits += str(meme.get("attribution", "Intro meme"))+" — "+str(meme.get("source", ""))+"\n"

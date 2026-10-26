@@ -25,7 +25,8 @@ def theme_for(title: str, brief: str = "") -> str:
 
 
 def narration_rate(theme: str) -> float:
-    return {"action": 1.15, "mystery": 1.08, "drama": 1.0, "romance": 1.0}.get(theme, 1.0)
+    # Gentle base pace per theme; per-paragraph delivery (hype/dramatic/...) shapes it further.
+    return {"action": 1.08, "mystery": 1.04, "drama": 1.0, "romance": 1.0}.get(theme, 1.0)
 
 
 MUSIC_ROOT = Path(__file__).resolve().parents[1] / "assets" / "music"

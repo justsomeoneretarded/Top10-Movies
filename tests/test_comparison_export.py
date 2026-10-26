@@ -42,7 +42,7 @@ def test_music_is_continuous_across_blocks_and_chord_changes(tmp_path, theme):
 
 def test_theme_and_pacing_follow_topic_not_incidental_brief_words():
     assert theme_for("Top 5 Romance Movies", "Use action footage") == "romance"
-    assert narration_rate(theme_for("Top 5 Action Movies")) == 1.15
+    assert narration_rate(theme_for("Top 5 Action Movies")) == 1.08
     assert narration_rate(theme_for("Top 5 Drama Shows")) == 1
 
 

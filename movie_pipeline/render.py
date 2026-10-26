@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -336,7 +338,36 @@ def validate_audio_video_duration(path: Path, expected_seconds: float | None = N
 
 
 
-def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: DurationSpec | None = None, *, ending_hold: float = 3.0, music_theme: str | None = None) -> tuple[float, float]:
+def measure_loudness(path: Path) -> dict:
+    """Integrated loudness (LUFS) and true peak of a file's first audio stream."""
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-map", "0:a:0",
+                             "-af", "loudnorm=I=-14:TP=-1:LRA=11:print_format=json", "-f", "null", "-"],
+                            capture_output=True, text=True, check=False)
+    match = re.findall(r"\{[^{}]*\"input_i\"[^{}]*\}", result.stderr, re.S)
+    if result.returncode or not match:
+        raise PipelineError("Could not measure the export's loudness.")
+    data = json.loads(match[-1])
+    return {"integrated": float(data["input_i"]), "true_peak": float(data["input_tp"]), "range": float(data["input_lra"])}
+
+
+def normalize_loudness(path: Path, seconds: float, work: Path, target: float = -14.0) -> dict:
+    """Linear gain to YouTube's playback loudness with a -1 dBTP ceiling; the video stream is copied."""
+    measured = measure_loudness(path)
+    if not math.isfinite(measured["integrated"]):
+        return {"measured": measured, "gain_db": 0.0}
+    gain = max(-12.0, min(12.0, target - measured["integrated"]))
+    if abs(gain) < 0.5:
+        return {"measured": measured, "gain_db": 0.0}
+    adjusted = work / "loudness-adjusted.mp4"
+    ffmpeg("-i", path, "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
+           "-af", f"volume={gain:.2f}dB,alimiter=limit=0.891:attack=5:release=60:level=0",
+           "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-t", seconds, "-movflags", "+faststart", adjusted)
+    adjusted.replace(path)
+    return {"measured": measured, "gain_db": round(gain, 2)}
+
+
+def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: DurationSpec | None = None, *, ending_hold: float = 3.0, music_theme: str | None = None,
+           timeline: list[dict] | None = None, top_title: str | None = None) -> tuple[float, float]:
     spec = spec or DurationSpec()
     work.mkdir(parents=True, exist_ok=True)
     report = {"status": "pending", "canonical_audio": {"codec": "alac", "sample_format": "s32p",
@@ -396,6 +427,13 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
             final_duration = original/speed + ending_hold
             music = work / "music.wav"
             music_bed(music, final_duration + 1, action, **({"theme": music_theme} if music_theme else {}))
+            effects = None
+            if timeline:
+                from .sound_design import effects_track, gain_curve, shape_music
+                shape_music(music, gain_curve(timeline, speed, final_duration + 1, original/speed, top_title))
+                effects = work / "effects.wav"
+                record("sound-design", effect_events=effects_track(effects, timeline, speed, final_duration + 1))
+            mix_inputs = "[voice][duck][fx]amix=inputs=3" if effects else "[voice][duck]amix=inputs=2"
             graph = (
                 # Honor legitimate display gaps first, then rebuild the clock.
                 # Packet reorder delays never become final output timestamps.
@@ -405,15 +443,17 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
                 f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
                 "[2:a]equalizer=f=220:t=q:w=0.8:g=-3,equalizer=f=2400:t=q:w=0.7:g=-4[bed];"
                 "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
-                f"[voice][duck]amix=inputs=2:duration=longest:normalize=0,volume=1.26,alimiter=limit=0.84:attack=5:release=50:level=0:latency=1,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
+                + ("[3:a]asetpts=PTS-STARTPTS[fx];" if effects else "")
+                + f"{mix_inputs}:duration=longest:normalize=0,volume=1.26,alimiter=limit=0.84:attack=5:release=50:level=0:latency=1,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
             )
             record("encoding", planned_duration=final_duration, music_theme=music_theme or ("action" if action else "drama"))
             for source, name in ((combined_audio, "edit-without-music.wav"), (music, "background-only.wav")):
                 ffmpeg("-i", source, "-t", min(20, original), "-c:a", "pcm_s16le", work / name)
             ffmpeg("-xerror", "-err_detect", "explode", "-f", "concat", "-safe", "0", "-i", listing,
-                   "-i", combined_audio, "-i", music, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+                   "-i", combined_audio, "-i", music, *(["-i", effects] if effects else []), "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
                    "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS,
                    "-threads", "2", "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", final_duration, output)
+            record("loudness", loudness=normalize_loudness(output, final_duration, work))
             record("checking-final-audio", final_strict_decode="running")
             _strict_audio_decode(output)
             metadata = probe(output)
@@ -431,6 +471,7 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
                        "-ac", "2", "-c:a", "pcm_s16le", work / name)
         record("complete", status="passed", final_duration=actual_duration)
         music.unlink(missing_ok=True)
+        (work / "effects.wav").unlink(missing_ok=True)
         return actual_duration, speed
 
 

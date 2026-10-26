@@ -189,3 +189,23 @@ def test_title_card_hold_near_source_end_preserves_the_frame_and_silent_audio(so
     assert np.abs(frames[0]-frames[1]).mean() < 1
     assert render.validate_audio_video_duration(output, 1.5) == pytest.approx(1.5, abs=.05)
     assert np.abs(decoded(output)).max() == 0
+
+
+def test_finish_with_timeline_adds_effects_and_reaches_youtube_loudness(source, tmp_path):
+    preview = tmp_path/'preview.mp4'
+    render.trailer_video(source, 0, 2, preview, muted=True)
+    speech = voice_part(source, tone(tmp_path/'voice.wav', 900, seconds=3), tmp_path/'speech.mp4', tmp_path/'speech')
+    timeline = [{'start': 0, 'duration': 2, 'type': 'review-preview', 'shots': [{'muted': True}]},
+                {'start': 2, 'duration': 3, 'type': 'narration', 'section_kind': 'film', 'film': 'Top'}]
+    output = tmp_path/'final.mp4'
+    seconds, speed = render.finish([preview, speech], output, tmp_path, False, DurationSpec(automatic=True),
+                                   timeline=timeline, top_title='Top')
+    assert seconds == pytest.approx(8, abs=.1)
+    report = json.loads((tmp_path/'audio-assembly.json').read_text())
+    assert report['status'] == 'passed'
+    assert report['effect_events'] == 2
+    loudness = render.measure_loudness(output)
+    assert loudness['integrated'] == pytest.approx(-14, abs=1.5)
+    assert loudness['true_peak'] <= -0.5
+    # The narration tone stays dominant while it plays.
+    assert frequency(decoded(output), 2.5, 4.5) == pytest.approx(900, abs=10)
