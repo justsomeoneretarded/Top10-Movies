@@ -28,6 +28,7 @@ MUSIC_LEVELS = {
     "narration": 1.0,
     "narration-top": 1.25,           # number one gets a slightly bigger bed
     "trailer-audio": 0.35,
+    "trailer-audio-separated": 0.7,  # trailer score removed: our bed carries the moment
     "end-screen": 3.5,
     "ending": 3.5,
 }
@@ -38,6 +39,8 @@ def segment_level(entry: dict, top_title: str | None = None) -> float:
     if kind == "review-preview":
         shots = entry.get("shots") or [{}]
         return MUSIC_LEVELS["review-preview" if shots[0].get("muted", True) else "review-preview-dialogue"]
+    if kind == "trailer-audio" and entry.get("separated"):
+        return MUSIC_LEVELS["trailer-audio-separated"]
     if kind == "narration" and top_title and entry.get("section_kind") == "film" and entry.get("film") == top_title:
         return MUSIC_LEVELS["narration-top"]
     return MUSIC_LEVELS.get(kind, 1.0)

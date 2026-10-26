@@ -216,6 +216,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .research import Research
     from .script import Writer
     from .subtitles import script_cues
+    from .dialogue import isolate_dialogue
     from .secondary_footage import download_secondary
     from .shots import ShotSelector, analyse, get_frame, intro_montage, pace_limit
     from .soundtrack import music_credit, narration_rate, theme_for
@@ -604,7 +605,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
                               still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
-                              reveal=True)
+                              reveal=True, audio=None if preview["muted"] or preview.get("still") else
+                              isolate_dialogue(source, preview["start"], preview["duration"], work / "dialogue"))
             except (PipelineError, OSError, RuntimeError, ValueError):
                 if source == trailer:
                     raise
@@ -614,7 +616,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
                               still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
-                              reveal=True)
+                              reveal=True, audio=None if preview["muted"] or preview.get("still") else
+                              isolate_dialogue(source, preview["start"], preview["duration"], work / "dialogue"))
             seconds = duration(path)
             timeline.append({"start": offset, "duration": seconds, "type": "review-preview", "film": film["title"],
                              "source_start": preview["start"], "shots": [preview], "narration": False})
@@ -688,7 +691,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             if active_beat:
                 beat = active_beat
                 path = work / f"part-{len(parts):03}.mp4"
-                trailer_video(trailer, beat["start"], beat["end"]-beat["start"], path)
+                separated = isolate_dialogue(trailer, beat["start"], beat["end"]-beat["start"], work / "dialogue")
+                trailer_video(trailer, beat["start"], beat["end"]-beat["start"], path, audio=separated)
                 seconds = duration(path)
                 # Align the exact retained audio rather than copy a potentially truncated cue.
                 # Word timestamps from the source transcript are clipped to this insert.
@@ -696,7 +700,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                     start, end = max(cue["start"], beat["start"]), min(cue["end"], beat["end"])
                     if end > start:
                         all_cues.append({"start": offset+start-beat["start"], "end": offset+end-beat["start"], "text": cue["text"]})
-                timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio", "film": film["title"], "source_start": beat["start"]})
+                timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio", "film": film["title"], "source_start": beat["start"],
+                                 "separated": separated is not None})
                 parts.append(path)
                 offset += seconds
         card = ending_cards.get(film_index) if is_film else None

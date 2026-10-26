@@ -266,7 +266,8 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
 
 def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
                   label: Path | None = None, label_seconds: float = 3.5, muted: bool = False,
-                  still: bool = False, still_motion: str | None = None, reveal: bool = False):
+                  still: bool = False, still_motion: str | None = None, reveal: bool = False,
+                  audio: Path | None = None):
     """A narration-free preview, optionally carrying the animated rank introduction."""
     frames = max(FPS, round(seconds * FPS))
     actual = frames / FPS
@@ -275,7 +276,12 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
     has_audio = not muted and any(s.get("codec_type") == "audio" for s in probe(source).get("streams", []))
     audio_index = 0
     label_index = 1
-    if not has_audio:
+    if has_audio and audio is not None:
+        # Replacement audio for this window (for example, dialogue with the trailer score lowered).
+        inputs += ["-i", audio]
+        audio_index = 1
+        label_index = 2
+    elif not has_audio:
         inputs += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
         audio_index = 1
         label_index = 2

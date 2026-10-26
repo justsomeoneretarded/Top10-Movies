@@ -79,3 +79,32 @@ def test_end_screen_is_silent_calm_and_full_length(monkeypatch, tmp_path):
     assert duration(output) == pytest.approx(4, abs=.05)
     audio = next(stream for stream in probe(output)["streams"] if stream["codec_type"] == "audio")
     assert audio["codec_name"] == "alac"
+
+
+@needs_ffmpeg
+def test_trailer_window_can_use_separated_dialogue_audio(monkeypatch, tmp_path):
+    import subprocess
+    monkeypatch.setenv("VIDEO_RESOLUTION", "320x180")
+    source, voice, output = tmp_path / "source.mp4", tmp_path / "voice.wav", tmp_path / "beat.mp4"
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=4", "-f", "lavfi",
+           "-i", "sine=frequency=220:sample_rate=48000:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", source)
+    ffmpeg("-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=2", "-ac", "2", voice)
+    trailer_video(source, 1, 2, output, audio=voice)
+    samples = np.frombuffer(subprocess.run(["ffmpeg", "-v", "error", "-i", str(output), "-map", "0:a", "-ac", "1",
+                                            "-f", "f32le", "-"], capture_output=True, check=True).stdout, dtype="<f4")
+    spectrum = np.abs(np.fft.rfft(samples[4800:-4800]))
+    assert abs(np.fft.rfftfreq(len(samples[4800:-4800]), 1/48000)[spectrum.argmax()] - 1000) < 15
+
+
+def test_dialogue_separation_falls_back_without_the_model(monkeypatch, tmp_path):
+    from movie_pipeline import dialogue
+    monkeypatch.setattr(dialogue, "_MODEL", {"loaded": True, "model": None})
+    assert dialogue.isolate_dialogue(tmp_path / "x.mp4", 1, 2, tmp_path) is None
+    monkeypatch.setenv("DIALOGUE_SEPARATION", "false")
+    assert dialogue.isolate_dialogue(tmp_path / "x.mp4", 1, 2, tmp_path) is None
+
+
+def test_separated_dialogue_lets_our_music_carry_the_moment():
+    from movie_pipeline.sound_design import MUSIC_LEVELS, segment_level
+    assert segment_level({"type": "trailer-audio", "separated": True}) == MUSIC_LEVELS["trailer-audio-separated"]
+    assert segment_level({"type": "trailer-audio"}) == MUSIC_LEVELS["trailer-audio"]
