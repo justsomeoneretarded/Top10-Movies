@@ -96,7 +96,7 @@ jobs:
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
       # Turbo prioritizes narration quality. Set repository variable TTS_MODEL=nano for faster CPU runs.
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
-      SCRIPT_MODEL: qwen3:4b
+      SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       THUMBNAIL_AI: 'true'
@@ -105,7 +105,8 @@ jobs:
       OLLAMA_URL: http://127.0.0.1:11435
       HF_HOME: ${{ github.workspace }}/work/models/huggingface
       SPEECH_VERIFY_MODEL_DIR: ${{ github.workspace }}/work/speech-verifier-model
-      OLLAMA_MODELS: ${{ github.workspace }}/work/models/ollama
+      # Pulled fresh each run (about 40 seconds); too large for the shared 10 GB Actions cache.
+      OLLAMA_MODELS: ${{ github.workspace }}/work/ollama-models
       TOKENIZERS_PARALLELISM: 'false'
       OMP_NUM_THREADS: '4'
       PYTHONUNBUFFERED: '1'

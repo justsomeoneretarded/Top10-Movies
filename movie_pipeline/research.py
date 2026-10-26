@@ -10,6 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .core import FilmInput, PipelineError, normalized, save_json
+from .wiki import wikipedia_context
 
 
 class Research:
@@ -112,7 +113,7 @@ class Research:
         print(f"Selected first matching TMDB result: {item.title} ({item.year}) -> {kind}/{match['id']}.", flush=True)
         if match.get("_year_evidence"):
             print(f"Verified {item.title} ({item.year}) via {match['_year_evidence']} (search release date: {match.get('release_date', '')}).", flush=True)
-        details = self.get(f"{kind}/{match['id']}", append_to_response="videos,credits,external_ids", language="en-US")
+        details = self.get(f"{kind}/{match['id']}", append_to_response="videos,credits,external_ids,keywords", language="en-US")
         videos = details.get("videos", {}).get("results", [])
         # Original-language trailers may exist when English-localized metadata has none.
         if not videos:
@@ -138,12 +139,41 @@ class Research:
             "imdb_id": match.get("_imdb_id") or details.get("imdb_id") or details.get("external_ids", {}).get("imdb_id"),
             "identity_source": match.get("_identity_source"),
             "source": f"https://www.themoviedb.org/{kind}/{match['id']}",
+            **extra_facts(details, kind),
         }
 
     def collect(self, items: list[FilmInput], path: Path) -> list[dict]:
         films = []
         for item in items:
             print(f"Research: {item.title} ({item.year})", flush=True)
-            films.append(self.resolve(item))
+            film = self.resolve(item)
+            # Optional, keyless background notes; never required for production.
+            if os.getenv("WIKIPEDIA_CONTEXT", "true").lower() != "false":
+                notes = wikipedia_context(film)
+                film.update(notes)
+                print(f"Wikipedia notes for {film['title']}: {', '.join(k for k in notes if k != 'wiki_url') or 'none found'}.", flush=True)
+            films.append(film)
         save_json(path, films)
         return films
+
+
+def extra_facts(details: dict, kind: str) -> dict:
+    """Additional TMDB details that make narration specific; all optional."""
+    keywords = details.get("keywords", {})
+    keywords = keywords.get("keywords", keywords.get("results", [])) if isinstance(keywords, dict) else []
+    runtime = details.get("runtime") or next(iter(details.get("episode_run_time") or []), None)
+    facts = {
+        "tagline": (details.get("tagline") or "").strip(),
+        "runtime_minutes": runtime if isinstance(runtime, int) and runtime > 0 else None,
+        "keywords": [k["name"] for k in keywords[:10] if isinstance(k, dict) and k.get("name")],
+        "original_language": details.get("original_language"),
+    }
+    votes = details.get("vote_count") or 0
+    if isinstance(votes, int) and votes >= 300 and isinstance(details.get("vote_average"), (int, float)):
+        facts["tmdb_rating"] = round(float(details["vote_average"]), 1)
+        facts["tmdb_votes"] = votes
+    if kind == "tv":
+        facts.update(seasons=details.get("number_of_seasons"), episodes=details.get("number_of_episodes"),
+                     networks=[n["name"] for n in details.get("networks", [])[:3] if n.get("name")],
+                     creators=[c["name"] for c in details.get("created_by", [])[:3] if c.get("name")])
+    return {name: value for name, value in facts.items() if value not in (None, "", [])}
