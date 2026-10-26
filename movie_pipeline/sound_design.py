@@ -28,6 +28,7 @@ MUSIC_LEVELS = {
     "narration": 1.0,
     "narration-top": 1.25,           # number one gets a slightly bigger bed
     "trailer-audio": 0.35,
+    "end-screen": 3.5,
     "ending": 3.5,
 }
 

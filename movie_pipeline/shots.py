@@ -17,6 +17,13 @@ from PIL import Image
 from .core import PipelineError, duration, save_json
 
 MAX_MOVING_SECONDS = 12.0
+# Longest moving shot per delivery: hype lines cut quickly, tense or warm lines breathe.
+PACE_LIMITS = {"hype": 4.5, "normal": 7.0, "dramatic": 10.0, "calm": 9.0}
+ACTION_PACE_LIMITS = {"hype": 3.8, "normal": 6.0, "dramatic": 9.0, "calm": 8.0}
+
+
+def pace_limit(delivery: str, action: bool = False) -> float:
+    return (ACTION_PACE_LIMITS if action else PACE_LIMITS).get(delivery, PACE_LIMITS["normal"])
 HOLD_COOLDOWN_SECONDS = 14.0
 HOLD_COOLDOWN_BEATS = 2
 
@@ -360,7 +367,8 @@ class ShotSelector:
         chosen = []
         last_index = self.last_shots.get(str(path), -1)
         explicit_limit = maximum_shot is not None
-        maximum_shot = min(moving_limit(self), maximum_shot or MAX_MOVING_SECONDS)
+        # The current line's delivery can shorten shots (hype) or allow longer holds (dramatic, calm).
+        maximum_shot = min(moving_limit(self), maximum_shot or MAX_MOVING_SECONDS, float(getattr(self, "pace_limit", MAX_MOVING_SECONDS) or MAX_MOVING_SECONDS))
         allowed = [i for i in range(len(shots)) if self.card_kind(path,i) is None] or list(range(len(shots)))
         actor_names = getattr(self, "people", {}).get(str(path), [])
         about_person = bool(re.search(r"\b(actor|actress|performance|plays|portrays|starring|character)\b", text, re.IGNORECASE)) or any(name.casefold() in text.casefold() for name in actor_names)

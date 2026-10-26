@@ -33,6 +33,7 @@ from .video_settings import (
 
 COLD_OPEN_SECONDS = 5.0
 REVIEW_PREVIEW_SECONDS = 5.0
+END_SCREEN_SECONDS = 17.0  # plus the final three-second hold: about 20 seconds for YouTube end-screen elements
 INTRO_TARGET_SECONDS = 8.0
 
 
@@ -182,6 +183,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     )
     from .render import (
         embed_chapters,
+        end_screen_image,
+        end_screen_video,
         finish,
         label_image,
         speech_video,
@@ -191,7 +194,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     from .research import Research
     from .script import Writer
     from .secondary_footage import download_secondary
-    from .shots import ShotSelector, analyse, intro_montage
+    from .shots import ShotSelector, analyse, get_frame, intro_montage, pace_limit
     from .soundtrack import music_credit, narration_rate, theme_for
     from .source_pool import (
         best_intro_sources,
@@ -553,7 +556,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             try:
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
-                              still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None)
+                              still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
+                              reveal=True)
             except (PipelineError, OSError, RuntimeError, ValueError):
                 if source == trailer:
                     raise
@@ -562,7 +566,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 source = Path(preview["source"])
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
-                              still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None)
+                              still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
+                              reveal=True)
             seconds = duration(path)
             timeline.append({"start": offset, "duration": seconds, "type": "review-preview", "film": film["title"],
                              "source_start": preview["start"], "shots": [preview], "narration": False})
@@ -585,6 +590,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         for paragraph_index, text in enumerate(section["paragraphs"]):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
+            selector.pace_limit = pace_limit(aligned_delivery(section)[paragraph_index], action)
             chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), action)
             if is_film and duration(audio) >= 4:
                 portrait = trailer_still_for(text, film, selector, pools[film_index], shot_lookup)
@@ -662,6 +668,24 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 used_video_sources.add(str(source))
                 offset += seconds
                 note_visual_beat(selector, seconds, still=True)
+    # A calm end-screen plate gives YouTube's end-screen elements room (plus the final hold, about 20 seconds).
+    try:
+        top_section = next(i for i, section in enumerate(script["sections"]) if section["kind"] == "film" and section["film"] == 0)
+        top_preview = previews[top_section]
+        try:
+            background = get_frame(Path(top_preview["source"]), float(top_preview["start"]) + 1)
+        except Exception:  # noqa: BLE001 -- a plain dark plate is an acceptable background.
+            background = None
+        plate = work / "end-screen.png"
+        end_screen_image(plate, background)
+        path = work / f"part-{len(parts):03}.mp4"
+        end_screen_video(plate, END_SCREEN_SECONDS, path)
+        seconds = duration(path)
+        timeline.append({"start": offset, "duration": seconds, "type": "end-screen", "narration": False})
+        parts.append(path)
+        offset += seconds
+    except (PipelineError, OSError, StopIteration, KeyError, ValueError) as exc:
+        print(f"End screen skipped ({type(exc).__name__}); the final hold remains.", flush=True)
     del selector
     gc.collect()
     print("Mixing and exporting final video", flush=True)

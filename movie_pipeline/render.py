@@ -43,10 +43,34 @@ def _hold_motion(frames: int, live_frames: int, width: int, height: int, style: 
     return f"zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s={width}x{height}:fps={FPS}"
 
 
+FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
+ACCENT = (255, 190, 40)
+
+
+def brand_font(kind: str, size: int):
+    """Bundled OFL fonts: 'display' (Anton), 'title' (Bebas Neue), 'body'/'body-medium' (Montserrat)."""
+    files = {"display": "Anton-Regular.ttf", "title": "BebasNeue-Regular.ttf",
+             "body": "Montserrat-Variable.ttf", "body-medium": "Montserrat-Variable.ttf"}
+    path = FONT_DIR / files.get(kind, files["body"])
+    if not path.exists():
+        return font(size)
+    face = ImageFont.truetype(str(path), size)
+    if kind.startswith("body"):
+        try:
+            face.set_variation_by_name("SemiBold" if kind == "body-medium" else "ExtraBold")
+        except (OSError, ValueError):
+            pass
+    return face
+
+
 def font(size: int):
-    paths = [os.getenv("FONT_PATH", ""), "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"]
-    for path in paths:
-        if path and Path(path).exists():
+    custom = os.getenv("FONT_PATH", "")
+    if custom and Path(custom).exists():
+        return ImageFont.truetype(custom, size)
+    if (FONT_DIR / "Montserrat-Variable.ttf").exists():
+        return brand_font("body", size)
+    for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"):
+        if Path(path).exists():
             return ImageFont.truetype(path, size)
     return ImageFont.load_default(size=size)
 
@@ -67,37 +91,54 @@ def wrapped(draw, text, face, width):
 
 
 def label_image(path: Path, title: str, rank: int | None, year: int | None):
-    """A restrained, content-only lower third; intro/outro footage needs no banner."""
+    """Rank reveal card in the lower third: large accented rank, condensed title, year."""
     image = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     if rank is None:
         image.save(path)
         return
     draw = ImageDraw.Draw(image)
-    left, top, right, bottom = 56, 566, 1224, 666
-    title_left, title_width = 184, right-184-28
-    size = 34
-    while size > 24 and draw.textlength(title, font=font(size)) > title_width:
-        size -= 1
-    lines = wrapped(draw, title, font(size), title_width)
-    # Long official titles remain complete rather than being silently cut at line one.
-    if len(lines) > 1:
-        top = 542
-        while size > 18 and len(wrapped(draw, title, font(size), title_width)) > 2:
-            size -= 1
-        lines = wrapped(draw, title, font(size), title_width)
-    content_width = max((draw.textlength(line, font=font(size)) for line in lines), default=0)
-    right = min(right, max(650, round(title_left+content_width+30)))
-    # Compact glass-dark backplate, hairline border, no badges/glows/extra copy.
-    draw.rounded_rectangle((left, top, right, bottom), radius=9,
-                           fill=(10, 12, 16, 220), outline=(255, 255, 255, 42), width=1)
-    draw.line((158, top+21, 158, bottom-21), fill=(255, 255, 255, 65), width=1)
-    draw.text((84, (top+bottom)//2), f"{rank:02d}", font=font(42), anchor="lm", fill=(245, 246, 249))
-    title_y = top+16
-    for line in lines:
-        draw.text((title_left, title_y), line, font=font(size), fill=(248, 249, 251))
-        title_y += size+4
+    rank_face = brand_font("display", 104)
+    rank_text = f"#{rank}"
+    rank_width = draw.textlength(rank_text, font=rank_face)
+    left, bottom = 56, 668
+    title_left = left + 44 + round(rank_width) + 30
+    max_width = WIDTH - 56 - title_left - 34
+    words = title.upper()
+    size = 66
+    while size > 34 and draw.textlength(words, font=brand_font("title", size)) > max_width:
+        size -= 2
+    lines = wrapped(draw, words, brand_font("title", size), max_width)
+    while len(lines) > 2 and size > 26:
+        size -= 2
+        lines = wrapped(draw, words, brand_font("title", size), max_width)
+    title_face = brand_font("title", size)
+    line_height = round(size * 0.98)
+    content_height = line_height * len(lines) + (30 if year is not None else 0)
+    top = max(512, bottom - max(132, content_height + 34))
+    content_width = max((draw.textlength(line, font=title_face) for line in lines), default=0)
     if year is not None:
-        draw.text((title_left, bottom-28), str(year), font=font(18), fill=(174, 181, 192))
+        content_width = max(content_width, draw.textlength(str(year), font=brand_font("body-medium", 22)))
+    right = min(WIDTH - 56, round(title_left + content_width + 34))
+    # Soft shadow, dark glass plate, accent bar.
+    shadow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle((left+4, top+6, right+4, bottom+6), radius=16, fill=(0, 0, 0, 120))
+    from PIL import ImageFilter
+    image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(8)))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((left, top, right, bottom), radius=16, fill=(9, 11, 16, 228), outline=(255, 255, 255, 38), width=1)
+    draw.rounded_rectangle((left, top, left+10, bottom), radius=5, fill=ACCENT + (255,))
+    middle = (top + bottom) // 2
+    hash_width = draw.textlength("#", font=rank_face)
+    draw.text((left + 34, middle), "#", font=rank_face, anchor="lm", fill=ACCENT + (255,))
+    draw.text((left + 34 + hash_width, middle), str(rank), font=rank_face, anchor="lm", fill=(250, 250, 252, 255))
+    divider = title_left - 16
+    draw.line((divider, top + 24, divider, bottom - 24), fill=(255, 255, 255, 60), width=2)
+    y = middle - content_height // 2
+    for line in lines:
+        draw.text((title_left, y), line, font=title_face, fill=(250, 250, 252, 255))
+        y += line_height
+    if year is not None:
+        draw.text((title_left, y + 2), str(year), font=brand_font("body-medium", 22), fill=(190, 196, 206, 255))
     image.save(path)
 
 
@@ -225,7 +266,7 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
 
 def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
                   label: Path | None = None, label_seconds: float = 3.5, muted: bool = False,
-                  still: bool = False, still_motion: str | None = None):
+                  still: bool = False, still_motion: str | None = None, reveal: bool = False):
     """A narration-free preview, optionally carrying the animated rank introduction."""
     frames = max(FPS, round(seconds * FPS))
     actual = frames / FPS
@@ -243,7 +284,7 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
     graph = (
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
         f"crop={width}:{height},setsar=1,{FOOTAGE_GRADE},setpts=PTS-STARTPTS,fps={FPS},"
-        f"{hold}tpad=stop_mode=clone:stop={frames},{motion}setpts=N/({FPS}*TB)[v];"
+        f"{hold}tpad=stop_mode=clone:stop={frames},{motion}{_reveal_filter(width, height) if reveal else ''}setpts=N/({FPS}*TB)[v];"
         f"[{audio_index}:a]asetpts=PTS-STARTPTS,afade=t=in:d=0.08,"
         f"afade=t=out:st={max(0,actual-0.15)}:d=0.15,loudnorm=I=-18:TP=-2:LRA=9,apad[a]"
     )
@@ -253,6 +294,54 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
         graph += ";"+_label_graph(label_index, min(label_seconds, actual), width, height)
         video = "[out]"
     ffmpeg(*inputs, "-filter_complex", graph, "-map", video, "-map", "[a]", "-t", actual,
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS, "-threads", "2",
+           *LOSSLESS_AUDIO, output)
+
+
+def _reveal_filter(width: int, height: int) -> str:
+    """Rank reveal transition: a short white flash and a 6% punch-in that settles in half a second."""
+    zoom = "(1+0.06*pow(max(0,1-t/0.5),2))"
+    return (f"scale=w='trunc({width}*{zoom}/2)*2':h='trunc({height}*{zoom}/2)*2':eval=frame:flags=bicubic,"
+            f"crop={width}:{height},fade=t=in:st=0:d=0.16:color=white,")
+
+
+def end_screen_image(path: Path, background: Image.Image | None, headline: str = "THANKS FOR WATCHING"):
+    """Calm, uncluttered end-screen plate: blurred dark film frame and a small headline.
+
+    The middle and lower areas stay clear for YouTube end-screen elements
+    (video suggestions and the subscribe button) added in YouTube Studio.
+    """
+    from PIL import ImageEnhance, ImageFilter
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), (8, 10, 14))
+    if background is not None:
+        frame = background.convert("RGB")
+        scale = max(WIDTH / frame.width, HEIGHT / frame.height)
+        frame = frame.resize((round(frame.width*scale), round(frame.height*scale)), Image.LANCZOS)
+        left, top = (frame.width-WIDTH)//2, (frame.height-HEIGHT)//2
+        frame = frame.crop((left, top, left+WIDTH, top+HEIGHT)).filter(ImageFilter.GaussianBlur(22))
+        canvas = ImageEnhance.Brightness(frame).enhance(0.38)
+    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    face = brand_font("display", 58)
+    draw.text((WIDTH//2, 92), headline, font=face, anchor="mm", fill=(250, 250, 252, 255))
+    draw.rounded_rectangle((WIDTH//2-60, 132, WIDTH//2+60, 138), radius=3, fill=ACCENT + (255,))
+    draw.text((WIDTH//2, 172), "More picks are waiting for you", font=brand_font("body-medium", 26), anchor="mm",
+              fill=(205, 210, 220, 255))
+    image = canvas.convert("RGBA")
+    image.alpha_composite(overlay)
+    image.convert("RGB").save(path)
+
+
+def end_screen_video(image: Path, seconds: float, output: Path):
+    """A silent, slowly drifting end screen with a lossless silent audio track."""
+    frames = max(FPS, round(seconds * FPS))
+    width, height = export_size()
+    graph = (f"[0:v]scale={width}:{height}:flags=lanczos,setsar=1,fps={FPS},trim=end_frame=1,setpts=PTS-STARTPTS,"
+             f"tpad=stop_mode=clone:stop={frames},"
+             f"zoompan=z='1+0.03*on/{frames}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s={width}x{height}:fps={FPS},"
+             f"setpts=N/({FPS}*TB)[v];[1:a]apad[a]")
+    ffmpeg("-loop", "1", "-framerate", FPS, "-i", image, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+           "-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-frames:v", frames, "-t", frames/FPS,
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS, "-threads", "2",
            *LOSSLESS_AUDIO, output)
 

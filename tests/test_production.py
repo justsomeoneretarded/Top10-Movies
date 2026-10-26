@@ -391,6 +391,10 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         return {'same_timeline': True}
     monkeypatch.setattr('movie_pipeline.augmentation.export_augmented', augmented)
     monkeypatch.setattr(render, 'embed_chapters', embed)
+    def end_screen(image, seconds, target):
+        records['end_screen'] = seconds
+        make(target, seconds)
+    monkeypatch.setattr(render, 'end_screen_video', end_screen)
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
     monkeypatch.setitem(sys.modules, 'movie_pipeline.previews', SimpleNamespace(
         cold_open_plan=cold_open_plan, choose_preview=choose_preview, choose_title_card=choose_title_card,
@@ -446,7 +450,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert saved_input['content_type'] == (expected_kind if content_type else 'auto')
     assert saved_input['narrator'] == expected_narrator
     # Cold opening and title previews add intentional screen time to the old plan.
-    added_visual_seconds = 5 + count*5.0
+    added_visual_seconds = 5 + count*5.0 + cli.END_SCREEN_SECONDS
     if extra_mode in {'title-cards', 'title-card-fails'}:
         added_visual_seconds += (count-(extra_mode == 'title-card-fails'))*1.5
     assert 285 <= records['final_duration']-added_visual_seconds/1.02 <= 315
@@ -576,7 +580,10 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert cta_cue['start'] == pytest.approx(cta['start']/timeline['speed'])
     assert cta_cue['end']-cta_cue['start'] < 10
     assert all(a['end'] <= b['start']+.001 for a,b in pairwise(written_cues))
-    assert (records['final_duration']-written_cues[-1]['end'])*timeline['speed'] == pytest.approx(3)
+    # Final speech is followed by the end-screen plate and the final hold (about 20 seconds).
+    assert records['end_screen'] == cli.END_SCREEN_SECONDS
+    assert (records['final_duration']-written_cues[-1]['end'])*timeline['speed'] == pytest.approx(cli.END_SCREEN_SECONDS+3)
+    assert events[-1]['type'] == 'end-screen'
     description = (output / 'description.txt').read_text()
     assert description.startswith(first+'\n\n'+second+'\n\n')
     assert '00:00 Intro' in description
