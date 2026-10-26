@@ -131,6 +131,15 @@ jobs:
         env:
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
         run: python -m scripts.prepare_cookies
+      - name: Start YouTube proof-of-origin token provider
+        # The bgutil plugin (installed with the package) asks this local server for PO tokens.
+        continue-on-error: true
+        run: docker run --name bgutil-provider -d --init -p 127.0.0.1:4416:4416 brainicism/bgutil-ytdlp-pot-provider
+      - name: Prepare optional WARP fallback route for trailer downloads
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/warp_proxy.sh
       - name: Restore model cache
         uses: actions/cache@v4
         with:

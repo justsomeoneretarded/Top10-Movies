@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -12,6 +11,7 @@ import cv2
 import numpy as np
 
 from .core import PipelineError, duration, normalized, probe, save_json
+from . import download_access
 from .footage import MAX_TRAILER_BYTES, _bot_check, _clean_candidate
 from .video_settings import export_size, require_disk
 
@@ -145,10 +145,9 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
     _clean_candidate(target)
     require_disk(root)
     cap = export_size()[1]
-    common = {'quiet':True,'no_warnings':True,'noplaylist':True,'socket_timeout':12,'retries':1,
-              'fragment_retries':1,'js_runtimes':{'node':{}}}
-    if cookie := os.getenv('YOUTUBE_COOKIE_FILE'):
-        common['cookiefile'] = cookie
+    # Optional extra footage uses whichever route already worked for primary trailers.
+    common = download_access.options({'quiet':True,'no_warnings':True,'noplaylist':True,'socket_timeout':12,'retries':1,
+                                      'fragment_retries':1,'js_runtimes':{'node':{}}}, download_access.routes()[0])
     seen = {_primary_id(source)}
     ranked = []
     blocked = False
@@ -174,7 +173,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
                     break
                 continue
 
-    inspect([(trailer.get('key',''),True) for trailer in film.get('trailers',[])[:MAX_METADATA]])
+    inspect([(trailer.get('key',''),True) for trailer in film.get('trailers',[])[:MAX_METADATA] if trailer.get('site','YouTube') == 'YouTube'])
     # Reserve actual metadata capacity for fan edits when curated discovery has few options.
     if not blocked and len(seen)-1 < MAX_METADATA:
         try:

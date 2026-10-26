@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 
+from . import download_access
 from .core import PipelineError, duration, normalized, probe, save_json
 from .video_settings import export_size, require_disk
 
@@ -72,6 +73,25 @@ def _blocked():
     )
 
 
+class _RouteBlocked(Exception):
+    """The current network route met a sign-in/bot check before any trailer succeeded."""
+
+
+def _is_youtube(url: str) -> bool:
+    return "youtube.com/" in url or "youtu.be/" in url
+
+
+def trailer_url(trailer: dict) -> str | None:
+    """Watch URL for a TMDB video record; YouTube first, Vimeo as a non-YouTube fallback."""
+    key = str(trailer.get("key", ""))
+    site = trailer.get("site", "YouTube")
+    if site == "YouTube" and re.fullmatch(r"[\w-]{11}", key):
+        return f"https://www.youtube.com/watch?v={key}"
+    if site == "Vimeo" and re.fullmatch(r"\d{5,12}", key):
+        return f"https://vimeo.com/{key}"
+    return None
+
+
 def _clean_candidate(path: Path):
     for partial in path.parent.glob(path.stem + ".*"):
         if partial.is_file():
@@ -96,17 +116,29 @@ def download(film: dict, root: Path) -> Path:
     if _valid_cached(path):
         return path
     require_disk(root)
-    common = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 30, "retries": 3, "fragment_retries": 3, "js_runtimes": {"node": {}}}
-    cookies = os.getenv("YOUTUBE_COOKIE_FILE")
-    if cookies:
-        common["cookiefile"] = cookies
+    base = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 30, "retries": 3, "fragment_retries": 3, "js_runtimes": {"node": {}}}
+    tried = []
+    for route in download_access.routes():
+        try:
+            result = _download_route(film, root, path, height, download_access.options(base, route), yt_dlp)
+        except _RouteBlocked:
+            tried.append(route)
+            if route == "direct" and download_access.fallback_proxy():
+                print(f"YouTube bot check on the direct route for {film['title']}; retrying through the fallback route.", flush=True)
+            continue
+        download_access.record_route_success(route)
+        return result
+    raise _blocked()
+
+
+def _download_route(film: dict, root: Path, path: Path, height: int, common: dict, yt_dlp) -> Path:
     candidates = []
     for trailer in film["trailers"][:MAX_CANDIDATES]:
-        video_id = trailer.get("key", "")
-        if re.fullmatch(r"[\w-]{11}", video_id):
-            entry = (f"https://www.youtube.com/watch?v={video_id}", True)
-            if entry not in candidates:
-                candidates.append(entry)
+        url = trailer_url(trailer)
+        if url and (url, True) not in candidates:
+            candidates.append((url, True))
+    # YouTube sources first; Vimeo remains available when YouTube refuses the runner.
+    candidates.sort(key=lambda entry: not _is_youtube(entry[0]))
     errors = []
     ranked = []
     blocked = False
@@ -115,7 +147,7 @@ def download(film: dict, root: Path) -> Path:
     def inspect(entries):
         nonlocal blocked
         for url, curated in entries:
-            if url in seen or len(seen) >= MAX_CANDIDATES:
+            if url in seen or len(seen) >= MAX_CANDIDATES or (blocked and _is_youtube(url)):
                 continue
             seen.add(url)
             try:
@@ -127,7 +159,6 @@ def download(film: dict, root: Path) -> Path:
                 errors.append(type(exc).__name__)
                 if _bot_check(exc):
                     blocked = True
-                    break
 
     inspect(candidates)
     # If curated choices are missing or low quality, spend remaining metadata slots
@@ -143,9 +174,9 @@ def download(film: dict, root: Path) -> Path:
             inspect(discovered)
         except (yt_dlp.utils.DownloadError, PipelineError, OSError, ValueError) as exc:
             errors.append(type(exc).__name__)
-            blocked = _bot_check(exc)
+            blocked = blocked or _bot_check(exc)
     if blocked and not ranked:
-        raise _blocked()
+        raise _RouteBlocked()
     ranked.sort(key=lambda row: (-row[0], row[1]))
     best_quality = 0
     quality_downloads = 0
@@ -153,6 +184,8 @@ def download(film: dict, root: Path) -> Path:
     for advertised, order, url, curated, info in ranked:
         if selected and (best_quality >= height or (advertised and advertised <= best_quality)
                          or quality_downloads >= MAX_QUALITY_DOWNLOADS):
+            continue
+        if blocked and _is_youtube(url):
             continue
         attempt = root / f"{path.stem}.candidate-{order:02}.mp4"
         _clean_candidate(attempt)
@@ -184,9 +217,9 @@ def download(film: dict, root: Path) -> Path:
         except (yt_dlp.utils.DownloadError, PipelineError, OSError, ValueError) as exc:
             errors.append(type(exc).__name__)
             if _bot_check(exc):
-                if not selected:
-                    raise _blocked() from None
-                break
+                blocked = True
+                if selected:
+                    break
         finally:
             _clean_candidate(attempt)
     if selected:
@@ -194,4 +227,6 @@ def download(film: dict, root: Path) -> Path:
         return path
     path.unlink(missing_ok=True)
     path.with_suffix(".json").unlink(missing_ok=True)
+    if blocked:
+        raise _RouteBlocked()
     raise PipelineError(f"No usable trailer for {film['title']} ({film['year']}). Tried {len(seen)} candidates. YouTube access restrictions, unavailable trailers or format changes may be responsible. No movie was substituted. Failures: {', '.join(errors)}")

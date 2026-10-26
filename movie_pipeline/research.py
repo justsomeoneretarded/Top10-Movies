@@ -117,8 +117,9 @@ class Research:
         # Original-language trailers may exist when English-localized metadata has none.
         if not videos:
             videos = self.get(f"{kind}/{match['id']}/videos").get("results", [])
-        videos = [v for v in videos if v.get("site") == "YouTube" and v.get("type") in ("Trailer", "Teaser")]
-        videos.sort(key=lambda v: (v.get("official", False), v.get("type") == "Trailer"), reverse=True)
+        # Vimeo copies are kept as a fallback for runners that YouTube refuses.
+        videos = [v for v in videos if v.get("site") in ("YouTube", "Vimeo") and v.get("type") in ("Trailer", "Teaser")]
+        videos.sort(key=lambda v: (v.get("official", False), v.get("type") == "Trailer", v.get("site") == "YouTube"), reverse=True)
         overview = details.get("overview", "").strip()
         if not overview:
             raise PipelineError(f"No factual synopsis available for {item.title}; refusing to invent one.")
