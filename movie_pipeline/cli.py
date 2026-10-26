@@ -113,7 +113,9 @@ def choose_beat(cues: list[dict], shots: list[dict], trailer_duration: float, ac
 
 def validate_package(output: Path, spec: DurationSpec | None = None):
     spec = spec or DurationSpec()
-    required = ["final-video.mp4", "final-video-augmented.mp4", "subtitles.srt", "description.txt", "recommended-title.txt", *[f"thumbnail-{n:02}.jpg" for n in range(1, 4)]]
+    required = ["final-video.mp4", "subtitles.srt", "description.txt", "recommended-title.txt", *[f"thumbnail-{n:02}.jpg" for n in range(1, 4)]]
+    if os.getenv("COMPARISON_EXPORT", "false").lower() == "true":
+        required.append("final-video-augmented.mp4")
     for name in required:
         path = output / name
         if not path.exists() or path.stat().st_size == 0:
@@ -193,6 +195,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     )
     from .research import Research
     from .script import Writer
+    from .subtitles import script_cues
     from .secondary_footage import download_secondary
     from .shots import ShotSelector, analyse, get_frame, intro_montage, pace_limit
     from .soundtrack import music_credit, narration_rate, theme_for
@@ -628,7 +631,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 add_cta_animation(path, text, aligned[(section_index, paragraph_index)], work / f"cta-animation-{len(parts):03}")
             used_video_sources.update(str(cut.get("source", trailer)) for cut in chosen if not cut.get("image"))
             seconds = duration(path)
-            for cue in aligned[(section_index, paragraph_index)]:
+            # Captions use the exact script words; recognition supplies only the timing.
+            for cue in script_cues(text, aligned[(section_index, paragraph_index)]):
                 all_cues.append({"start": offset + cue["start"], "end": offset + min(cue["end"], seconds), "text": cue["text"]})
             timeline.append({"start": offset, "duration": seconds, "type": "subscribe" if section["kind"] == "subscribe" else "narration",
                              "section_kind": section["kind"], "source_audio": str(audio),

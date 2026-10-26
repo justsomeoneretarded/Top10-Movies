@@ -142,6 +142,8 @@ def write_srt(path: Path, cues: list[dict]):
         text = " ".join(cue["text"].split()).strip()
         if end <= start or not text:
             continue
+        from .subtitles import two_lines
+        text = two_lines(text)
         blocks.append(f"{len(blocks)+1}\n{timestamp(start)} --> {timestamp(end)}\n{text}\n")
         previous = end
     path.write_text("\n".join(blocks), encoding="utf-8")

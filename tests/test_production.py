@@ -574,11 +574,13 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         following = next(event for event in events if event['type'] == 'narration'
                          and event.get('section_kind') == 'film' and event['film'] == preview['film'])
         assert following['start'] == pytest.approx(preview['start']+5.0)
-        cue = next(cue for cue in written_cues if cue['text'] == following['text'])
+        cue = next(cue for cue in written_cues if cue['start'] >= following['start']/timeline['speed'] - .001)
+        assert following['text'].startswith(cue['text'])
         assert cue['start'] == pytest.approx(following['start']/timeline['speed'])
-    cta_cue = next(cue for cue in written_cues if cue['text'] == records['cta_text'])
-    assert cta_cue['start'] == pytest.approx(cta['start']/timeline['speed'])
-    assert cta_cue['end']-cta_cue['start'] < 10
+    cta_cues = [cue for cue in written_cues if cue['text'] in records['cta_text']]
+    assert ' '.join(cue['text'] for cue in cta_cues) == records['cta_text']
+    assert cta_cues[0]['start'] == pytest.approx(cta['start']/timeline['speed'])
+    assert cta_cues[-1]['end']-cta_cues[0]['start'] < 10
     assert all(a['end'] <= b['start']+.001 for a,b in pairwise(written_cues))
     # Final speech is followed by the end-screen plate and the final hold (about 20 seconds).
     assert records['end_screen'] == cli.END_SCREEN_SECONDS
