@@ -197,6 +197,18 @@ def _theme(topic: str, brief: str, facts: dict) -> str:
     return ""
 
 
+# Words that make an opening clearly about its genre, not only the genre's name.
+GENRE_SIGNALS = {
+    "sci-fi": r"sci[ -]?fi|science[ -]?fiction|\bspace\b|time[ -]?travel|\btime loops?\b|\baliens?\b|\bfuture\b|\bphysics\b|\bdimensions?\b|\bgalax",
+    "horror": r"\bhorror\w*|\bscar(?:e|y|iest)\b|\bterrif\w*|\bhaunt\w*|\bdread\b|\bnightmares?\b",
+    "action": r"\baction\w*|\bfights?\b|\bchases?\b|\bexplosi\w*|\bstunts?\b",
+    "thriller": r"\bthriller\w*|\bsuspense\w*|\btense\b|\btension\b",
+    "comedy": r"\bcomed\w*|\bfunny\b|\blaugh\w*|\bhilarious\b",
+    "mystery": r"\bmyster\w*|\bwhodunits?\b|\bclues?\b|\bpuzzles?\b",
+    "animation": r"\banimat\w*|\bcartoons?\b|\banime\b",
+}
+
+
 def _editorial_issue(paragraphs: list[str], *, opening: bool = False, theme: str = "") -> str | None:
     """Identify clearly unhelpful drafts for repair, never for a runtime error."""
     text = " ".join(paragraphs)
@@ -210,7 +222,7 @@ def _editorial_issue(paragraphs: list[str], *, opening: bool = False, theme: str
     if opening:
         if re.search(r"\b(?:list|countdown|ranking)\b.{0,45}\b(?:starts?|begins?|ends?|goes?)\b.{0,30}\b(?:number|\d+|one|ten)\b|\b(?:not|instead of)\s+(?:number\s+)?(?:one|1)\b", text, re.IGNORECASE):
             return "Give the viewer the theme and an actual reason to care. Do not explain how numbering or countdown order works."
-        if theme and not re.search(r"sci[ -]?fi|science[ -]?fiction" if theme == "sci-fi" else rf"\b{theme}\w*\b", text, re.IGNORECASE):
+        if theme and not re.search(GENRE_SIGNALS.get(theme, rf"\b{theme}\w*\b"), text, re.IGNORECASE):
             return f"Make the opening specific to {theme}; replace generic suspense or scrolling chatter with a useful description of these recommendations."
     if re.search(r"\bwhy\s*\?\s*(?:(?:because|the|it['’]?s|this is)\s+){0,3}(?:real deal|just that good|something else)\b|\b(?:seriously[, ]+)?you (?:will not|won['’]?t) believe\b|\bhold up[!.?]", text, re.IGNORECASE):
         return "Replace empty attention bait with a concrete story setup, character choice, or appeal supported by the supplied facts. Keep any natural joke that adds something."
@@ -481,6 +493,9 @@ class Writer:
             if facts.get("open_loop_idea"):
                 planned += (f"Finish with one short open-loop line that makes viewers want to reach number one without naming it, "
                             f"based on: {facts['open_loop_idea']!r}. ")
+            genre = _theme(topic, brief, facts)
+            if genre:
+                planned += f"Name the genre plainly (say '{genre}') so viewers instantly know what this list is. "
             style = ("SECTION ROLE: OPENING ONLY. Write a standalone hook that finishes its thoughts and leads into the first review. "
                      f"Open instantly with a specific curiosity hook in the style of: {hook!r}. " + planned +
                      "Use one or two useful complete sentences, roughly eight seconds: describe the genre/theme and what viewers will learn about these picks. "

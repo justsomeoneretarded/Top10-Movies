@@ -163,3 +163,11 @@ def test_upload_extras_are_written(tmp_path):
     assert "1. Best" in (tmp_path / "title-options.txt").read_text()
     assert (tmp_path / "tags.txt").read_text().strip() == "a, b"
     assert (tmp_path / "pinned-comment.txt").read_text().startswith("Which pick surprised you?")
+
+
+def test_strong_genre_openings_are_not_rejected_for_missing_the_label():
+    from movie_pipeline.script import _editorial_issue
+    good = ["What if time isn't a straight line? These five movies bend physics and memory until reality cracks."]
+    assert _editorial_issue(good, opening=True, theme="sci-fi") is None
+    vague = ["Five movies you should watch tonight. Here's why each one is worth your time."]
+    assert _editorial_issue(vague, opening=True, theme="sci-fi") is not None

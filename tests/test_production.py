@@ -33,9 +33,10 @@ from movie_pipeline.video_settings import export_size
 
 @pytest.mark.parametrize("count,try_4k,source_height,expected_size,extra_mode,content_type,narrator", [
     (2,"true",2160,(3840,2160),"found",None,None),
-    (5,"true",1080,(1920,1080),"missing","Shows","Female"),
+    # One weaker primary among 4K sources is enlarged (at most 1.5x) instead of lowering the whole video.
+    (5,"true",1080,(2560,1440),"missing","Shows","Female"),
     (2,"false",2160,(1920,1080),"raises","Movies","Kit Laser"),
-    (5,"true",720,(1280,720),"found","Movies","Warguy"),
+    (5,"true",720,(1920,1080),"found","Movies","Warguy"),
     (2,"true",2160,(3840,2160),"render-fails",None,None),
     (2,"true",2160,(3840,2160),"rewrite-fails",None,None),
     (2,"false",2160,(1920,1080),"shared-audio-retry","Movies","Warguy"),

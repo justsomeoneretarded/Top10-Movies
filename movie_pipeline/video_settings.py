@@ -8,6 +8,8 @@ from pathlib import Path
 
 from .core import PipelineError, probe
 
+MAJORITY = 0.6
+MAX_UPSCALE = 1.5
 SIZES = {144: (256, 144), 240: (426, 240), 360: (640, 360), 480: (854, 480), 720: (1280, 720), 1080: (1920, 1080), 1440: (2560, 1440), 2160: (3840, 2160)}
 
 
@@ -25,8 +27,17 @@ def choose_output_size(sources: list[dict], ceiling: int) -> tuple[int, int]:
         raise PipelineError("No trailer sources were provided for quality selection.")
     if any(not isinstance(source.get(axis), int) or source[axis] <= 0 for source in sources for axis in ("width", "height")):
         raise PipelineError("A downloaded trailer has no readable video dimensions.")
+    def detail(source):
+        return min(source["height"], source["width"] * 9 / 16)
+
     for height, (width, _height) in sorted(SIZES.items(), reverse=True):
-        if height <= ceiling and all(source["width"] >= width and source["height"] >= height for source in sources):
+        if height > ceiling:
+            continue
+        native = sum(source["width"] >= width and source["height"] >= height for source in sources)
+        # Most sources must support the size natively; a minority may be enlarged by at most 1.5x,
+        # so one weaker trailer no longer lowers the whole video.
+        if native == len(sources) or (native / len(sources) >= MAJORITY and
+                                       all(height / detail(source) <= MAX_UPSCALE for source in sources)):
             return width, height
     # Extremely small footage remains usable; fit an even 16:9 canvas inside it.
     scale = min(min(source["width"]/16, source["height"]/9) for source in sources)

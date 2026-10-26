@@ -26,6 +26,7 @@ from .core import (
 )
 from .timing import DurationSpec, final_tempo, trailer_budget, workflow_duration
 from .video_settings import (
+    MAX_UPSCALE,
     choose_output_size,
     download_ceiling,
     export_size,
@@ -290,8 +291,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 print(f"Using one trailer for {film['title']}; no suitable second trailer was accepted.", flush=True)
                 continue
             details = inspect_sources([extra])[0]
-            if details["width"] < width or details["height"] < height:
-                raise PipelineError("Optional trailer is below the selected export resolution.")
+            if min(details["height"], details["width"]*9/16) * MAX_UPSCALE < height:
+                raise PipelineError("Optional trailer is too far below the selected export resolution.")
             extra_shots = analyse(extra, extra.with_suffix(".shots.json"))
             require_disk(work, spec.target)
             pools[i].append(extra)
