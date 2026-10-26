@@ -102,6 +102,60 @@ def aligned_delivery(section: dict) -> list[str]:
     return labels
 
 
+BAIT = re.compile(r"you won.?t believe|shocking|insane|mind.?blowing|gone wrong|must see!|!!|\?\?", re.I)
+STOPWORDS = {"the", "a", "an", "of", "to", "you", "your", "in", "on", "for", "and", "that", "with", "need", "must", "best", "top"}
+
+
+def title_score(candidate: str, topic: str, count: int) -> float:
+    """Practical YouTube title checks: length that is not cut off, the number, topic words, no bait."""
+    text = " ".join(candidate.split())
+    if not 1 <= len(text) <= 100:
+        return float("-inf")
+    score = 0.0
+    score += 2.0 if 40 <= len(text) <= 60 else (1.0 if len(text) <= 70 else -0.15 * (len(text) - 70))
+    if re.search(rf"\b{count}\b", text):
+        score += 1.5
+    topic_words = {w for w in re.findall(r"[a-z0-9]+", topic.casefold()) if w not in STOPWORDS and len(w) > 2}
+    score += min(1.5, 0.3 * sum(word in text.casefold() for word in topic_words))
+    if re.match(r"(top\s+)?\d+\b", text, re.I):
+        score += 0.4
+    caps = [w for w in re.findall(r"[A-Za-z]{3,}", text) if w.isupper()]
+    score -= max(0, len(caps) - 1) * 0.8
+    if BAIT.search(text):
+        score -= 2.0
+    if re.search(r"[\U0001F300-\U0001FAFF]", text):
+        score -= 1.0
+    return score
+
+
+def rank_titles(options: list[str], topic: str, count: int) -> list[str]:
+    seen, clean = set(), []
+    for option in options:
+        text = " ".join(str(option).replace("*", "").strip().strip('"').split())
+        if text and text.casefold() not in seen and title_score(text, topic, count) > float("-inf"):
+            seen.add(text.casefold())
+            clean.append(text)
+    return sorted(clean, key=lambda t: -title_score(t, topic, count))
+
+
+def youtube_tags(suggested: list, topic: str, films: list[dict], limit: int = 480) -> list[str]:
+    """Search tags for YouTube Studio: model suggestions plus each title with its year, under the field's limit."""
+    shows = bool(films) and all(f.get("kind") == "tv" for f in films)
+    base = [topic, "shows to watch" if shows else "movies to watch", "tv recommendations" if shows else "movie recommendations"]
+    base += [f"{f['title']} {f['year']}" for f in films if f.get("title") and f.get("year")]
+    tags, seen, used = [], set(), 0
+    for tag in [*suggested, *base]:
+        text = " ".join(str(tag).replace("#", "").replace(",", " ").split())[:60]
+        if not text or text.casefold() in seen:
+            continue
+        if used + len(text) + 1 > limit:
+            break
+        seen.add(text.casefold())
+        tags.append(text)
+        used += len(text) + 1
+    return tags
+
+
 def _intro_facts(title: str, brief: str, films: list[dict]) -> dict:
     common_genres = set(films[0].get("genres", [])) if films else set()
     for film in films[1:]:
@@ -612,12 +666,29 @@ class Writer:
             ending.append("Like, subscribe, and watch our other picks. Save your next movie night from bad decisions.")
             sections[-1]["delivery"] = aligned_delivery(sections[-1])
         schema = {"type": "object", "properties": {
-            "title": {"type": "string"}, "description": {"type": "string"},
+            "titles": {"type": "array", "items": {"type": "string"}, "minItems": 5, "maxItems": 10},
+            "description": {"type": "string"},
             "thumbnail_texts": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
-        }, "required": ["title", "description", "thumbnail_texts"], "additionalProperties": False}
-        package = self.ask(f"Create YouTube packaging for topic {title!r}. Brief: {brief}. Films: {json.dumps([{'title':f['title'],'year':f['year'],'status':f.get('status')} for f in films])}. Recommend one accurate compelling title under 100 characters, a short description in plain everyday search words, and three distinct thumbnail phrases of 2–5 words. Use natural phrases viewers search, such as best action movies or movies to watch, only when relevant. Avoid fancy wording like curated selection, visual innovation, perception, captivating, or thought-provoking concepts. No hashtag list here; 3–5 relevant tags are added separately. Do not claim search ranking or click-through results. No false claims about popularity, availability or release status. Use no fabricated links. Description should say what viewers will learn. No chapter timestamps; those are added from the rendered timeline.", schema)
-        if not isinstance(package.get("title"), str) or not 1 <= len(package["title"]) <= 100:
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 5, "maxItems": 20},
+        }, "required": ["titles", "description", "thumbnail_texts", "tags"], "additionalProperties": False}
+        package = self.ask(f"Create YouTube packaging for topic {title!r}. Brief: {brief}. Films: {json.dumps([{'title':f['title'],'year':f['year'],'status':f.get('status')} for f in films])}. "
+                           "Recommend 6 to 8 distinct, accurate, compelling video titles (each under 70 characters, ideally 45 to 60; lead with the "
+                           "searchable topic and the number of picks; curiosity without clickbait or false promises), "
+                           "a short description in plain everyday search words, three distinct thumbnail phrases of 2–4 punchy words, "
+                           "and 10 to 15 YouTube search tags (short phrases viewers type, such as best action movies, movies to watch, and each title with its year). "
+                           "Use natural phrases viewers search only when relevant. Avoid fancy wording like curated selection, visual innovation, perception, captivating, or thought-provoking concepts. "
+                           "No hashtag list here; 3–5 relevant tags are added separately. Do not claim search ranking or click-through results. "
+                           "No false claims about popularity, availability or release status. Use no fabricated links. Description should say what viewers will learn. "
+                           "No chapter timestamps; those are added from the rendered timeline.", schema)
+        options = [t for t in package.get("titles", []) if isinstance(t, str)] or ([package["title"]] if isinstance(package.get("title"), str) else [])
+        ranked = rank_titles(options, title, len(films))
+        if not ranked:
             raise PipelineError("Generated video title must be 1–100 characters.")
+        package["title"] = ranked[0]
+        package["title_options"] = ranked[:3]
+        package["tags"] = youtube_tags(package.get("tags", []), title, films)
+        if plan.get("comment_question"):
+            package["pinned_comment"] = plan["comment_question"]
         if len(package.get("thumbnail_texts", [])) != 3 or any(not isinstance(t, str) or not 1 <= len(t.split()) <= 6 for t in package["thumbnail_texts"]):
             raise PipelineError("Invalid generated thumbnail text.")
         package["thumbnail_concepts"] = self.thumbnail_concepts(title, brief, films, sections)

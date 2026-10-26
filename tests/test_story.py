@@ -134,3 +134,32 @@ def test_plan_lines_that_name_other_titles_are_dropped():
     assert plan["opening_hook"] == ""  # it named titles, which the opening must not reveal
     assert plan["entries"]["2"]["hook"] == ""  # it named another entry
     assert plan["entries"]["2"]["angle"] == "Language"
+
+
+def test_titles_are_ranked_for_length_number_topic_and_no_bait():
+    from movie_pipeline.script import rank_titles, title_score
+    options = ["YOU WON'T BELIEVE THESE 10 INSANE ACTION MOVIES!!",
+               "Top 10 Action Movies of 2026 You Shouldn't Miss",
+               "Action Movies",
+               "Top 10 Action Movies of 2026 That Prove Big Screen Spectacle Is Back and Better Than Ever Before Now"]
+    ranked = rank_titles(options, "Top 10 Action Movies of 2026", 10)
+    assert ranked[0] == "Top 10 Action Movies of 2026 You Shouldn't Miss"
+    assert title_score("x" * 101, "topic", 10) == float("-inf")
+
+
+def test_tags_include_each_title_and_stay_under_youtube_limit():
+    from movie_pipeline.script import youtube_tags
+    films = [{"title": f"Movie {i}", "year": 2020 + i % 5, "kind": "movie"} for i in range(30)]
+    tags = youtube_tags(["best action movies", "#ActionMovies", "best action movies"], "Top 30 Action Movies", films)
+    assert tags[0] == "best action movies" and tags.count("best action movies") == 1
+    assert "ActionMovies" in tags and "Movie 0 2020" in tags
+    assert len(", ".join(tags)) <= 520
+
+
+def test_upload_extras_are_written(tmp_path):
+    from movie_pipeline.cli import write_upload_extras
+    write_upload_extras(tmp_path, {"title": "Best", "title_options": ["Best", "Second"], "tags": ["a", "b"],
+                                   "pinned_comment": "Which pick surprised you?"}, FILMS)
+    assert "1. Best" in (tmp_path / "title-options.txt").read_text()
+    assert (tmp_path / "tags.txt").read_text().strip() == "a, b"
+    assert (tmp_path / "pinned-comment.txt").read_text().startswith("Which pick surprised you?")

@@ -566,6 +566,14 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
 
 
 def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str], output: Path, **options):
-    """Compose redesigned thumbnails; API use is explicitly enabled by the production caller."""
+    """Thumbnails from official TMDB stills when available; generated/local designs remain the fallback."""
     from .thumbnails import build_thumbnails
+    films = options.pop("films", None)
+    if films and os.getenv("THUMBNAIL_SOURCE", "stills").lower() != "ai":
+        from .still_thumbnails import build_still_thumbnails
+        work = options.get("work") or output / ".thumbnail-work"
+        try:
+            return build_still_thumbnails(films, phrases, output, Path(work))
+        except Exception as exc:  # noqa: BLE001 -- stills are preferred, never required
+            print(f"Still-based thumbnails unavailable ({type(exc).__name__}); using the generated designs.", flush=True)
     return build_thumbnails(trailers, shots, phrases, output, **options)

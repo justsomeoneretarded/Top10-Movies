@@ -139,6 +139,22 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
     return seconds
 
 
+def write_upload_extras(output: Path, package: dict, films: list[dict]):
+    """Copy-paste helpers for YouTube Studio: title options, tags and a comment to pin."""
+    options = [t for t in package.get("title_options", []) if isinstance(t, str) and t.strip()] or [package["title"]]
+    (output / "title-options.txt").write_text(
+        "Recommended title first; YouTube Studio's title test can compare up to three.\n\n"
+        + "\n".join(f"{i}. {t.strip()} ({len(t.strip())} characters)" for i, t in enumerate(options, 1)) + "\n")
+    tags = [t for t in package.get("tags", []) if isinstance(t, str) and t.strip()]
+    if not tags:
+        tags = [f"{f['title']} {f['year']}" for f in films]
+    (output / "tags.txt").write_text(", ".join(tags) + "\n")
+    question = package.get("pinned_comment") or "Which one would you add to this list?"
+    shows = bool(films) and all(f.get("kind") == "tv" for f in films)
+    (output / "pinned-comment.txt").write_text(
+        f"{question.strip()}\n\nDrop your pick below; the best {'show' if shows else 'movie'} suggestions might make a future list.\n")
+
+
 def export_comparison(output: Path, work: Path, timeline: list[dict], speed: float, reference: Path):
     from faster_whisper import WhisperModel
 
@@ -718,6 +734,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         chapter["start"] /= speed
     package = script["package"]
     (output / "recommended-title.txt").write_text(package["title"].strip() + "\n")
+    write_upload_extras(output, package, films)
     credited_trailers = list(dict.fromkeys([path for pool in pools for path in pool]+[Path(source) for source in sorted(used_video_sources)]))
     active_files = {path.name for path in credited_trailers}
     quality_report["sources"] = [source for source in sources if source["file"] in active_files]
@@ -734,7 +751,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     if cta_rendered.get("credit_source"):
         credits += str(cta_rendered.get("attribution", "Subscribe reaction"))+" — "+str(cta_rendered["credit_source"])+"\n"
     (output / "sources-and-credits.txt").write_text(credits)
-    thumbnails(trailers, shot_sets, package["thumbnail_texts"], output,
+    thumbnails(trailers, shot_sets, package["thumbnail_texts"], output, films=films,
                concepts=package.get("thumbnail_concepts"), title=title, brief=brief,
                work=work / "thumbnail-work", use_api=os.getenv("THUMBNAIL_AI", "true").lower() == "true",
                use_cutouts=True)

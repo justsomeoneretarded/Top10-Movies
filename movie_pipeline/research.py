@@ -113,7 +113,7 @@ class Research:
         print(f"Selected first matching TMDB result: {item.title} ({item.year}) -> {kind}/{match['id']}.", flush=True)
         if match.get("_year_evidence"):
             print(f"Verified {item.title} ({item.year}) via {match['_year_evidence']} (search release date: {match.get('release_date', '')}).", flush=True)
-        details = self.get(f"{kind}/{match['id']}", append_to_response="videos,credits,external_ids,keywords", language="en-US")
+        details = self.get(f"{kind}/{match['id']}", append_to_response="videos,credits,external_ids,keywords,images", include_image_language="en,null", language="en-US")
         videos = details.get("videos", {}).get("results", [])
         # Original-language trailers may exist when English-localized metadata has none.
         if not videos:
@@ -176,4 +176,11 @@ def extra_facts(details: dict, kind: str) -> dict:
         facts.update(seasons=details.get("number_of_seasons"), episodes=details.get("number_of_episodes"),
                      networks=[n["name"] for n in details.get("networks", [])[:3] if n.get("name")],
                      creators=[c["name"] for c in details.get("created_by", [])[:3] if c.get("name")])
+    images = details.get("images", {}) if isinstance(details.get("images"), dict) else {}
+    backdrops = [b for b in images.get("backdrops", []) if isinstance(b, dict) and b.get("file_path") and (b.get("width") or 0) >= 1280]
+    # Text-free stills first (no language), then the most-voted.
+    backdrops.sort(key=lambda b: (b.get("iso_639_1") is None, b.get("vote_average") or 0, b.get("width") or 0), reverse=True)
+    facts["backdrops"] = [b["file_path"] for b in backdrops[:8]]
+    if not facts["backdrops"] and details.get("backdrop_path"):
+        facts["backdrops"] = [details["backdrop_path"]]
     return {name: value for name, value in facts.items() if value not in (None, "", [])}

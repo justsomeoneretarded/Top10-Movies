@@ -100,6 +100,8 @@ jobs:
       TRY_4K: "${{ inputs.try_4k }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       THUMBNAIL_AI: 'true'
+      # 'stills' (default): official TMDB stills with face-aware framing; 'ai': the generated-scene designs.
+      THUMBNAIL_SOURCE: ${{ vars.THUMBNAIL_SOURCE || 'stills' }}
       # Optional second, augmented video (doubles final encode time). Set repository variable COMPARISON_EXPORT=true to enable.
       COMPARISON_EXPORT: ${{ vars.COMPARISON_EXPORT || 'false' }}
       U2NET_HOME: ${{ github.workspace }}/work/models/rembg
