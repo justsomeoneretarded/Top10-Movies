@@ -26,12 +26,18 @@ attempt() {
     "${packages[@]}" >>"$log" 2>&1
 }
 
+version_notice() {
+  echo "::notice title=FFmpeg installed::$(ffmpeg -version 2>/dev/null | head -n 1 | cut -c1-120)"
+}
+
 if attempt; then
+  version_notice
   exit 0
 fi
 report "Package install failed on the default mirror; retrying with Ubuntu's main archive"
 sudo sed -i 's#http://azure.archive.ubuntu.com#http://archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 if attempt; then
+  version_notice
   exit 0
 fi
 report "Package install failed again"
@@ -50,6 +56,7 @@ if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
     exit 1
   fi
 fi
+version_notice
 # Other packages are optional for the pipeline (OCR, fonts); report what is missing and continue.
 for package in "${packages[@]}"; do
   dpkg -s "$package" >/dev/null 2>&1 || echo "::warning title=Optional package missing::$package could not be installed."

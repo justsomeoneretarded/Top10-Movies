@@ -18,17 +18,20 @@ jobs:
         run: bash scripts/install_system_packages.sh ffmpeg fonts-dejavu-core
       - run: python -m pip install -e '.[test]'
       - name: Run tests
+        timeout-minutes: 25
         shell: bash
         run: |
           set +e
-          pytest -q -rfE --tb=short -p no:cacheprovider 2>&1 | tee pytest.log
+          # A stuck test prints its stack after 4 minutes; the whole suite is capped at 20.
+          timeout 1200 pytest -q -rfE --tb=short -p no:cacheprovider -o faulthandler_timeout=240 2>&1 | tee pytest.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            # Surface failures as annotations so they are readable without log access.
             grep -E "^(FAILED|ERROR) " pytest.log | head -40 | while IFS= read -r line; do
               echo "::error title=Test failure::${line//$'\r'/}"
             done
-            grep -E "^E  " pytest.log | head -60 | awk 'BEGIN{ORS="%0A"} {print}' | sed 's/^/::error title=Assertion details::/'
-            echo
+            if [ "$status" -eq 124 ] || grep -q "Timeout" pytest.log; then
+              echo "::error title=Test suite timed out::$(grep -A25 -m1 'Timeout' pytest.log | cut -c1-180 | awk 'BEGIN{ORS="%0A"} {print}')"
+            fi
+            echo "::error title=Last test output::$(tail -n 25 pytest.log | cut -c1-180 | awk 'BEGIN{ORS="%0A"} {print}')"
           fi
           exit "$status"
