@@ -122,17 +122,23 @@ jobs:
           set -o pipefail
           sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
           git clone --depth 1 https://github.com/ACE-Step/ACE-Step-1.5 "$RUNNER_TEMP/acestep"
-          python -m pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -3
+          # The same torch release ACE-Step locks, as CPU wheels.
+          python -m pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -3
           cd "$RUNNER_TEMP/acestep"
           python - <<'PY'
-          import importlib.metadata as md, subprocess, sys, tomllib
+          import collections, subprocess, sys, tomllib
           deps = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]
           skip = ("torch==", "torch>", "torch;", "torchvision", "torchaudio", "nano-vllm", "mlx")
           keep = [d for d in deps if not d.replace(" ", "").lower().startswith(skip) and d.split(";")[0].strip().lower() != "torch"]
-          # Pin the CPU torch wheels so no dependency swaps in a CUDA build.
-          pins = [f"{name}=={md.version(name)}" for name in ("torch", "torchvision", "torchaudio")]
+          # Constrain everything to the versions in ACE-Step's own lockfile (CPU torch builds).
+          locked = collections.defaultdict(set)
+          for package in tomllib.load(open("uv.lock", "rb"))["package"]:
+              if "version" in package and "editable" not in package.get("source", {}) and "path" not in package.get("source", {}):
+                  locked[package["name"]].add(package["version"].split("+")[0])
+          pins = [f"{name}=={next(iter(versions))}" for name, versions in sorted(locked.items())
+                  if len(versions) == 1 and not name.startswith(("nvidia", "triton", "nano-vllm", "flash"))]
           open("cpu-constraints.txt", "w").write("\n".join(pins) + "\n")
-          print("::notice title=ACE-Step CPU torch::" + ", ".join(pins))
+          print(f"::notice title=ACE-Step lockfile constraints::{len(pins)} packages pinned")
           failed = []
           for dep in keep:
               done = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-c", "cpu-constraints.txt", dep],
