@@ -125,13 +125,14 @@ jobs:
           cache: pip
       - name: Install light dependencies and validate inputs
         run: |
-          python -m pip install -e .
-          python -m scripts.preflight
+          python -m pip install --upgrade pip
+          bash scripts/run_logged.sh "Dependency install" python -m pip install -e .
+          bash scripts/run_logged.sh "Input check" python -m scripts.preflight
       - name: Prepare local script model
         run: bash scripts/bootstrap_ollama.sh
       - name: Research and plan the episode
         id: plan
-        run: python -m movie_pipeline.cli --stage prepare
+        run: bash scripts/run_logged.sh "Research and plan" python -m movie_pipeline.cli --stage prepare
       - name: Package research and plan
         run: tar -czf warm-prepare.tgz work/jobs
       - uses: actions/upload-artifact@v4
@@ -176,7 +177,10 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: python -m pip install -e .
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          bash scripts/run_logged.sh "Dependency install" python -m pip install -e .
       - uses: actions/download-artifact@v4
         with:
           name: warm-prepare
@@ -184,7 +188,7 @@ jobs:
       - name: Prepare local script model
         run: bash scripts/bootstrap_ollama.sh
       - name: Write and fact-check one section
-        run: python -m movie_pipeline.cli --stage script
+        run: bash scripts/run_logged.sh "Script section" python -m movie_pipeline.cli --stage script
       - name: Package the section
         run: tar -czf "warm-script-$PIPELINE_PART.tgz" work/jobs/*/script-sections
       - uses: actions/upload-artifact@v4
@@ -236,7 +240,10 @@ jobs:
       - name: System dependencies
         timeout-minutes: 20
         run: bash scripts/install_system_packages.sh ffmpeg tesseract-ocr
-      - run: python -m pip install -e .
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          bash scripts/run_logged.sh "Dependency install" python -m pip install -e .
       - uses: actions/download-artifact@v4
         with:
           name: warm-prepare
@@ -260,7 +267,7 @@ jobs:
           (ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &)
           for i in $(seq 1 60); do curl -sf "$OLLAMA_URL/api/tags" >/dev/null && break; sleep 1; done
       - name: Download and analyse one title's trailer
-        run: python -m movie_pipeline.cli --stage footage
+        run: bash scripts/run_logged.sh "Footage" python -m movie_pipeline.cli --stage footage
       - name: Package the footage
         run: tar -czf "warm-footage-$PIPELINE_PART.tgz" work/footage
       - uses: actions/upload-artifact@v4
@@ -396,7 +403,7 @@ jobs:
           rm -rf warm-results
           echo "Warm-up archives unpacked: $(ls work/footage 2>/dev/null | grep -c '\.mp4$' || true) trailers ready."
       - name: Produce the complete package
-        run: python -m movie_pipeline.cli
+        run: bash scripts/run_logged.sh "Production" python -m movie_pipeline.cli
       - name: Downloadable video package
         uses: actions/upload-artifact@v4
         with:
