@@ -2,7 +2,7 @@
 
 An unattended, CPU-based GitHub Actions pipeline: enter a video title, creative brief, and movie/show names with years, then choose Movies or Shows and a narrator from dropdowns. Receive a countdown with automatically chosen source-matched resolution, up to 4K, with an Auto or selected video length, uploadable subtitles, description, recommended title, and three thumbnails.
 
-**No paid inference APIs.** Scriptwriting uses a local Ollama model; narration uses Chatterbox; shot matching uses CLIP; captions use faster-whisper. GitHub account usage/storage limits still apply. This is an initial implementation, not a guarantee of editorial quality or successful downloads for every title. End-to-end production must be verified on your runner with your configured secrets.
+**No paid inference APIs.** Scriptwriting uses Gemma 4 12B through local Ollama; narration uses Chatterbox; shot matching uses CLIP; captions use faster-whisper with the exact script text. GitHub account usage/storage limits still apply. This is an initial implementation, not a guarantee of editorial quality or successful downloads for every title. End-to-end production must be verified on your runner with your configured secrets.
 
 ## One-time setup
 
@@ -62,37 +62,64 @@ When the run succeeds, download **Artifacts → movie-video-N**. The ZIP contain
 
 ```text
 final-video.mp4
-final-video-augmented.mp4
-comparison-readme.txt
-comparison-settings.json
 subtitles.srt
 description.txt
 recommended-title.txt
-thumbnail-01.jpg
-thumbnail-02.jpg
-thumbnail-03.jpg
+title-options.txt        top three titles, for YouTube Studio's title test
+tags.txt                 comma-separated search tags for the Tags field
+pinned-comment.txt       a comment question to post and pin
+thumbnail-01.jpg         hero still
+thumbnail-02.jpg         cutout over stills
+thumbnail-03.jpg         Netflix-style option
 sources-and-credits.txt
 ```
 
-Upload the SRT separately in YouTube Studio. Captions cover narration and retained intelligible trailer dialogue; captions and chapter times are adjusted if final audio tempo changes. They are speech-recognized and can contain transcription errors. Subtitles are not burned into the picture. New artifacts expire after **48 hours (two days)** from upload. The description includes the first two spoken paragraphs, a plain-language topic summary, 3–5 relevant hashtags, chapters, and a featured movies/shows list. Search-friendly metadata does not guarantee ranking. Chapters are also embedded in the MP4. To get chapters on YouTube, paste the timestamped description into your upload; the workflow does not upload or update YouTube videos.
+With the optional comparison export enabled (repository variable `COMPARISON_EXPORT=true`), the ZIP also contains `final-video-augmented.mp4`, `comparison-readme.txt` and `comparison-settings.json`.
+
+Upload the SRT separately in YouTube Studio. Captions cover narration and retained intelligible trailer dialogue; captions and chapter times are adjusted if final audio tempo changes. Narration captions use the exact script words (so titles and names are spelled as written) with speech-recognition timing; trailer dialogue captions are speech-recognized and can contain transcription errors. Subtitles are not burned into the picture. New artifacts expire after **48 hours (two days)** from upload. The description includes the first two spoken paragraphs, a plain-language topic summary, 3–5 relevant hashtags, chapters, and a featured movies/shows list. Search-friendly metadata does not guarantee ranking. Chapters are also embedded in the MP4. To get chapters on YouTube, paste the timestamped description into your upload; the workflow does not upload or update YouTube videos.
 
 ## Production stages
 
 1. Validate inputs, the video-length selection, the Try 4K setting, and the selected voice before downloading models.
-2. Resolve title/year against the selected Movies or Shows medium, always selecting the first eligible result in TMDB's returned order. Do not rerank by vote counts or reject matching namesakes as ambiguous. If no search-year match exists, check dated festival/regional release records, then use the Wikidata/IMDb-ID fallback within the chosen medium. Never accept a nearby year without a supporting date. Local use without a type selection retains automatic movie/TV discovery.
-3. Discover TMDB-linked YouTube trailers/teasers and bounded YouTube search matches. Prefer an official primary trailer. A second source may be a fan edit of the same movie/show when its title/year checks match; concept, AI-generated, fake, reaction, and review videos are excluded.
+2. Resolve title/year against the selected Movies or Shows medium, then add TMDB tagline, runtime, keywords, ratings, stills and keyless Wikipedia summary/production/reception notes (plot sections are skipped to stay spoiler-light), always selecting the first eligible result in TMDB's returned order. Do not rerank by vote counts or reject matching namesakes as ambiguous. If no search-year match exists, check dated festival/regional release records, then use the Wikidata/IMDb-ID fallback within the chosen medium. Never accept a nearby year without a supporting date. Local use without a type selection retains automatic movie/TV discovery.
+3. Discover TMDB-linked YouTube (and Vimeo, as a fallback) trailers/teasers and bounded YouTube search matches. Prefer an official primary trailer. A second source may be a fan edit of the same movie/show when its title/year checks match; concept, AI-generated, fake, reaction, and review videos are excluded.
 4. Fetch primary footage in a first round: download one usable primary trailer for every title before looking for second trailers. Choose the highest shared export resolution up to the checkbox ceiling. In a separate second round, try to add a trailer with different scenes for each title at that resolution. Discovery and retries are bounded; keep at most two trailers per title temporarily in `work/footage/`. One usable trailer is enough, and a missing or rejected second trailer never fails production. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
 5. Look up US streaming providers using TMDB's JustWatch-powered watch listings, with a 24-hour cache. Keep subscription, free, ads, rental, and purchase options distinct. Missing or unavailable listings are skipped without failing production.
-6. Generate original, factual recommendation scripts with `qwen3:4b` through local Ollama: casual language, a punchy genre-specific hook, clear movie premises, and an outro inviting likes, subscriptions, and other recommendations. Auto length scales the planning budget to the number and kind of titles. Selected minutes allow ±25%; word counts and timing are guidance rather than reasons to discard a usable video.
+6. Plan the whole episode once with `gemma4:12b` through local Ollama (list angle, opening hook, an open loop toward number one, and a hook, standout facts, rank rationale and audience for every entry), write each section from that plan with slightly more time for higher ranks, then run an editor and fact-check pass that is kept only when it passes the role, editorial and figure checks. Each paragraph gets a delivery label (hype, normal, dramatic, calm). Auto length scales the planning budget to the number and kind of titles. Selected minutes allow ±25%; word counts and timing are guidance rather than reasons to discard a usable video.
 7. Clone the selected reference with **Chatterbox Turbo on CPU**. Generate speech in small chunks and retry faulty speech. For a selected length, bounded overall script adjustments use measured narration pace. Auto mode avoids chasing a fixed runtime.
 8. Transcribe narration and primary-trailer dialogue with CPU/int8 faster-whisper. Verify overall narration and its opening/closing words, retrying incomplete speech. Place one funny like/subscribe break at a review boundary around 30–50% of measured runtime; shorten its audio to keep it below 10 seconds after final tempo adjustment.
-9. Match frames from the accepted source pool loosely to the current narration using CLIP. Use both trailers when useful, retaining steadier, longer visual beats, occasional face holds, and a multi-title intro. Extra footage does not require faster cutting. Weak visual matches never cause a relevance-validation failure.
-10. Begin with five seconds of strong footage before the narrated hook. Each review starts with a 5-second scene preview and a compact animated rank/title/year bar before narration. Render a matching reaction GIF or meme for the subscribe joke, short trailer-audio breaks, and a bundled licensed instrumental bed that ducks under speech. Close with a calm recap and keep the final image for three seconds after speech, with a gentle fade.
-11. Export H.264/AAC at 30fps, using the highest source-matched resolution shared by all selected trailers, up to 4K when checked or 1080p when unchecked. Apply modest pitch-preserving tempo adjustment only when needed. Embed chapters and write synchronized SRT and description chapter timestamps.
-12. Ask Qwen3 4B for six thumbnail concepts, select three styles, and compare up to two generated image candidates per selected concept. Complete cinematic scenes are the main path; local artwork and trailer cutouts remain a fallback. No paid inference fallback is used.
+9. Match frames from the accepted source pool loosely to the current narration using CLIP. Use both trailers when useful. Shot length follows each line's delivery: hype lines cut at up to about 4.5 seconds (3.8 for action lists), normal lines about 7, calm 9 and dramatic 10, with spaced face holds and a multi-title intro. Weak visual matches never cause a relevance-validation failure.
+10. Begin with five seconds of strong footage before the narrated hook. Each review starts with a 5-second scene preview that opens with a short flash and punch-in, a whoosh and impact, and an animated rank card (large accented rank number, title, year). Render a matching reaction GIF or meme for the subscribe joke and short trailer-audio breaks. The bundled licensed music follows the edit: louder over the cold open, rank previews, title cards and end screen; low under narration with ducking; nearly off under trailer dialogue. Close with a calm recap, then a 17-second end-screen plate plus a 3-second hold (about 20 seconds) for YouTube end-screen elements.
+11. Export H.264/AAC at 30fps, using the highest source-matched resolution shared by all selected trailers, up to 4K when checked or 1080p when unchecked. Apply modest pitch-preserving tempo adjustment only when needed. Master the finished audio to −14 LUFS integrated with a −1 dBTP ceiling (YouTube's playback loudness). Embed chapters and write synchronized SRT and description chapter timestamps.
+12. Build three thumbnails from official TMDB stills: a face-aware hero still of number one with a large two-tone headline, a cutout of a person from number one's still (BiRefNet, falling back to U2Net) over the next picks, and the Netflix-style option. The generated-scene designs remain the fallback, or the default with `THUMBNAIL_SOURCE=ai`. Rank 6–8 model-proposed titles for length, count, topic words and no bait, and write tags and a pinned comment.
 13. Validate output files, usable media streams and duration, thumbnail dimensions/size, and a full FFmpeg decode. A healthy export is not rejected solely for missing the length goal. Upload the package for two days, remove downloaded trailers and render intermediates, and save bounded speech/script checkpoints. An independent hourly maintenance workflow expires production caches after the run has been completed for at least 24 hours.
 
 No approval or publication steps occur. Successful runs deliver downloadable files; this repository does not upload to YouTube.
+
+## Optional repository variables
+
+Set these in **Settings → Secrets and variables → Actions → Variables**. None are required.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TTS_MODEL` | `turbo` | `nano` uses the smaller Chatterbox model for faster CPU runs. |
+| `THUMBNAIL_SOURCE` | `stills` | `ai` uses the generated-scene thumbnail designs instead of TMDB stills. |
+| `COMPARISON_EXPORT` | `false` | `true` also exports the augmented comparison video (roughly doubles final encode time). |
+
+## Trailer download fallbacks
+
+GitHub-hosted runners are often refused by YouTube with a sign-in/bot check. Each run layers free, optional fixes, and keeps using whichever route works:
+
+1. The private `YOUTUBE_COOKIES` secret, when configured.
+2. A local proof-of-origin token server (`bgutil-ytdlp-pot-provider`, Docker) that the yt-dlp plugin uses automatically.
+3. A Cloudflare WARP route (free; `wgcf` + `wireproxy` as a local SOCKS proxy) used only after a bot check on the direct route.
+4. Vimeo copies of trailers listed by TMDB.
+
+These are best-effort workarounds, not guarantees; the clear bot-check failure message remains when every route is refused.
+
+## Benchmark Free Models workflow
+
+**Actions → Benchmark Free Models** measures candidate free models on the same CPU runner and uploads samples to listen to: script models through Ollama, Chatterbox Turbo and the original Chatterbox, Qwen3-TTS voice cloning, and ACE-Step 1.5 instrumental music. Timings appear as annotations on the run page. Choose `all` or one family (`llm`, `voice`, `music`).
 
 ## CPU performance and reliability
 
@@ -141,7 +168,7 @@ pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.
 pip install -e '.[voice,thumbnails]'
 ollama serve
 # In another terminal:
-ollama pull qwen3:4b
+ollama pull gemma4:12b
 export TMDB_READ_TOKEN='your-read-token'
 # Narrator reference clips are already included in assets/voices/.
 movie-pipeline --title 'Top 2 Sci-Fi Movies' \
@@ -184,7 +211,7 @@ This does not remove real resource or media failures: longer videos require more
 
 ## Steadier editing, hooks, and calls to action
 
-Reviews prefer steady moving excerpts around 8–12 seconds when the source supports it, with a twelve-second ceiling even when footage is exhausted. The planner shortens that ceiling when a final playback slowdown is expected. Small tails are balanced into readable beats instead of extending a shot or adding a freeze at every paragraph boundary. The intro uses roughly three-second images from several titles, covering at least half the list when its duration allows that without rapid flashes. The first visual can come from anywhere in a trailer, not just its opening.
+Moving excerpts follow the delivery of the line they cover (about 4.5 seconds for hype lines up to about 10 for dramatic ones), never above a twelve-second ceiling even when footage is exhausted. The planner shortens that ceiling when a final playback slowdown is expected. Small tails are balanced into readable beats instead of extending a shot or adding a freeze at every paragraph boundary. The intro uses roughly three-second images from several titles, covering at least half the list when its duration allows that without rapid flashes. The first visual can come from anywhere in a trailer, not just its opening.
 
 Occasional 4–7-second holds show a useful face or a calm, loosely relevant detail. A shared cooldown requires at least two moving excerpts and about fourteen seconds between deliberate holds, including across paragraph and review boundaries. They use a slow zoom of at most 3.5%, sometimes a gentle pan, with varied directions. A freeze at the end of moving footage begins its zoom from the existing framing rather than jumping in. Small color/contrast adjustments stay consistent across footage; reaction GIFs remain untouched and trailer title cards remain static for readability. The clean export adds no shaking, flashes, flipped footage, decorative borders, or audio distortion. The separate comparison export applies the documented augmentation. Limited source footage can still require compromises in shot choice.
 
@@ -200,7 +227,7 @@ Hooks use the owner's conversational, curiosity-driven examples as a style direc
 
 The spoken intro aims for two useful sentences and roughly eight seconds, after the five-second visual cold open. It gives the topic and a concrete reason to watch instead of explaining how a countdown works or stacking empty teasers. Script checks repair numeric formatting debris, obvious filler, and repeated bait. Older cached scripts receive this editorial refresh while valid review text and its speech cache remain reusable. If the recorded intro runs long, one bounded rewrite can shorten the complete thought; eight seconds remains guidance, never a hard rejection or an audio trim.
 
-A funny like-and-subscribe message appears once between reviews, chosen from the actual measured timeline to target 30–50% of the video. It never interrupts a review. If no review boundary fits that window, the closest boundary is used instead of splitting a movie section. The joke and reaction are selected together: a moving high-five, a sci-fi cat GIF, or a crying-cat meme with a small caption. Bundled, verified assets avoid relying on a meme service during production; unavailable reactions fall back to a held film image. The message stays below 10 seconds after tempo changes. The outro asks viewers to like, subscribe, and watch other recommendations over calm excerpts from at most two titles, also capped around twelve seconds instead of long play/freeze repetitions. Its last image remains for about three seconds after speech, then fades out gently.
+A funny like-and-subscribe message appears once between reviews, chosen from the actual measured timeline to target 30–50% of the video. It never interrupts a review. If no review boundary fits that window, the closest boundary is used instead of splitting a movie section. The joke and reaction are selected together: a moving high-five, a sci-fi cat GIF, or a crying-cat meme with a small caption. Bundled, verified assets avoid relying on a meme service during production; unavailable reactions fall back to a held film image. The message stays below 10 seconds after tempo changes. The outro asks viewers to like, subscribe, and watch other recommendations over calm excerpts from at most two titles, also capped around twelve seconds instead of long play/freeze repetitions. It is followed by a calm end-screen plate (a blurred, dimmed frame from number one with a small headline) for about 20 seconds in total, leaving room for YouTube end-screen elements, then fades out gently.
 
 Speech has a small leading/trailing silence margin. Verification checks the beginning and ending as well as overall transcript coverage, so a paragraph cannot pass merely because most words survived. Every intermediate uses the same lossless 24-bit ALAC, 48 kHz stereo configuration. Older or incompatible parts have only their audio normalized before assembly, preserving their video bytes. This prevents mixing 16-bit narration packets with a 24-bit preview header, which previously corrupted the assembled voice. The final MP4 uses AAC once, with timestamps reset at the final mix.
 
@@ -260,7 +287,7 @@ Completion reminders have bold labels and five empty lines between their three m
 
 ## Redesigned thumbnail generation
 
-The thumbnail pipeline now requests complete cinematic scenes, including subjects, lighting, and environment together. Qwen3 4B proposes six concepts from the title, brief, premises, and commentary. A lightweight composition-cue selector picks one concept per style. Each selected concept gets up to two image seeds (six image requests maximum); phone-size sharpness, contrast, exposure, and duplicate checks pick a candidate. These are visual heuristics, not a vision model, anatomy checker, semantic verifier, or CTR predictor.
+By default thumbnails are now built from official TMDB stills (see production stage 12). With `THUMBNAIL_SOURCE=ai`, or when stills are unavailable, the generated-scene pipeline below is used. It requests complete cinematic scenes, including subjects, lighting, and environment together. The script model proposes six concepts from the title, brief, premises, and commentary. A lightweight composition-cue selector picks one concept per style. Each selected concept gets up to two image seeds (six image requests maximum); phone-size sharpness, contrast, exposure, and duplicate checks pick a candidate. These are visual heuristics, not a vision model, anatomy checker, semantic verifier, or CTR predictor.
 
 The reference direction is expressive close-ups, intense genre-appropriate scenes, coherent dramatic lighting, strong depth, and minimal clutter. Horror gets dedicated dread/silhouette concepts; action gets chase/impact concepts. Generated scenes are illustrative artwork, not verified movie stills or guaranteed actor likenesses.
 
@@ -276,7 +303,7 @@ Audio stays Chatterbox Turbo by default; Pocket TTS remains excluded. Only gener
 
 ### Clean and augmented comparison exports
 
-Each new production delivers **two videos**. `final-video.mp4` is the clean edit; `final-video-augmented.mp4` uses the same scenes, narration, music, subtitles and chapters, then applies a fixed subpixel warp, faint Perlin noise, approximately 1% local disjoint pixel swaps, and small audio variations only outside protected narration intervals. Narration and a safety margin around it are not time/formant augmented. Frame counts and audio lengths are checked. The comparison uses streaming frames and overlapping audio windows rather than a huge raw-video file. Settings are included in `comparison-settings.json`. Augmentation can still affect perceived quality, does not anonymize recognizable people or voices, and provides no protection from copyright claims. The second encode takes additional CPU time and approximately doubles final video storage; artifacts still expire after 48 hours.
+The comparison export is **optional** (repository variable `COMPARISON_EXPORT=true`). When enabled, production delivers **two videos**. `final-video.mp4` is the clean edit; `final-video-augmented.mp4` uses the same scenes, narration, music, subtitles and chapters, then applies a fixed subpixel warp, faint Perlin noise, approximately 1% local disjoint pixel swaps, and small audio variations only outside protected narration intervals. Narration and a safety margin around it are not time/formant augmented. Frame counts and audio lengths are checked. The comparison uses streaming frames and overlapping audio windows rather than a huge raw-video file. Settings are included in `comparison-settings.json`. Augmentation can still affect perceived quality, does not anonymize recognizable people or voices, and provides no protection from copyright claims. The second encode takes additional CPU time and approximately doubles final video storage; artifacts still expire after 48 hours.
 
 The old continuous sine-tone/pulse bed was audible in the finished video's music-only opening (normalized waveform correlation 0.998 against the generated source). Both procedural music generators have now been removed; bundled licensed recordings provide the bed. One theme is chosen for the whole video from the title, then brief: action, mystery, romance or drama. No static is added. Trailer sound stays out of narrated sections, appearing only in deliberately selected previews and up to two breaks per longer review. Complete speech windows can play in previews; boundary-crossing speech remains muted.
 
