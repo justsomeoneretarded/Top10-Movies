@@ -56,6 +56,35 @@ def frame_text(image: Image.Image) -> str:
         return ""
 
 
+PROMO_TEXT = re.compile(
+    r"subscri|playlist|insider|facebook|twitter|instagram|tiktok|youtube|follow\s+us|watch\s+more|click|"
+    r"channel|www\.|\.com\b|https?:|hashtag|fandango|get\s+tickets|tickets\s+(?:on\s+sale|now)|pre-?order|"
+    r"more\s+trailers|latest\s+(?:movie|trailers)|step\s+inside", re.IGNORECASE)
+
+
+def promo_cutoff(path: Path, length: float, *, start_fraction: float = 0.62, step: float = 1.5) -> float | None:
+    """Where a trailer's promotional end slate begins (subscribe/playlist/social/website/ticket text).
+
+    Scans only the final part of the trailer with local OCR. Returns None when no
+    promo text is found or OCR is unavailable.
+    """
+    if not shutil.which("tesseract") or length <= 0:
+        return None
+    cap = cv2.VideoCapture(str(path))
+    try:
+        for tick in np.arange(length * start_fraction, length - 0.2, step):
+            cap.set(cv2.CAP_PROP_POS_MSEC, float(tick) * 1000)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if PROMO_TEXT.search(frame_text(image)):
+                return float(tick)
+    finally:
+        cap.release()
+    return None
+
+
 def matches_title_card(text: str, title: str) -> bool:
     def words(value):
         plain = "".join(char for char in unicodedata.normalize("NFKD",value.casefold()) if not unicodedata.combining(char))
@@ -82,16 +111,23 @@ def scene_hash(image: Image.Image) -> int | None:
 
 def analyse(path: Path, cache: Path) -> list[dict]:
     """Sample cuts and motion at 2fps; preserve source timestamps, excluding end slates."""
-    cache = cache.with_name(cache.stem + ".calm-v3.json")
+    cache = cache.with_name(cache.stem + ".calm-v4.json")
     if cache.exists():
         return json.loads(cache.read_text())
-    cap = cv2.VideoCapture(str(path))
     length = duration(path)
+    # Studio channel end slates (subscribe, playlists, social links) can run longer than the
+    # default final 10%; OCR finds where they begin so they never reach the edit.
+    end = length * 0.90
+    slate = promo_cutoff(path, length)
+    if slate is not None and slate < end:
+        print(f"End slate detected in {path.name} at {slate:.1f}s of {length:.1f}s; footage after it is excluded.", flush=True)
+        end = max(slate - 0.5, length * 0.3)
+    cap = cv2.VideoCapture(str(path))
     previous = None
     previous_hist = None
     boundaries = [max(2.0, length * 0.04)]
     samples = []
-    for tick in np.arange(boundaries[0], length * 0.90, 0.5):
+    for tick in np.arange(boundaries[0], end, 0.5):
         cap.set(cv2.CAP_PROP_POS_MSEC, float(tick) * 1000)
         ok, frame = cap.read()
         if not ok:
@@ -108,7 +144,7 @@ def analyse(path: Path, cache: Path) -> list[dict]:
         samples.append((float(tick), motion, float(gray.mean()), float(gray.std())))
         previous = gray
         previous_hist = histogram
-    boundaries.append(length * 0.90)
+    boundaries.append(end)
     cap.release()
     shots = []
     for start, end in pairwise(boundaries):
