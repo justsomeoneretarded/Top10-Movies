@@ -311,7 +311,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     save_json(work / "quality-report.json", quality_report)
     print(f"Auto quality: {width}x{height}; highest shared primary-source resolution up to {ceiling}p. Optional extra trailers meet this quality.", flush=True)
     from . import download_access
-    notice("Footage", f"{width}x{height}; {len(sources)} trailers accepted; route: {download_access.routes()[0]}. "
+    per_title = "; ".join(f"{source.get('film', '?')} ({source.get('role', '?')}): {source.get('width')}x{source.get('height')}" for source in sources)
+    notice("Footage", f"Export {width}x{height}; {len(sources)} trailers accepted; route: {download_access.routes()[0]}. {per_title}. "
            f"Elapsed {(time.time()-started)/60:.0f} min.")
 
     writer = Writer(cache_dir=work / "script-sections")
