@@ -22,6 +22,16 @@ def run(args: list, **kwargs) -> str:
     return result.stdout
 
 
+def notice(title: str, message: str, level: str = "notice"):
+    """A GitHub Actions annotation (visible on the run page) when running in Actions; plain log otherwise."""
+    text = " ".join(str(message).split()) if level != "error" else str(message)
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        clean = text[:3000].replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+        print(f"::{level} title={title}::{clean}", flush=True)
+    else:
+        print(f"{title}: {text}", flush=True)
+
+
 def ffmpeg(*args):
     return run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args])
 

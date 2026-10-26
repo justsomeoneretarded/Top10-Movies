@@ -7,6 +7,7 @@ import math
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from .core import (
@@ -14,6 +15,7 @@ from .core import (
     duration,
     ffmpeg,
     key,
+    notice,
     parse_movies,
     probe,
     save_json,
@@ -184,6 +186,7 @@ def export_comparison(output: Path, work: Path, timeline: list[dict], speed: flo
 
 
 def produce(title: str, brief: str, movies: str, work: Path, output: Path):
+    started = time.time()
     from .audio_review import verify_export_audio
     from .availability import enrich_availability
     from .cta import cta_variants, prepare_cta, render_cta
@@ -253,6 +256,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     facts_path = work / "research.json"
     films = json.loads(facts_path.read_text()) if facts_path.exists() else research.collect(items, facts_path)
     films = enrich_availability(films, research, work / "availability")
+    notice("Research", f"{len(films)} titles resolved; Wikipedia notes for {sum(1 for f in films if f.get('wiki_summary'))}; "
+           f"TMDB stills for {sum(1 for f in films if f.get('backdrops'))}. Elapsed {(time.time()-started)/60:.0f} min.")
     spec = workflow_duration(title, len(items), films)
     max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
     expected_breaks = min(3, max_beat)*len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
@@ -304,6 +309,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                       "sources": sources, "export_width": width, "export_height": height}
     save_json(work / "quality-report.json", quality_report)
     print(f"Auto quality: {width}x{height}; highest shared primary-source resolution up to {ceiling}p. Optional extra trailers meet this quality.", flush=True)
+    from . import download_access
+    notice("Footage", f"{width}x{height}; {len(sources)} trailers accepted; route: {download_access.routes()[0]}. "
+           f"Elapsed {(time.time()-started)/60:.0f} min.")
 
     writer = Writer(cache_dir=work / "script-sections")
     print(f"Script model: {writer.model}", flush=True)
@@ -316,6 +324,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         script["package"]["thumbnail_version"] = 2
     save_json(script_path, script)
     writer.unload()
+    intro_preview = " ".join(script["sections"][0]["paragraphs"])
+    first_review = next((" ".join(s["paragraphs"]) for s in script["sections"] if s["kind"] == "film"), "")
+    notice("Script", f"Model {writer.model}. Title: {script['package'].get('title')}. "
+           f"Angle: {script['package'].get('episode_plan', {}).get('angle', '-')}. Intro: {intro_preview} "
+           f"First review: {first_review[:900]} Elapsed {(time.time()-started)/60:.0f} min.")
 
     # Check the short intermission before spending an hour on full narration.
     # The same verifier then covers every hook, review, availability line and outro.
@@ -436,6 +449,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         aligned[coordinate] = [{**cue, "start": cue["start"]/paragraph_speed,
                                 "end": cue["end"]/paragraph_speed} for cue in aligned[coordinate]]
     print(f"Narration delivery: {delivery_report}.", flush=True)
+    notice("Narration", f"Delivery labels {delivery_report}; {sum(duration(a) for a in set(speech.values()))/60:.1f} min of speech. "
+           f"Elapsed {(time.time()-started)/60:.0f} min.")
     if voice_speed != 1:
         cta_audio = paced_take(cta_audio, voice_speed)
         cta_cues = [{**cue, "start": cue["start"]/voice_speed,
@@ -761,6 +776,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     validate_package(output, spec=spec)
     # Full decode checks catch corrupt/truncated exports. Audio normalization is handled in render.finish.
     ffmpeg("-xerror", "-i", output / "final-video.mp4", "-f", "null", "-")
+    assembly = json.loads((work / "audio-assembly.json").read_text()) if (work / "audio-assembly.json").exists() else {}
+    loudness = assembly.get("loudness", {})
+    notice("Complete", f"{final_duration/60:.2f} min video at tempo {speed:.3f}; loudness before mastering "
+           f"{loudness.get('measured', {}).get('integrated', '?')} LUFS, gain {loudness.get('gain_db', '?')} dB; "
+           f"{assembly.get('effect_events', 0)} transition effects. Total {(time.time()-started)/60:.0f} min.")
     print(f"Complete: {final_duration/60:.2f} minutes. Package: {output}", flush=True)
 
 
@@ -779,6 +799,8 @@ def main():
         if args.output.exists():
             (args.output / "final-video.mp4").unlink(missing_ok=True)
         print(f"Production failed ({type(exc).__name__}): {exc}", file=sys.stderr)
+        import traceback
+        notice("Production failed", f"{type(exc).__name__}: {str(exc)[-1500:]}\n{traceback.format_exc()[-1500:]}", "error")
         return 1
     return 0
 
