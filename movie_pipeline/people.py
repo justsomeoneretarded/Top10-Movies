@@ -29,8 +29,10 @@ def trailer_still_for(text: str, film: dict, selector, sources: list[Path], shot
         faces = getattr(selector, "faces", {}).get(str(source), [])
         try:
             query = f"A close-up of {target['name']} as {target.get('character', '')} in {film['title']}."
-            scores = selector.relevance(source, query)
-            alternatives = [selector.relevance(source, f"A close-up of {p['name']} as {p.get('character', '')} in {film['title']}.")
+            # Character holds use raw CLIP similarity, which their thresholds are tuned for.
+            score_of = getattr(selector, "identity_relevance", None) or selector.relevance
+            scores = score_of(source, query)
+            alternatives = [score_of(source, f"A close-up of {p['name']} as {p.get('character', '')} in {film['title']}.")
                             for p in cast if p is not target]
             for i, shot in enumerate(shots):
                 if selector.card_kind(source, i) is not None:

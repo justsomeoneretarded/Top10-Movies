@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -26,6 +27,12 @@ def pace_limit(delivery: str, action: bool = False) -> float:
     return (ACTION_PACE_LIMITS if action else PACE_LIMITS).get(delivery, PACE_LIMITS["normal"])
 HOLD_COOLDOWN_SECONDS = 14.0
 HOLD_COOLDOWN_BEATS = 2
+
+
+def _zscore(values) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    spread = float(values.std())
+    return (values - float(values.mean())) / spread if spread > 1e-6 else np.zeros_like(values)
 
 
 def moving_limit(selector) -> float:
@@ -179,6 +186,20 @@ class ShotSelector:
         self.torch = torch
         self.model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").eval()
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        # SigLIP 2 matches narration to frames more accurately; CLIP stays for title-card and
+        # character checks whose thresholds are tuned to it.
+        self.siglip = self.siglip_processor = None
+        self.siglip_features = {}
+        self.scene_embeddings = {}
+        if os.getenv("SHOT_MATCH_MODEL", "siglip2").lower() != "clip":
+            try:
+                from transformers import AutoModel, AutoProcessor
+                name = os.getenv("SIGLIP_MODEL", "google/siglip2-base-patch16-224")
+                self.siglip = AutoModel.from_pretrained(name).eval()
+                self.siglip_processor = AutoProcessor.from_pretrained(name)
+            except Exception as exc:  # noqa: BLE001 -- CLIP matching remains available
+                print(f"SigLIP 2 unavailable ({type(exc).__name__}); matching footage with CLIP.", flush=True)
+                self.siglip = self.siglip_processor = None
         self.features = {}
         self.uses = {}
         self.last_shots = {}
@@ -197,6 +218,7 @@ class ShotSelector:
 
     def index(self, path: Path, shots: list[dict]):
         vectors = []
+        siglip_vectors = []
         face_flags = []
         small_frames = []
         face_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
@@ -220,7 +242,25 @@ class ShotSelector:
                 if not isinstance(values, self.torch.Tensor):
                     values = values.pooler_output
                 vectors.append(values / values.norm(dim=-1, keepdim=True))
+            if self.siglip is not None:
+                try:
+                    siglip_inputs = self.siglip_processor(images=images, return_tensors="pt")
+                    with self.torch.inference_mode():
+                        values = self.siglip.get_image_features(**siglip_inputs)
+                        if not isinstance(values, self.torch.Tensor):
+                            values = values.pooler_output
+                    siglip_vectors.append(values / values.norm(dim=-1, keepdim=True))
+                except Exception as exc:  # noqa: BLE001
+                    print(f"SigLIP 2 image features failed ({type(exc).__name__}); using CLIP for {path.name}.", flush=True)
+                    siglip_vectors = None
+                    self.siglip = None
         self.features[str(path)] = self.torch.cat(vectors)
+        if siglip_vectors:
+            self.siglip_features[str(path)] = self.torch.cat(siglip_vectors)
+        from .scenes import load as load_scenes
+        scenes = load_scenes(path, len(shots))
+        if scenes:
+            self.scene_embeddings[str(path)] = np.asarray(scenes["embeddings"], dtype=np.float32)
         self.faces[str(path)] = face_flags
         self._scene_ranges[str(path)] = shots
         self._scene_hashes[str(path)] = [scene_hash(frame) for frame in small_frames]
@@ -280,6 +320,39 @@ class ShotSelector:
             self._moving_seconds_since_hold = getattr(self, "_moving_seconds_since_hold", HOLD_COOLDOWN_SECONDS)+seconds
 
     def relevance(self, path: Path, text: str):
+        """How well each shot fits a narration sentence, on CLIP's familiar scale (about 0.2-0.35).
+
+        SigLIP 2 image-text similarity is blended with similarity to the AI scene
+        descriptions when available; both are normalised per trailer.
+        """
+        signals = []
+        if self.siglip is not None and str(path) in self.siglip_features:
+            try:
+                inputs = self.siglip_processor(text=[text.lower()], return_tensors="pt", padding="max_length",
+                                               max_length=64, truncation=True)
+                with self.torch.inference_mode():
+                    vector = self.siglip.get_text_features(**inputs)
+                    if not isinstance(vector, self.torch.Tensor):
+                        vector = vector.pooler_output
+                    vector = vector / vector.norm(dim=-1, keepdim=True)
+                    signals.append((0.6, (self.siglip_features[str(path)] @ vector.T).squeeze(-1).numpy()))
+            except Exception:  # noqa: BLE001 -- fall back to CLIP below
+                signals = []
+        if signals and str(path) in self.scene_embeddings:
+            try:
+                from .scenes import embed
+                sentence = embed([text])[0]
+                signals.append((0.4, self.scene_embeddings[str(path)] @ sentence))
+            except Exception:  # noqa: BLE001 -- image matching alone is fine
+                pass
+        if signals:
+            total = sum(weight for weight, _ in signals)
+            combined = sum(weight * _zscore(values) for weight, values in signals) / total
+            return (0.25 + 0.03 * combined).astype(np.float32)
+        return self.identity_relevance(path, text)
+
+    def identity_relevance(self, path: Path, text: str):
+        """Raw CLIP similarity: the scale that title-card and character-hold thresholds expect."""
         inputs = self.processor(text=[text], return_tensors="pt", padding=True, truncation=True, max_length=77)
         with self.torch.inference_mode():
             vector = self.model.get_text_features(**inputs)

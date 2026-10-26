@@ -310,6 +310,15 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                       "sources": sources, "export_width": width, "export_height": height}
     save_json(work / "quality-report.json", quality_report)
     print(f"Auto quality: {width}x{height}; highest shared primary-source resolution up to {ceiling}p. Optional extra trailers meet this quality.", flush=True)
+    from . import scenes
+    if scenes.enabled():
+        described = 0
+        for pool in pools:
+            for source in pool:
+                if scenes.describe_trailer(source, shot_lookup[str(source)]):
+                    described += 1
+        scenes.unload()
+        print(f"Scene descriptions ready for {described} of {sum(len(pool) for pool in pools)} trailers.", flush=True)
     from . import download_access
     per_title = "; ".join(f"{source.get('film', '?')} ({source.get('role', '?')}): {source.get('width')}x{source.get('height')}" for source in sources)
     notice("Footage", f"Export {width}x{height}; {len(sources)} trailers accepted; route: {download_access.routes()[0]}. {per_title}. "
@@ -488,6 +497,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     active_files = {path.name for pool in pools for path in pool}
     quality_report["sources"] = [source for source in sources if source["file"] in active_files]
     save_json(work / "quality-report.json", quality_report)
+    notice("Shot matching", f"{'SigLIP 2' if getattr(selector, 'siglip', None) is not None else 'CLIP'} image matching; "
+           f"AI scene descriptions for {len(getattr(selector, 'scene_embeddings', {}))} of {len(active_files)} trailers.")
     ending_cards = {i: choose_title_card(selector, pool, shot_lookup, films[i]["title"])
                     for i, pool in enumerate(pools)}
     card_kind = getattr(selector, "card_kind", None)
