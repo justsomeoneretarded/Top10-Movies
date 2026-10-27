@@ -143,6 +143,9 @@ def availability_line(record: dict | None) -> str:
         for value in values if isinstance(values, list) else []:
             if isinstance(value, str) and value.strip():
                 name = brand_name(value)
+                # Listing/aggregator channels (e.g. "JustWatch TV") are not places people watch films.
+                if name and "justwatch" in name.casefold().replace(" ", ""):
+                    continue
                 if name and name.casefold() not in {n.casefold() for n in names}:
                     names.append(name)
     names = names[:2]
