@@ -188,7 +188,10 @@ def _theme(topic: str, brief: str, facts: dict) -> str:
         ("sci-fi", r"sci[ -]?fi|science[ -]?fiction"), ("horror", r"\bhorror\b"),
         ("action", r"\baction\b"), ("thriller", r"\bthrillers?\b"),
         ("crime", r"\bcrime\b"), ("comedy", r"\bcomed(?:y|ies)\b"),
-        ("fantasy", r"\bfantasy\b"), ("drama", r"\bdramas?\b"),
+        ("fantasy", r"\bfantasy\b"), ("romance", r"\bromance|\bromantic|\brom-?coms?\b|\blove stor"),
+        ("adventure", r"\badventures?\b"), ("family", r"\bfamily\b|\bkids\b"), ("war", r"\bwar\b"),
+        ("western", r"\bwesterns?\b"), ("documentary", r"\bdocumentar(?:y|ies)\b|\bdocuseries\b"),
+        ("drama", r"\bdramas?\b"),
         ("mystery", r"\bmyster(?:y|ies)\b"), ("animation", r"\banimat(?:ion|ed)\b"),
     )
     # The requested theme wins. A mixed list does not become "all sci-fi"
@@ -209,6 +212,15 @@ GENRE_SIGNALS = {
     "comedy": r"\bcomed\w*|\bfunny\b|\blaugh\w*|\bhilarious\b",
     "mystery": r"\bmyster\w*|\bwhodunits?\b|\bclues?\b|\bpuzzles?\b",
     "animation": r"\banimat\w*|\bcartoons?\b|\banime\b",
+    "romance": r"\bromance\w*|\bromantic\b|\blove\b|\bheart\w*|\bkiss\w*|\bdate night\b",
+    "adventure": r"\badventur\w*|\bquests?\b|\bexpedition\w*|\btreasure\b|\bepic\b|\bexplor\w*",
+    "family": r"\bfamily\b|\bkids\b|\bwhole family\b|\bfeel-good\b|\bfun\b",
+    "fantasy": r"\bfantasy\b|\bmagic\w*|\bdragons?\b|\bwizards?\b|\bkingdoms?\b|\bmyth\w*",
+    "crime": r"\bcrime\w*|\bcriminals?\b|\bheists?\b|\bgangsters?\b|\bdetectives?\b|\bmob\b",
+    "war": r"\bwar\b|\bbattle\w*|\bsoldiers?\b|\bfront lines?\b",
+    "western": r"\bwesterns?\b|\bcowboys?\b|\boutlaws?\b|\bfrontier\b",
+    "documentary": r"\bdocumentar\w*|\btrue stor\w*|\breal\b|\breal-life\b",
+    "drama": r"\bdrama\w*|\bemotional\b|\bheart\w*|\btears?\b|\bpowerful\b",
 }
 
 

@@ -217,6 +217,10 @@ def analyse(path: Path, cache: Path) -> list[dict]:
     envelope = audio_envelope(path)
     for shot in shots:
         shot["punch"] = round(punch(envelope, shot["start"], shot["end"]), 3)
+        if envelope.size:
+            low, high = int(shot["start"] * 10), min(envelope.size, int(shot["end"] * 10) + 1)
+            if high > low:
+                shot["punch_at"] = round((low + int(np.argmax(np.diff(envelope[max(0, low - 1):high], prepend=envelope[max(0, low - 1)])))) / 10, 2)
         shot["peak"] = round(0.6 * shot["punch"] + 0.4 * min(shot["motion"], 40) / 40, 3)
         try:
             kind = text_card_kind(frame_text(get_frame(path, (shot["start"] + shot["end"]) / 2)))

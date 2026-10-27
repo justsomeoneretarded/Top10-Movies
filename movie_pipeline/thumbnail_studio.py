@@ -60,7 +60,7 @@ GENRE_PROFILES = {
     },
     "thriller": {
         "label": "thriller",
-        "words": ("thriller", "mystery", "twist", "crime", "detective", "suspense", "mind-bending", "heist"),
+        "words": ("thriller", "mystery", "twist", "crime", "detective", "suspense", "mind-bending", "heist", "whodunit", "serial killer", "psychological"),
         "tmdb": ("Thriller", "Mystery", "Crime"),
         "hint": "tension, suspicion, danger, a tense face, a weapon, a dark investigation",
         "queries": ("a tense close-up of a worried face", "a person watched from the shadows", "a detective in a dark room",
@@ -71,7 +71,7 @@ GENRE_PROFILES = {
     },
     "action": {
         "label": "action",
-        "words": ("action", "explosive", "fight", "adrenaline", "war", "shootout", "martial"),
+        "words": ("action", "explosive", "fight", "adrenaline", "war", "shootout", "martial", "superhero", "western", "spy", "car chase"),
         "tmdb": ("Action", "War", "Western"),
         "hint": "explosions, fights, weapons, speed, a hero in combat",
         "queries": ("a huge explosion", "a hero fighting in combat", "a high speed car chase", "a soldier firing a gun"),
@@ -101,13 +101,67 @@ GENRE_PROFILES = {
     },
     "drama": {
         "label": "drama",
-        "words": ("drama", "emotional", "tearjerker", "romance", "love"),
-        "tmdb": ("Drama", "Romance", "History"),
+        "words": ("drama", "emotional", "tearjerker", "true events", "biopic", "oscar"),
+        "tmdb": ("Drama", "History", "Music"),
         "hint": "intense emotion, tears, heartbreak, an intimate close-up",
         "queries": ("an emotional close-up with tears", "two people in an intense emotional moment"),
         "keywords": ("tear", "cry", "emotion", "sad", "love", "embrace", "intense"),
         "avoid": (),
         "exposure": 100, "grade": "blockbuster", "rim": (255, 214, 160), "divider": (255, 255, 255),
+    },
+    "adventure": {
+        "label": "adventure",
+        "words": ("adventure", "quest", "treasure", "expedition", "explore", "epic", "jungle", "voyage"),
+        "tmdb": ("Adventure",),
+        "hint": "epic landscapes, heroes on a quest, danger in the wild, awe and discovery",
+        "queries": ("a hero standing before an epic landscape", "explorers in a dangerous jungle or desert",
+                    "a daring escape across a cliff or bridge", "a person in awe of something huge"),
+        "keywords": ("landscape", "mountain", "jungle", "desert", "ocean", "cliff", "explor", "ruins", "ship", "awe", "epic"),
+        "avoid": ("office", "talking calmly"),
+        "exposure": 110, "grade": "warm", "rim": (255, 190, 90), "divider": (255, 255, 255),
+    },
+    "family": {
+        "label": "family",
+        "words": ("family", "kids", "animated", "animation", "pixar", "disney", "cartoon", "children", "feel-good"),
+        "tmdb": ("Family", "Animation"),
+        "hint": "big joyful expressions, colourful characters, wonder, friendship, fun",
+        "queries": ("a joyful character with a big smile", "colourful animated characters having fun",
+                    "a child amazed by something magical", "friends laughing together"),
+        "keywords": ("smil", "laugh", "colorful", "colourful", "cartoon", "animated", "joy", "wonder", "friend", "magic", "cute"),
+        "avoid": ("blood", "gun", "dark"),
+        "exposure": 135, "grade": "bright", "rim": (255, 255, 255), "divider": (255, 255, 255),
+    },
+    "romance": {
+        "label": "romance",
+        "words": ("romance", "romantic", "romantic comed", "love", "rom-com", "romcom", "date night", "valentine", "heartbreak"),
+        "tmdb": ("Romance",),
+        "hint": "two people close together, longing looks, a kiss, warm soft light, heartbreak",
+        "queries": ("a couple about to kiss in warm light", "two people gazing at each other", "a tearful heartbroken face",
+                    "a couple laughing together"),
+        "keywords": ("couple", "kiss", "embrace", "gaz", "love", "romantic", "smil", "hold hands", "tear", "warm"),
+        "avoid": ("gun", "blood", "explo"),
+        "exposure": 120, "grade": "warm", "rim": (255, 150, 170), "divider": (255, 255, 255),
+    },
+    "fantasy": {
+        "label": "fantasy",
+        "words": ("fantasy", "magic", "dragon", "wizard", "kingdom", "mythical", "sword", "sorcer"),
+        "tmdb": ("Fantasy",),
+        "hint": "magic, dragons, glowing spells, castles, mythical creatures, epic battles",
+        "queries": ("a wizard casting a glowing spell", "a dragon in the sky", "a castle in a magical landscape",
+                    "a warrior with a sword facing a creature"),
+        "keywords": ("magic", "glow", "dragon", "castle", "sword", "spell", "creature", "wizard", "kingdom", "mystic"),
+        "avoid": ("office", "car"),
+        "exposure": 95, "grade": "magic", "rim": (170, 120, 255), "divider": (255, 255, 255),
+    },
+    "documentary": {
+        "label": "documentary",
+        "words": ("documentary", "documentaries", "true story", "real story", "docuseries"),
+        "tmdb": ("Documentary",),
+        "hint": "real people, striking real places, an intense moment caught on camera",
+        "queries": ("a real person speaking with emotion", "a striking real-world location", "archival footage of a dramatic event"),
+        "keywords": ("person", "interview", "crowd", "real", "city", "nature", "archival", "emotion"),
+        "avoid": (),
+        "exposure": 105, "grade": "blockbuster", "rim": (255, 214, 160), "divider": (255, 255, 255),
     },
 }
 DEFAULT_GENRE = "drama"
@@ -334,6 +388,13 @@ def genre_grade(image: Image.Image, grade: str, strength: float = 1.0) -> Image.
     elif grade == "scifi":
         hsv[..., 1] *= 1.12
         tint, vignette_amount, grain = np.array([-10, 6, 16]), 0.4, 2.0
+    elif grade == "warm":
+        hsv[..., 1] *= 1.08
+        hsv[..., 2] = 255 * np.clip(value * 1.03 + 0.02, 0, 1)
+        tint, vignette_amount, grain = np.array([10, 4, -8]), 0.3, 1.5
+    elif grade == "magic":
+        hsv[..., 1] *= 1.15
+        tint, vignette_amount, grain = np.array([6, -2, 16]), 0.42, 1.5
     else:  # bright
         hsv[..., 1] *= 1.25
         hsv[..., 2] = 255 * np.clip(value * 1.06 + 0.03, 0, 1)

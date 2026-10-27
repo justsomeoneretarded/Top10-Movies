@@ -149,3 +149,41 @@ def test_outside_runtime_window_still_exports_complete_video(monkeypatch,tmp_pat
     assert 5 < seconds < 6
     assert any(stream['codec_type']=='audio' for stream in probe(target)['streams'])
     ffmpeg('-xerror','-i',target,'-f','null','-')
+
+
+def test_countdown_tracker_overlay_appears_only_in_its_window(monkeypatch, tmp_path):
+    import numpy as np
+
+    from movie_pipeline.render import finish, tracker_image
+    from movie_pipeline.shots import get_frame
+    from movie_pipeline.timing import DurationSpec
+    monkeypatch.setenv('VIDEO_RESOLUTION', '720')
+    source = tmp_path/'source.mp4'
+    ffmpeg('-f', 'lavfi', '-i', 'color=c=black:size=1280x720:rate=30', '-f', 'lavfi', '-i',
+           'sine=frequency=220:sample_rate=48000', '-t', 4, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', source)
+    tracker = tmp_path/'tracker.png'
+    width, height = tracker_image(tracker, 5, 3)
+    finish([source], tmp_path/'final.mp4', tmp_path, False, spec=DurationSpec(4, 0, 20, automatic=True),
+           overlays=[(tracker, 1.0, 2.5)])
+    inside = np.asarray(get_frame(tmp_path/'final.mp4', 1.8), dtype=float)
+    outside = np.asarray(get_frame(tmp_path/'final.mp4', 3.2), dtype=float)
+    corner = (slice(30, 30+height), slice(1280-36-width, 1280-36))
+    assert inside[corner].max() > 150 and outside[corner].max() < 40
+
+
+def test_j_cut_mixes_trailer_sound_under_the_end_of_a_part(tmp_path):
+    import numpy as np
+
+    from movie_pipeline.render import j_cut
+    part = tmp_path/'part.mov'
+    ffmpeg('-f', 'lavfi', '-i', 'color=c=black:size=320x180:rate=30', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+           '-t', 3, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'alac', part)
+    source = tmp_path/'trailer.mp4'
+    ffmpeg('-f', 'lavfi', '-i', 'color=c=red:size=320x180:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+           '-t', 6, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', source)
+    assert j_cut(part, source, 3.0, lead=0.6)
+    raw = tmp_path/'a.raw'
+    ffmpeg('-i', part, '-f', 's16le', '-ac', '1', '-ar', '8000', raw)
+    samples = np.frombuffer(raw.read_bytes(), dtype=np.int16).astype(float)
+    assert np.abs(samples[:8000]).max() < 50          # first second silent
+    assert np.abs(samples[-2000:]).max() > 1000       # trailer sound rising in the last 0.6 s

@@ -298,7 +298,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 'image': True, 'animation': True, 'still': False,
                 'credit_source': plan['source'], 'attribution': plan['attribution']}
 
-    def finish(parts, target, work, action, spec, music_theme=None, timeline=None, top_title=None):
+    def finish(parts, target, work, action, spec, music_theme=None, timeline=None, top_title=None, overlays=None):
+        records['overlays'] = overlays
         assert music_theme == "action"
         assert timeline and top_title == films[0]['title']
         records['ending_hold'] = 3
@@ -381,6 +382,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(render, 'label_image', label_image)
     monkeypatch.setattr(render, 'subscribe_image', Mock(side_effect=AssertionError('The old static CTA card must not render')))
     monkeypatch.setattr(render, 'finish', finish)
+    monkeypatch.setattr(render, 'j_cut', lambda *args, **kwargs: records.setdefault('j_cuts', []).append(args[2]))
     monkeypatch.setattr('movie_pipeline.soundtrack.narration_rate', lambda theme: 1)
     monkeypatch.setattr('movie_pipeline.sound_design.delivery_speed', lambda rate, label: rate)
     monkeypatch.setattr('movie_pipeline.cta_animation.add_cta_animation', Mock())

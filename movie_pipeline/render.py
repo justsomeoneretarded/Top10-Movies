@@ -20,6 +20,23 @@ LOSSLESS_AUDIO = ("-ar", "48000", "-ac", "2", "-channel_layout", "stereo",
                   "-c:a", "alac", "-sample_fmt", "s32p")
 AUDIO_ALIGNMENT_TOLERANCE = .12
 FOOTAGE_GRADE = "eq=contrast=1.015:saturation=1.015"
+# Genre looks for all footage (VIDEO_GENRE is set by the pipeline from the title, brief and TMDB genres).
+GENRE_GRADES = {
+    "horror": "eq=contrast=1.09:saturation=0.76:brightness=-0.025:gamma=0.96,colorbalance=bs=0.05:bm=0.02:rs=-0.02:rh=0.02,noise=alls=7:allf=t",
+    "thriller": "eq=contrast=1.06:saturation=0.86:brightness=-0.01,colorbalance=bs=0.04:bm=0.01,noise=alls=4:allf=t",
+    "action": "eq=contrast=1.06:saturation=1.08,colorbalance=bs=0.03:rh=0.03:gh=0.01",
+    "scifi": "eq=contrast=1.05:saturation=1.02,colorbalance=bs=0.05:gs=0.01:bh=0.02",
+    "comedy": "eq=contrast=1.02:saturation=1.1:brightness=0.01",
+    "family": "eq=contrast=1.02:saturation=1.12:brightness=0.015",
+    "adventure": "eq=contrast=1.05:saturation=1.06,colorbalance=rm=0.03:gm=0.01:bh=-0.02",
+    "romance": "eq=contrast=1.02:saturation=1.03:brightness=0.01,colorbalance=rm=0.03:rh=0.02:bh=-0.02",
+    "fantasy": "eq=contrast=1.05:saturation=1.06,colorbalance=bs=0.04:rh=0.02:bh=0.02",
+    "drama": "eq=contrast=1.03:saturation=0.97",
+}
+
+
+def footage_grade() -> str:
+    return GENRE_GRADES.get(os.getenv("VIDEO_GENRE", "").strip().lower(), FOOTAGE_GRADE)
 
 
 def _hold_motion(frames: int, live_frames: int, width: int, height: int, style: str) -> str:
@@ -214,7 +231,7 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
         out = work / f"shot-{index:03}.mp4"
         filters = f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1,fps={FPS}"
         if not shot.get("image") and not shot.get("animation"):
-            filters += ","+FOOTAGE_GRADE
+            filters += ","+footage_grade()
         hold_frames = min(max(0, round(shot.get("freeze", 0)*FPS)), max(0, frames-1))
         if shot.get("still"):
             filters += f",trim=end_frame=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop={frames+1}"
@@ -289,7 +306,7 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
     motion = _hold_motion(frames, 0, width, height, still_motion)+"," if still and still_motion else ""
     graph = (
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
-        f"crop={width}:{height},setsar=1,{FOOTAGE_GRADE},setpts=PTS-STARTPTS,fps={FPS},"
+        f"crop={width}:{height},setsar=1,{footage_grade()},setpts=PTS-STARTPTS,fps={FPS},"
         f"{hold}tpad=stop_mode=clone:stop={frames},{motion}{_reveal_filter(width, height) if reveal else ''}setpts=N/({FPS}*TB)[v];"
         f"[{audio_index}:a]asetpts=PTS-STARTPTS,afade=t=in:d=0.08,"
         f"afade=t=out:st={max(0,actual-0.15)}:d=0.15,loudnorm=I=-18:TP=-2:LRA=9,apad[a]"
@@ -305,12 +322,55 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
 
 
 def _reveal_filter(width: int, height: int) -> str:
-    """Rank reveal transition: a short white flash and a 6% punch-in that settles in half a second."""
-    zoom = "(1+0.06*pow(max(0,1-t/0.5),2))"
+    """Rank reveal: a white flash, a 12% punch-in that settles in 0.6 s, and a brief camera shake."""
+    zoom = "(1+0.12*pow(max(0,1-t/0.6),2))"
+    shake = "(10*sin(t*70)*max(0,1-t/0.35))"
     return (f"scale=w='trunc({width}*{zoom}/2)*2':h='trunc({height}*{zoom}/2)*2':eval=frame:flags=bicubic,"
-            f"crop={width}:{height},fade=t=in:st=0:d=0.16:color=white,")
+            f"crop={width}:{height}:x='(iw-{width})/2+{shake}':y='(ih-{height})/2+{shake}*0.6',"
+            f"fade=t=in:st=0:d=0.2:color=white,")
 
 
+def j_cut(part: Path, source: Path, source_start: float, *, lead: float = 0.6, gain: float = 0.55):
+    """Let the next trailer clip's own sound rise under the last ``lead`` seconds of ``part``.
+
+    The audio is taken from just before ``source_start``, so it continues seamlessly into
+    the clip that follows. Video is copied; only the audio is remixed.
+    """
+    length = duration(part)
+    lead = min(lead, max(0.0, source_start), length * 0.4)
+    if lead < 0.2 or not any(s.get("codec_type") == "audio" for s in probe(source).get("streams", [])):
+        return False
+    temp = part.with_name(part.stem + ".jcut" + part.suffix)
+    delay = int((length - lead) * 1000)
+    ffmpeg("-i", part, "-ss", source_start - lead, "-t", lead, "-i", source, "-filter_complex",
+           f"[1:a]aresample=48000,aformat=channel_layouts=stereo,afade=t=in:d={lead},volume={gain},adelay={delay}:all=1[lead];"
+           f"[0:a][lead]amix=inputs=2:duration=first:normalize=0[a]",
+           "-map", "0:v", "-map", "[a]", "-c:v", "copy", *LOSSLESS_AUDIO, temp)
+    temp.replace(part)
+    return True
+
+
+def tracker_image(path: Path, total: int, current: int):
+    """Small countdown tracker (e.g. 8 7 6 [5] 4 3 2 1): done ranks dim, current in the accent colour."""
+    size = 44
+    gap = 14
+    width = total * size + (total - 1) * gap + 40
+    canvas = Image.new("RGBA", (width, size + 28), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((0, 0, width - 1, size + 27), radius=18, fill=(0, 0, 0, 120))
+    face = brand_font("display", 34)
+    for slot, rank in enumerate(range(total, 0, -1)):
+        x = 20 + slot * (size + gap) + size / 2
+        y = 14 + size / 2
+        if rank == current:
+            draw.ellipse((x - size / 2 - 2, y - size / 2 - 2, x + size / 2 + 2, y + size / 2 + 2), fill=ACCENT + (255,))
+            draw.text((x, y + 1), str(rank), font=face, anchor="mm", fill=(0, 0, 0))
+        else:
+            done = rank > current
+            draw.text((x, y + 1), str(rank), font=face, anchor="mm",
+                      fill=(255, 255, 255, 90 if done else 230))
+    canvas.save(path)
+    return canvas.size
 def end_screen_image(path: Path, background: Image.Image | None, headline: str = "THANKS FOR WATCHING"):
     """Calm, uncluttered end-screen plate: blurred dark film frame and a small headline.
 
@@ -462,7 +522,8 @@ def normalize_loudness(path: Path, seconds: float, work: Path, target: float = -
 
 
 def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: DurationSpec | None = None, *, ending_hold: float = 3.0, music_theme: str | None = None,
-           timeline: list[dict] | None = None, top_title: str | None = None) -> tuple[float, float]:
+           timeline: list[dict] | None = None, top_title: str | None = None,
+           overlays: list[tuple[Path, float, float]] | None = None) -> tuple[float, float]:
     spec = spec or DurationSpec()
     work.mkdir(parents=True, exist_ok=True)
     report = {"status": "pending", "canonical_audio": {"codec": "alac", "sample_format": "s32p",
@@ -529,10 +590,19 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
                 effects = work / "effects.wav"
                 record("sound-design", effect_events=effects_track(effects, timeline, speed, final_duration + 1))
             mix_inputs = "[voice][duck][fx]amix=inputs=3" if effects else "[voice][duck]amix=inputs=2"
+            overlay_inputs, overlay_graph, last = [], "", "base"
+            first_overlay = 4 if effects else 3
+            for number, (image, begin, end) in enumerate(overlays or []):
+                # Small images (the countdown tracker) placed top-right during each review, on the final clock.
+                overlay_inputs += ["-loop", "1", "-framerate", FPS, "-i", image]
+                overlay_graph += (f"[{last}][{first_overlay + number}:v]overlay=x=W-w-36:y=30:eof_action=pass:"
+                                  f"enable='between(t,{begin/speed:.3f},{end/speed:.3f})'[o{number}];")
+                last = f"o{number}"
             graph = (
                 # Honor legitimate display gaps first, then rebuild the clock.
                 # Packet reorder delays never become final output timestamps.
-                f"[0:v]fps=fps={FPS}:start_time=0,setpts=N/({FPS}*TB*{speed}),fps={FPS},tpad=stop_mode=clone:stop_duration={ending_hold},fade=t=out:st={final_duration-1.2}:d=1.2[v];"
+                f"[0:v]fps=fps={FPS}:start_time=0,setpts=N/({FPS}*TB*{speed}),fps={FPS},tpad=stop_mode=clone:stop_duration={ending_hold},fade=t=out:st={final_duration-1.2}:d=1.2[base];"
+                + overlay_graph + f"[{last}]null[v];"
                 # Preserve declared silence before changing the sample clock.
                 f"[1:a]asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0:min_hard_comp=0.0001,atempo={speed},"
                 f"asetpts=N/SR/TB,apad=pad_dur={ending_hold},asplit=2[voice][control];"
@@ -548,7 +618,8 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
             for source, name in ((combined_audio, "edit-without-music.wav"), (music, "background-only.wav")):
                 ffmpeg("-i", source, "-t", min(20, original), "-c:a", "pcm_s16le", work / name)
             ffmpeg("-xerror", "-err_detect", "explode", "-f", "concat", "-safe", "0", "-i", listing,
-                   "-i", combined_audio, "-i", music, *(["-i", effects] if effects else []), "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+                   "-i", combined_audio, "-i", music, *(["-i", effects] if effects else []), *overlay_inputs,
+                   "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
                    "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS,
                    "-threads", "2", "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", final_duration, output)
             record("loudness", loudness=normalize_loudness(output, final_duration, work))
