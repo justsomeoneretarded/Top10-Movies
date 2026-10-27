@@ -504,7 +504,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
 
     action = bool(re.search(r"\b(action|energetic|fast.paced|fight|intense)\b", title + " " + brief, re.IGNORECASE)) or sum("Action" in film.get("genres", []) for film in films) >= max(1, len(films)//2)
     selector = ShotSelector()
-    selector.peak_weight = 1.1 if genre in ("horror", "action", "thriller") else 0.6
+    selector.peak_weight = {"horror": 1.1, "action": 1.1, "thriller": 1.0, "adventure": 0.9, "scifi": 0.9, "fantasy": 0.9}.get(genre, 0.6)
     selector.titles = {str(source): film["title"] for film, pool in zip(films, pools) for source in pool}
     for film, trailer, shots in zip(films, trailers, shot_sets):
         selector.index(trailer, shots)
