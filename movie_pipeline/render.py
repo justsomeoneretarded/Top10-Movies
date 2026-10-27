@@ -464,6 +464,39 @@ def _normalized_audio_parts(parts: list[Path], work: Path) -> list[Path]:
     return result
 
 
+MAX_REPAIR_SECONDS = 3.0
+
+
+def repair_part_timing(path: Path, work: Path) -> Path | None:
+    """Make a clip's audio exactly as long as its video (pad with silence or trim).
+
+    Small audio/video length differences can come from any rendering step; they are
+    repaired instead of failing the whole video. Larger differences (over three seconds)
+    mean something is really missing and are left for the strict check to report.
+    """
+    metadata = probe(path)
+    video = next((s for s in metadata.get("streams", []) if s.get("codec_type") == "video"), None)
+    audio = next((s for s in metadata.get("streams", []) if s.get("codec_type") == "audio"), None)
+    try:
+        video_seconds = float(video["duration"])
+        audio_seconds = float(audio["duration"]) if audio else 0.0
+    except (TypeError, KeyError, ValueError):
+        return None
+    if not math.isfinite(video_seconds) or video_seconds <= 0 or abs(video_seconds - audio_seconds) > MAX_REPAIR_SECONDS:
+        return None
+    repaired = work / f"repaired-{path.stem}.mp4"
+    if audio is None:
+        ffmpeg("-i", path, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-map", "0:v:0", "-map", "1:a:0",
+               "-c:v", "copy", "-t", f"{video_seconds:.4f}", *LOSSLESS_AUDIO, repaired)
+    else:
+        ffmpeg("-i", path, "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy", "-af",
+               f"asetpts=PTS-STARTPTS,aresample=48000,apad=whole_dur={video_seconds:.4f},atrim=end={video_seconds:.4f}",
+               *LOSSLESS_AUDIO, repaired)
+    from .core import notice
+    notice("Clip timing repaired", f"{path.name}: audio {audio_seconds:.2f}s adjusted to the video's {video_seconds:.2f}s.", "warning")
+    return repaired
+
+
 def _strict_audio_decode(path: Path):
     # Audio-only decoding is inexpensive even for long 4K exports. Treat packet
     # corruption as an error before a final encode can conceal it behind music.
@@ -555,9 +588,17 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
         try:
             normalized = _normalized_audio_parts(parts, normalization)
             lengths = []
-            for path in normalized:
+            for position, path in enumerate(normalized):
                 metadata = probe(path)
-                validate_audio_video_duration(path, metadata=metadata)
+                try:
+                    validate_audio_video_duration(path, metadata=metadata)
+                except PipelineError:
+                    repaired = repair_part_timing(path, normalization)
+                    if repaired is None:
+                        raise
+                    path = normalized[position] = repaired
+                    metadata = probe(path)
+                    validate_audio_video_duration(path, metadata=metadata)
                 # Container durations round to milliseconds; accumulating those
                 # across many parts can shift captions and narration. Use the
                 # precise stream ends. An audio tail or VFR video track can

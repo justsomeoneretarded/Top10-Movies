@@ -192,3 +192,22 @@ def test_j_cut_mixes_trailer_sound_under_the_end_of_a_part(tmp_path):
     assert quiet < 50                                  # first second silent
     tail = np.abs(samples[-4800:]).max()
     assert tail > 300 and tail > 10 * max(quiet, 1)   # trailer sound rising in the last 0.6 s (level varies by FFmpeg build)
+
+
+@pytest.mark.parametrize("audio_seconds, repaired", [(3.6, True), (0.6, False)])
+def test_final_mix_repairs_small_clip_timing_gaps_but_not_missing_audio(monkeypatch, tmp_path, audio_seconds, repaired):
+    from movie_pipeline.core import PipelineError
+    from movie_pipeline.render import LOSSLESS_AUDIO, finish
+    from movie_pipeline.timing import DurationSpec
+    monkeypatch.setenv('VIDEO_RESOLUTION', '720')
+    good, bad = tmp_path/'good.mp4', tmp_path/'bad.mp4'
+    for path, seconds in ((good, 4), (bad, audio_seconds)):
+        ffmpeg('-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=48000',
+               '-t', 4, '-af', f'atrim=end={seconds}', '-c:v', 'libx264', '-preset', 'ultrafast', *LOSSLESS_AUDIO, path)
+    target = tmp_path/'final.mp4'
+    if repaired:
+        seconds, _ = finish([good, bad], target, tmp_path/'work', False, spec=DurationSpec(8, 0, 30, automatic=True))
+        assert seconds > 7.5
+    else:
+        with pytest.raises(PipelineError, match='timing is incomplete'):
+            finish([good, bad], target, tmp_path/'work', False, spec=DurationSpec(8, 0, 30, automatic=True))
