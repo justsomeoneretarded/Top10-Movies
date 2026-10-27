@@ -860,6 +860,12 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                concepts=package.get("thumbnail_concepts"), title=title, brief=brief,
                work=work / "thumbnail-work", use_api=os.getenv("THUMBNAIL_AI", "true").lower() == "true",
                use_cutouts=True)
+    if os.getenv("SHORTS", "true").strip().lower() != "false":
+        from .shorts import build_shorts
+        try:
+            build_shorts(output / "final-video.mp4", chapters, all_cues, films, package["title"], output / "shorts", work / "shorts")
+        except Exception as exc:  # noqa: BLE001 -- Shorts never block the main video
+            notice("Shorts skipped", f"{type(exc).__name__}: {str(exc)[-300:]}", "warning")
     save_json(work / "timeline.json", {"speed": speed, "events": timeline, "chapters": chapters})
     for part in parts:
         part.unlink(missing_ok=True)

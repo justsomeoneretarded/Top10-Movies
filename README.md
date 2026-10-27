@@ -73,6 +73,8 @@ thumbnail-02.jpg         diagonal panels
 thumbnail-03.jpg         strongest genre frame
 thumbnail-04.jpg         streaming-service mark
 thumbnail-05.jpg         short headline
+shorts/                  2-3 vertical Shorts (#1-#3) with word-by-word captions, plus a title/description .txt each
+review.html              one-page quality report: contact sheet, checks and thumbnail scores
 sources-and-credits.txt
 ```
 
