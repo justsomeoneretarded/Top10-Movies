@@ -134,7 +134,7 @@ def test_empty_bait_and_spoken_numeric_debris_receive_useful_nonfatal_fallback(b
     result = writer.narration("Top 10 Horror Shows", "Keep it relaxed", OPENING,
                               {"count": 10, "kind": "shows", "genres": ["Horror"]}, 65)
     text = " ".join(result)
-    assert 16 <= len(text.split()) <= 22
+    assert 16 <= len(text.split()) <= 32
     assert "10 horror shows" in text
     assert "1.0" not in text and "list starts" not in text
     assert writer.ask.call_count == 3
@@ -211,9 +211,9 @@ def test_measured_intro_retry_honors_shorter_goal_without_modifying_body():
     films, script = cached_script()
     writer = Writer()
     writer.ask = Mock(return_value={"paragraphs": ["One horror show. Here's the story behind the scares."]})
-    result = writer.refresh_intro("Top Horror Shows", "Casual", films, script, target_words=9)
+    result = writer.refresh_intro("Top Horror Shows", "Casual", films, script, target_words=20)
     assert result["sections"][1:] == script["sections"][1:]
-    assert "Aim for 9 total words" in writer.ask.call_args.args[0]
+    assert "Aim for 20 total words" in writer.ask.call_args.args[0]
     assert result["package"]["script_policy_version"] == SCRIPT_POLICY_VERSION
 
 
@@ -234,7 +234,7 @@ def test_mixed_list_fallback_describes_variety_without_claiming_one_shared_genre
     script = {"sections": [{"kind": "intro", "paragraphs": [BAD_INTRO]}], "package": {}}
     result = writer.refresh_editorial("Top 2 Movies", "Pick something for tonight", films, script)
     text = " ".join(result["sections"][0]["paragraphs"])
-    assert "2 movies, spanning science fiction, comedy" in text
+    assert "2 movies across science fiction, comedy" in text
     assert "2 sci-fi movies" not in text
 
 

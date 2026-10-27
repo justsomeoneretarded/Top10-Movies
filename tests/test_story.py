@@ -44,10 +44,13 @@ def test_older_scripts_get_sensible_delivery_labels():
 
 
 def fake_model(edit_text=None, unsupported=None):
-    calls = {"plan": 0, "edit": 0, "narration": 0}
+    calls = {"plan": 0, "edit": 0, "narration": 0, "bridges": 0}
 
     def ask(prompt, schema, **options):
         props = schema["properties"]
+        if "bridges" in props:
+            calls["bridges"] += 1
+            return {"bridges": ["If that one bent your brain, the next one goes even further."]}
         if "entries" in props:
             calls["plan"] += 1
             return {"angle": "Movies that bend reality.", "opening_hook": "Some movies mess with your head on purpose.",
@@ -209,3 +212,26 @@ def test_partial_write_warms_the_cache_for_the_full_script(tmp_path):
     assert not any("'Arrival'" in p and "SINGLE REVIEW" in p for p in prompts)
     assert not any("OUTRO ONLY" in p for p in prompts)
     assert any("'Inception'" in p and "SINGLE REVIEW" in p for p in prompts)
+
+
+def test_joining_pass_adds_a_bridge_after_where_to_watch_and_never_names_the_next_title(tmp_path):
+    from movie_pipeline.packaging import refresh_availability
+    from movie_pipeline.script import Writer
+    writer = Writer(cache_dir=tmp_path)
+    films = [{"title": "Inception", "year": 2010}, {"title": "Arrival", "year": 2016}, {"title": "Dune", "year": 2021}]
+    sections = [{"kind": "film", "film": i, "paragraphs": [f"Number {i+1}: {f['title']}."]} for i, f in reversed(list(enumerate(films)))]
+    writer.ask = lambda prompt, schema, **kw: {"bridges": ["Up next, Arrival turns everything quieter.", "You think that was big? Number one is bigger."]}
+    bridges = writer.bridges("Top 3", "", films, sections)
+    assert 2 not in bridges                                   # the line naming the next title is dropped
+    assert bridges[1] == "You think that was big? Number one is bigger."
+    section = {"kind": "film", "film": 1, "paragraphs": ["Review.", "You can find it on Netflix.", bridges[1]],
+               "availability_text": "You can find it on Netflix.", "bridge": bridges[1]}
+    script = {"sections": [section]}
+    refresh_availability(script, [{}, {"watch_availability": {"subscription": ["Hulu"]}}, {}])
+    assert section["paragraphs"] == ["Review.", "You can find it on Hulu.", bridges[1]]
+
+
+def test_plain_words_replaces_stock_ai_phrasing():
+    from movie_pipeline.script import plain_words
+    assert plain_words("A curated list of unsettling, high-concept horror that delves into fear.") == \
+        "A hand-picked list of creepy horror that digs into fear."

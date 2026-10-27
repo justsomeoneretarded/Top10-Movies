@@ -49,11 +49,16 @@ def refresh_availability(script: dict, films: list[dict]) -> dict:
             continue
         paragraphs = section.get("paragraphs", [])
         old = section.get("availability_text", "")
+        bridge = section.get("bridge", "")
+        if bridge and paragraphs and paragraphs[-1] == bridge:
+            paragraphs.pop()
         if old and paragraphs and paragraphs[-1] == old:
             paragraphs.pop()
         current = availability_line(films[index].get("watch_availability", {}))
         if current:
             paragraphs.append(current)
+        if bridge:
+            paragraphs.append(bridge)  # the hand-over line stays last, after where to watch
         section["availability_text"] = current
     return script
 
