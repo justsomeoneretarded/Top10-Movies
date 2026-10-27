@@ -185,5 +185,7 @@ def test_j_cut_mixes_trailer_sound_under_the_end_of_a_part(tmp_path):
     raw = tmp_path/'a.raw'
     ffmpeg('-i', part, '-f', 's16le', '-ac', '1', '-ar', '8000', raw)
     samples = np.frombuffer(raw.read_bytes(), dtype=np.int16).astype(float)
-    assert np.abs(samples[:8000]).max() < 50          # first second silent
-    assert np.abs(samples[-2000:]).max() > 1000       # trailer sound rising in the last 0.6 s
+    quiet = np.abs(samples[:8000]).max()
+    assert quiet < 50                                  # first second silent
+    tail = np.abs(samples[-4800:]).max()
+    assert tail > 300 and tail > 10 * max(quiet, 1)   # trailer sound rising in the last 0.6 s (level varies by FFmpeg build)
