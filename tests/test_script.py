@@ -266,3 +266,20 @@ def test_long_opening_is_trimmed_keeping_hook_and_tease():
     assert fitted[0].startswith("Some movies feel like a plane ticket.")
     assert fitted[0].endswith("number one is the trip you'll want to take twice.")
     assert fit_opening(["One very long sentence " * 10 + "."], 20) == []
+
+
+def test_saved_fallback_opening_is_replaced_on_the_next_run():
+    from unittest.mock import Mock
+
+    from movie_pipeline.script import Writer, _fallback_intro, _intro_facts, is_fallback_opening
+    films = [{"title": "Dune", "year": 2024, "kind": "movie", "genres": ["Adventure"]},
+             {"title": "Jumanji", "year": 2017, "kind": "movie", "genres": ["Adventure"]}]
+    facts = _intro_facts("2 Adventure Movies", "", films)
+    fallback = _fallback_intro("2 Adventure Movies", "", facts)
+    assert is_fallback_opening(fallback, "2 Adventure Movies", "", facts)
+    assert not is_fallback_opening(["Some movies feel like a plane ticket. And number one is the trip you'll take twice."], "2 Adventure Movies", "", facts)
+    writer = Writer()
+    writer.narration = Mock(return_value=["Some movies feel like a plane ticket. And number one is the trip you'll take twice."])
+    script = {"sections": [{"kind": "intro", "film": 0, "paragraphs": fallback}], "package": {"script_policy_version": __import__("movie_pipeline.script", fromlist=["x"]).SCRIPT_POLICY_VERSION}}
+    refreshed = writer.refresh_editorial("2 Adventure Movies", "", films, script)
+    assert refreshed["sections"][0]["paragraphs"][0].startswith("Some movies feel like a plane ticket.")

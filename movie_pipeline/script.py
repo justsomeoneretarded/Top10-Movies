@@ -304,6 +304,16 @@ def _fallback_intro(topic: str, brief: str, facts: dict) -> list[str]:
     return [f"{count} {label} that are actually worth your time. And number one is the one people will be talking about."]
 
 
+def is_fallback_opening(paragraphs: list[str], topic: str, brief: str, facts: dict) -> bool:
+    """True when a saved script still carries a built-in fallback opening (worth replacing)."""
+    text = " ".join(paragraphs).strip()
+    if not text:
+        return True
+    if text == " ".join(_fallback_intro(topic, brief, facts)).strip():
+        return True
+    return bool(re.search(r"Here's the story and appeal of each\.$|that are actually worth your time\. And number one is the one people will be talking about\.$", text))
+
+
 def _mentioned_titles(text: str, titles: list[str]) -> int:
     words = " "+normalized(text)+" "
     compact = re.sub(r"[^a-z0-9]", "", text.casefold())
@@ -370,7 +380,9 @@ class Writer:
             kind = section.get("kind")
             if kind == "intro":
                 facts = _intro_facts(title, brief, films)
-                if stale or _section_issue(paragraphs, facts, opening=True, closing=False) or _editorial_issue(paragraphs, opening=True, theme=_theme(title, brief, facts)):
+                if (stale or is_fallback_opening(paragraphs, title, brief, facts)
+                        or _section_issue(paragraphs, facts, opening=True, closing=False)
+                        or _editorial_issue(paragraphs, opening=True, theme=_theme(title, brief, facts))):
                     section["paragraphs"] = self.narration(title, brief, OPENING, facts, 28)
                     section.pop("delivery", None)
             elif kind == "film" and 0 <= section.get("film", -1) < len(films):
@@ -545,8 +557,9 @@ class Writer:
             if isinstance(cached, list) and cached and all(isinstance(p, str) and p.strip() for p in cached):
                 return cached
 
-        def completed(paragraphs):
-            if cache:
+        def completed(paragraphs, *, keep: bool = True):
+            # Built-in fallbacks are never cached: the next run should try the model again.
+            if cache and keep:
                 save_json(cache, paragraphs)
             return paragraphs
 
@@ -681,8 +694,8 @@ class Writer:
         if closing:
             print("Using a concise fallback closing after three unsuccessful drafts.", flush=True)
             if target < 20:
-                return completed(["Like, subscribe, and watch our other picks. Bad movie nights have had enough chances."])
-            return completed(["Which pick gets your vote? Like, subscribe, and watch our other recommendations. Bad movie nights have had enough chances."])
+                return completed(["Like, subscribe, and watch our other picks. Bad movie nights have had enough chances."], keep=False)
+            return completed(["Which pick gets your vote? Like, subscribe, and watch our other recommendations. Bad movie nights have had enough chances."], keep=False)
         if opening and best and best_distance <= max(12, target):
             print("Using the closest opening draft; total audio timing will determine length.", flush=True)
             return completed(best)
@@ -693,8 +706,8 @@ class Writer:
             if target < 16:
                 theme = _theme(topic, brief, facts)
                 kind = facts.get("kind", "shows" if re.search(r"\b(shows?|series|tv)\b", topic, re.IGNORECASE) else "movies")
-                return completed([f"{count} {theme+' ' if theme else ''}{kind}. Here's the story and appeal of each."])
-            return completed(_fallback_intro(topic, brief, facts))
+                return completed([f"{count} {theme+' ' if theme else ''}{kind}. Here's the story and appeal of each."], keep=False)
+            return completed(_fallback_intro(topic, brief, facts), keep=False)
         if best:
             print(f"Using the closest complete draft for {label}; total audio timing will determine length.", flush=True)
             return completed(best)
@@ -705,9 +718,9 @@ class Writer:
                 premise = re.split(r"(?<=[.!?])\s+", str(facts["overview"]).strip())[0]
                 if len(premise.split()) > 60:
                     premise = " ".join(premise.split()[:56]).rstrip(".,;:")+"."
-                return completed([lead, premise])
+                return completed([lead, premise], keep=False)
             genre = _theme("", "", facts)
-            return completed([lead] + ([f"If you're in the mood for {genre}, keep this one on your watchlist."] if genre else []))
+            return completed([lead] + ([f"If you're in the mood for {genre}, keep this one on your watchlist."] if genre else []), keep=False)
         raise PipelineError(f"No usable narration text generated for {label} after three attempts.")
 
     def bridges(self, title: str, brief: str, films: list[dict], sections: list[dict]) -> dict[int, str]:
