@@ -156,6 +156,9 @@ def _best_preview(selector, sources, shot_lookup, text, seconds, action, dialogu
                 muted = muted or still
                 motion = max(0.0, min(60.0, _number(shot.get("motion")))) / 60
                 score = scores[index] * 1.25
+                # Scare/impact beats (sudden sound jumps with motion) make the best reveals and cold opens.
+                weight = getattr(selector, "peak_weight", 0.6)
+                score += _number(shot.get("peak")) * (weight if isinstance(weight, (int, float)) else 0.6)
                 score += motion * .8 if action else -.18 * motion
                 score += min(available, 8.0) * .025
                 score += .16 if not muted else 0

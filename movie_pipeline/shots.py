@@ -116,9 +116,59 @@ def scene_hash(image: Image.Image) -> int | None:
     return sum(int(bit)<<index for index,bit in enumerate((small[:,1:]>small[:,:-1]).reshape(-1)))
 
 
+CARD_TEXT = re.compile(r"(rated\s+(?:g|pg|pg-13|r|nc-17)\b|\bmpa\b|motion picture association|approved for|"
+                       r"(?:appropriate|all) audiences|restricted|under 17|coming soon|only in (?:theaters|theatres|cinemas)|"
+                       r"in (?:theaters|theatres|cinemas)|now streaming|streaming (?:on|soon)|presents|production|"
+                       r"a film by|from the (?:director|producer|creators?)|academy award|winner|nominee|\bimax\b|"
+                       r"official (?:trailer|teaser)|copyright|all rights reserved)", re.IGNORECASE)
+
+
+def text_card_kind(text: str) -> str | None:
+    """'rating', 'promo' or 'text' for rating cards, release/studio cards and other text slates."""
+    if re.search(r"rated\s+(?:g|pg|pg-13|r|nc-17)\b|\bmpa\b|approved for|audiences|restricted|under 17", text, re.IGNORECASE):
+        return "rating"
+    if CARD_TEXT.search(text):
+        return "promo"
+    if len(re.findall(r"\b[A-Za-z]{3,}\b", text)) >= 6:
+        return "text"
+    return None
+
+
+def audio_envelope(path: Path, rate: int = 10) -> np.ndarray:
+    """Loudness in dB at ``rate`` frames per second (empty when the file has no audio)."""
+    try:
+        result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path), "-vn", "-ac", "1",
+                                 "-ar", "8000", "-f", "s16le", "-"], capture_output=True, timeout=180, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return np.zeros(0)
+    samples = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32) / 32768
+    hop = 8000 // rate
+    if samples.size < hop:
+        return np.zeros(0)
+    frames = samples[: samples.size // hop * hop].reshape(-1, hop)
+    return 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-5)
+
+
+def punch(envelope: np.ndarray, start: float, end: float, rate: int = 10) -> float:
+    """0-1: the biggest sudden jump in loudness inside the shot (stingers, bangs, screams, hits)."""
+    if not envelope.size:
+        return 0.0
+    best = 0.0
+    for index in range(max(0, int(start * rate)), min(envelope.size, int(end * rate) + 1)):
+        before = envelope[max(0, index - rate): index]
+        if before.size:
+            best = max(best, float(envelope[index] - np.median(before)))
+    return float(np.clip(best / 24, 0, 1))
+
+
 def analyse(path: Path, cache: Path) -> list[dict]:
-    """Sample cuts and motion at 2fps; preserve source timestamps, excluding end slates."""
-    cache = cache.with_name(cache.stem + ".calm-v4.json")
+    """Sample cuts and motion at 2fps; preserve source timestamps, excluding end slates.
+
+    Each shot also records ``punch`` (sudden loudness jump), ``peak`` (punch and motion
+    combined: the trailer's scare/impact beats) and ``text_card`` for rating, release or
+    studio cards found by OCR, which never reach the edit.
+    """
+    cache = cache.with_name(cache.stem + ".calm-v5.json")
     if cache.exists():
         return json.loads(cache.read_text())
     length = duration(path)
@@ -164,6 +214,19 @@ def analyse(path: Path, cache: Path) -> list[dict]:
             shots.append({"start": float(point), "end": stop, "motion": float(np.mean([s[1] for s in metrics]))})
     if not shots:
         raise PipelineError(f"No usable shots detected in {path.name}.")
+    envelope = audio_envelope(path)
+    for shot in shots:
+        shot["punch"] = round(punch(envelope, shot["start"], shot["end"]), 3)
+        shot["peak"] = round(0.6 * shot["punch"] + 0.4 * min(shot["motion"], 40) / 40, 3)
+        try:
+            kind = text_card_kind(frame_text(get_frame(path, (shot["start"] + shot["end"]) / 2)))
+        except PipelineError:
+            kind = None
+        if kind:
+            shot["text_card"] = kind
+    cards = sum(1 for shot in shots if shot.get("text_card"))
+    if cards:
+        print(f"{cards} rating/promo/text cards found in {path.name}; they are kept out of the edit.", flush=True)
     save_json(cache, shots)
     return shots
 
@@ -340,6 +403,9 @@ class ShotSelector:
                 if matches_title_card(texts[index],title):
                     self.cards[str(path)][index] = "title"
         self.card_texts[str(path)] = texts
+        for index, shot in enumerate(shots):
+            if shot.get("text_card") and self.cards[str(path)][index] != "title":
+                self.cards[str(path)][index] = "promo"
         for index,kind in enumerate(self.cards[str(path)]):
             if kind:
                 self.reserve(path,shots[index]["start"],shots[index]["end"]-shots[index]["start"],"card-exclusion")
@@ -410,6 +476,8 @@ class ShotSelector:
         hashes = getattr(self,"_scene_hashes",{}).get(str(path),[])
         visual = getattr(self,"_visual_history",[])
         for index,shot in enumerate(ranges):
+            if kind == "card-exclusion":
+                break  # excluded cards are never shown, so they are not part of what viewers have seen
             if index < len(hashes) and hashes[index] is not None and start < shot["end"] and start+seconds > shot["start"]:
                 visual.append((hashes[index],self._history_clock,str(path)))
         self._visual_history = visual
@@ -478,11 +546,14 @@ class ShotSelector:
                     and start < shot["end"] and start+seconds > shot["start"]]
         clock = int(getattr(self,"_history_clock",0))
         costs = []
+        film = Path(str(path)).stem.removesuffix("-extra")
         for value in relevant:
-            for old,order,_source in getattr(self,"_visual_history",[]):
+            for old,order,source in getattr(self,"_visual_history",[]):
                 if (value^old).bit_count() <= 6:
                     age = max(0,clock-order)
-                    costs.append(2 if age < 4 else .6/(1+age/8))
+                    # The same image under a different film's review is never acceptable.
+                    other_film = Path(str(source)).stem.removesuffix("-extra") != film
+                    costs.append(5.0 if other_film else (2 if age < 4 else .6/(1+age/8)))
         return max(costs,default=0.0)
 
     def hook_score(self, path: Path, shots: list[dict], prompt: str, action: bool) -> float:

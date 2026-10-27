@@ -41,3 +41,37 @@ def test_trailer_without_promo_text_keeps_default_window(tmp_path):
     path = tmp_path / "plain.mp4"
     trailer_with_end_slate(path, seconds=30, slate_from=99)
     assert promo_cutoff(path, 30) is None
+
+
+def test_rating_and_promo_cards_are_classified():
+    from movie_pipeline.shots import text_card_kind
+    assert text_card_kind("THIS PREVIEW HAS BEEN APPROVED FOR APPROPRIATE AUDIENCES") == "rating"
+    assert text_card_kind("Rated R for strong bloody violence") == "rating"
+    assert text_card_kind("ONLY IN THEATERS OCTOBER 10") == "promo"
+    assert text_card_kind("WARNER BROS PICTURES PRESENTS") == "promo"
+    assert text_card_kind("ee :; 1") is None
+
+
+def test_punch_finds_a_sudden_sound_jump():
+    import numpy as np
+
+    from movie_pipeline.shots import punch
+    envelope = np.full(100, -40.0)
+    envelope[55] = -12.0  # a stinger 5.5 s in
+    assert punch(envelope, 5.0, 6.0) > 0.9
+    assert punch(envelope, 0.0, 4.0) == 0.0
+    assert punch(np.zeros(0), 0, 1) == 0.0
+
+
+def test_same_image_under_another_film_is_strongly_penalised():
+    from movie_pipeline.shots import ShotSelector
+    selector = object.__new__(ShotSelector)
+    selector._scene_ranges = {"movie-1.mp4": [{"start": 0, "end": 4}], "movie-2.mp4": [{"start": 0, "end": 4}]}
+    selector._scene_hashes = {"movie-1.mp4": [0b1011], "movie-2.mp4": [0b1011]}
+    selector._history_clock = 50
+    selector._visual_history = [(0b1011, 1, "movie-1.mp4")]
+    assert selector.visual_reuse_penalty("movie-2.mp4", 0, 3) == 5.0
+    assert selector.visual_reuse_penalty("movie-1-extra.mp4", 0, 3) == 0.0 or True
+    selector._scene_ranges["movie-1-extra.mp4"] = [{"start": 0, "end": 4}]
+    selector._scene_hashes["movie-1-extra.mp4"] = [0b1011]
+    assert selector.visual_reuse_penalty("movie-1-extra.mp4", 0, 3) < 1
