@@ -243,14 +243,10 @@ def panels(candidates: list[Candidate]) -> Image.Image:
 
 # ---------------------------------------------------------------- badges and text
 def service_on_number_one(films: list[dict]) -> str | None:
-    from .availability import brand_name
+    from .availability import services
     record = films[0].get("watch_availability", {}) if films else {}
-    for category in ("subscription", "free", "ads"):
-        values = record.get(category, []) if isinstance(record, dict) else []
-        for value in values if isinstance(values, list) else []:
-            if isinstance(value, str) and value.strip():
-                return brand_name(value)
-    return None
+    found = services(record, ("subscription", "free", "ads"), limit=1)
+    return found[0] if found else None
 
 
 def service_badge(canvas: Image.Image, service: str) -> Image.Image:

@@ -133,20 +133,47 @@ def brand_name(name: str) -> str:
     return BRAND_ALIASES.get(text.casefold(), text)
 
 
-def availability_line(record: dict | None) -> str:
-    """One short spoken line with just the service names: 'You can find it on Paramount Plus and Prime Video.'"""
+# Services a viewer can recognise and open. Only these are ever spoken or put on a thumbnail;
+# anything else in the listing data (aggregators like "JustWatch TV", cable or TV-provider
+# portals, tiny niche channels, unfamiliar regional names) is silently left out.
+KNOWN_SERVICES = {name.casefold(): name for name in (
+    "Netflix", "Prime Video", "Hulu", "Disney Plus", "Max", "Paramount Plus", "Peacock", "Apple TV",
+    "Starz", "MGM Plus", "AMC Plus", "Shudder", "Crunchyroll", "Tubi", "Pluto TV", "The Roku Channel",
+    "Plex", "Fandango at Home", "Google Play", "YouTube", "Kanopy", "Hoopla", "MUBI", "Criterion Channel",
+    "BritBox", "Acorn TV", "BET Plus", "Sundance Now", "Hallmark Plus", "Sony Pictures Core", "Freevee",
+    "Philo", "Fubo", "Sling TV", "Crackle", "Screambox", "ScreenPix", "Cinemax", "Showtime", "Hi-YAH",
+)}
+SERVICE_ALIASES = {"apple tv plus": "Apple TV", "apple itunes": "Apple TV", "itunes": "Apple TV",
+                   "paramount plus with showtime": "Paramount Plus", "disney": "Disney Plus",
+                   "roku channel": "The Roku Channel", "the criterion channel": "Criterion Channel",
+                   "fubotv": "Fubo", "sling": "Sling TV", "amazon freevee": "Freevee", "plex player": "Plex",
+                   "youtube premium": "YouTube", "youtube tv": "YouTube", "amc": "AMC Plus", "mgm": "MGM Plus",
+                   "epix": "MGM Plus", "hoopla digital": "Hoopla", "kanopy library": "Kanopy"}
+
+
+def known_service(name: str) -> str | None:
+    """The plain name of a recognised service, or None for anything viewers would not know or could not open."""
+    plain = brand_name(name)
+    folded = plain.casefold()
+    folded = SERVICE_ALIASES.get(folded, KNOWN_SERVICES.get(folded, "")).casefold() or folded
+    return KNOWN_SERVICES.get(folded)
+
+
+def services(record: dict | None, categories=("subscription", "free", "ads", "rent", "buy"), limit: int = 2) -> list[str]:
+    """Recognised service names in listing order, deduplicated, best categories first."""
     if not isinstance(record, dict) or record.get("status") not in {"found", None}:
-        return ""
+        return []
     names = []
-    for category in ("subscription", "free", "ads", "rent", "buy"):
+    for category in categories:
         values = record.get(category, [])
         for value in values if isinstance(values, list) else []:
-            if isinstance(value, str) and value.strip():
-                name = brand_name(value)
-                # Listing/aggregator channels (e.g. "JustWatch TV") are not places people watch films.
-                if name and "justwatch" in name.casefold().replace(" ", ""):
-                    continue
-                if name and name.casefold() not in {n.casefold() for n in names}:
-                    names.append(name)
-    names = names[:2]
+            name = known_service(value) if isinstance(value, str) and value.strip() else None
+            if name and name not in names:
+                names.append(name)
+    return names[:limit]
+
+
+def availability_line(record: dict | None) -> str:
+    """One short spoken line with just the service names: 'You can find it on Paramount Plus and Prime Video.'"""
+    names = services(record)
     return f"You can find it on {' and '.join(names)}." if names else ""
