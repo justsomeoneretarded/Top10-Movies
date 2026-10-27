@@ -189,7 +189,7 @@ def test_partial_write_warms_the_cache_for_the_full_script(tmp_path):
     warm = Writer(cache_dir=tmp_path)
     warm.ask, calls = fake_model()
     partial = warm.write("Top 2 Mind-Bending Movies", "Casual", FILMS, target_seconds=120, only={"film-1", "outro"})
-    assert partial["package"] == {} and [s["film"] for s in partial["sections"]] == [1]
+    assert partial["package"] == {} and [(s["kind"], s["film"]) for s in partial["sections"]] == [("film", 1), ("outro", 0)]
     final = Writer(cache_dir=tmp_path)
     final.ask, final_calls = fake_model()
     final.thumbnail_concepts = lambda *args: []

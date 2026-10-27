@@ -261,7 +261,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         trailer_video,
     )
     from .research import Research
-    from .script import Writer
+    from .script import Writer, aligned_delivery
     from .subtitles import script_cues
     from .dialogue import isolate_dialogue
     from .secondary_footage import download_secondary
@@ -394,10 +394,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             speech = {}
             try:
                 for section_index, section in enumerate(script["sections"]):
+                    labels = aligned_delivery(section)
                     for paragraph_index, text in enumerate(section["paragraphs"]):
                         print(f"Narrating section {section_index+1}, paragraph {paragraph_index+1}", flush=True)
                         try:
-                            speech[(section_index, paragraph_index)] = speaker.speak(text)
+                            speech[(section_index, paragraph_index)] = speaker.speak(text, delivery=labels[paragraph_index])
                         except (RuntimeError, OSError, ValueError):
                             # Defer a bad take to the same bounded recovery used
                             # for missing words; never substitute silence or text.
@@ -816,6 +817,33 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Complete: {final_duration/60:.2f} minutes. Package: {output}", flush=True)
 
 
+def warm_voice(sections: list[dict], ctx) -> int:
+    """Record this section's narration in the parallel job (same cache the final job reads)."""
+    if os.getenv("VOICE_WARM", "false").strip().lower() != "true" or not sections:
+        return 0
+    try:
+        from .script import aligned_delivery
+        from .voice import Narrator
+        speaker = Narrator(ctx.reference, ctx.work / "speech")
+    except Exception as exc:  # noqa: BLE001 -- the final job voices everything itself
+        print(f"Voice warm-up skipped ({type(exc).__name__}: {str(exc)[:200]}).", flush=True)
+        return 0
+    voiced = 0
+    try:
+        for section in sections:
+            labels = aligned_delivery(section)
+            for index, text in enumerate(section.get("paragraphs", [])):
+                try:
+                    speaker.speak(text, delivery=labels[index])
+                    voiced += 1
+                except Exception as exc:  # noqa: BLE001 -- the final job retries with recovery
+                    print(f"Voice warm-up: one paragraph left for the final job ({type(exc).__name__}).", flush=True)
+    finally:
+        speaker.close()
+    print(f"Voice warm-up: {voiced} paragraphs recorded.", flush=True)
+    return voiced
+
+
 def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path, output: Path) -> dict:
     """Fill the run's caches in a parallel workflow job; the final produce job then reuses them.
 
@@ -842,10 +870,11 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
         return parts
     if stage == "script":
         writer = Writer(cache_dir=ctx.work / "script-sections")
-        writer.write(title, brief, films, target_seconds=ctx.spec.target, trailer_seconds=ctx.expected_breaks, only={part})
+        result = writer.write(title, brief, films, target_seconds=ctx.spec.target, trailer_seconds=ctx.expected_breaks, only={part})
         writer.unload()
         print(f"Warmed script section {part}.", flush=True)
-        return {"section": part}
+        voiced = warm_voice(result.get("sections", []), ctx)
+        return {"section": part, "voiced_paragraphs": voiced}
     if stage == "footage":
         from .footage import download
         from .shots import analyse

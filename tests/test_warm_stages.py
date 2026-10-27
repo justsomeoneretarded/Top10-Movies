@@ -68,3 +68,29 @@ def test_failed_warm_up_is_a_warning_not_a_crash(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "setup_run", boom)
     monkeypatch.setattr("sys.argv", ["cli", "--stage", "footage", "--part", "0", "--title", "t", "--brief", "b", "--movies", "m"])
     assert cli.main() == 1
+
+
+def test_voice_warm_up_records_each_paragraph_with_its_delivery(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from movie_pipeline import cli
+    spoken = []
+
+    class FakeNarrator:
+        def __init__(self, reference, cache):
+            pass
+
+        def speak(self, text, delivery=None):
+            spoken.append((text, delivery))
+
+        def close(self):
+            pass
+    monkeypatch.setattr("movie_pipeline.voice.Narrator", FakeNarrator)
+    monkeypatch.setenv("VOICE_WARM", "true")
+    sections = [{"kind": "film", "film": 2, "paragraphs": ["Number 3: X. Hook.", "More.", "You can find it on Hulu."],
+                 "availability_text": "You can find it on Hulu.", "delivery": ["hype", "dramatic", "normal"]}]
+    ctx = SimpleNamespace(reference=tmp_path / "voice.ogg", work=tmp_path)
+    assert cli.warm_voice(sections, ctx) == 3
+    assert spoken == [("Number 3: X. Hook.", "hype"), ("More.", "dramatic"), ("You can find it on Hulu.", "normal")]
+    monkeypatch.setenv("VOICE_WARM", "false")
+    assert cli.warm_voice(sections, ctx) == 0

@@ -801,7 +801,8 @@ class Writer:
                 if plan.get("comment_question"):
                     outro_facts["comment_question"] = plan["comment_question"]
                 outro = self.narration(title, brief, CLOSING, outro_facts, closing_words)
-                self.edit(title, brief, "the closing goodbye", outro_facts, outro, closing=True, kind="outro")
+                outro, outro_delivery = self.edit(title, brief, "the closing goodbye", outro_facts, outro, closing=True, kind="outro")
+                sections.append({"kind": "outro", "film": 0, "paragraphs": outro, "delivery": outro_delivery})
             return {"sections": sections, "package": {}, "partial": sorted(only)}
         outro_facts = {"topic": title, "titles": [film["title"] for film in films]}
         if plan.get("comment_question"):

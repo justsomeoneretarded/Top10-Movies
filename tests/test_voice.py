@@ -35,6 +35,8 @@ def setup_speaker(monkeypatch, tmp_path, seconds, samples):
     speaker.model_name = "turbo"
     speaker.cache = tmp_path
     speaker.model = SimpleNamespace(sr=24000, generate=Mock(return_value=Wave(samples)))
+    speaker.deliveries, speaker.emotion_enabled, speaker.takes, speaker.emotional = {}, False, 1, None
+    speaker.reference = tmp_path / "ref.wav"
     return speaker
 
 
@@ -59,3 +61,47 @@ def test_runaway_audio_is_rejected_with_diagnostics(monkeypatch, tmp_path):
     with pytest.raises(PipelineError, match="runaway"):
         speaker.speak("Thanks for watching.")
     assert speaker.model.generate.call_count == 3
+
+
+def speech_like(seconds=2.0, rate=24000, gap=0.0):
+    t = np.arange(int(rate * seconds)) / rate
+    wave = 0.3 * np.sin(2 * np.pi * 180 * t) * (0.6 + 0.4 * np.sin(2 * np.pi * 3 * t))
+    if gap:
+        middle = len(wave) // 2
+        wave[middle: middle + int(rate * gap)] = 0
+    return wave
+
+
+def test_best_of_two_takes_drops_a_take_with_dead_air(monkeypatch, tmp_path):
+    from movie_pipeline.voice import take_score
+    clean, broken = speech_like(), speech_like(gap=1.6)
+    assert take_score(clean, 24000, 6) > take_score(broken, 24000, 6)
+    speaker = setup_speaker(monkeypatch, tmp_path, 3, clean)
+    speaker.takes = 2
+    speaker.model.generate = Mock(side_effect=[Wave(broken), Wave(clean)])
+    written = []
+    monkeypatch.setitem(__import__("sys").modules, "soundfile",
+                        SimpleNamespace(write=lambda path, data, sr, **kw: (written.append(data), path.write_bytes(b"raw"))))
+    speaker.speak("A short line with six words.")
+    assert speaker.model.generate.call_count == 2
+    assert not np.any(np.all(np.abs(np.lib.stride_tricks.sliding_window_view(written[0], 24000)[::2400]) < 1e-6, axis=1))
+
+
+def test_dramatic_lines_use_the_expressive_model_and_reveals_get_a_lead(monkeypatch, tmp_path):
+    speaker = setup_speaker(monkeypatch, tmp_path, 3, speech_like())
+    speaker.emotion_enabled = True
+    expressive = SimpleNamespace(sr=24000, generate=Mock(return_value=Wave(speech_like())))
+    speaker.emotional = expressive
+    filters = []
+    monkeypatch.setattr("movie_pipeline.voice.ffmpeg", lambda *args: (filters.append(args[3]), args[-1].write_bytes(b"n")))
+    speaker.speak("Number 3: Sinners. Two brothers come home.", delivery="dramatic")
+    assert expressive.generate.call_count == 2 and speaker.model.generate.call_count == 0
+    assert expressive.generate.call_args.kwargs["exaggeration"] > 0.5
+    assert "adelay=550" in filters[0] and "deesser" in filters[0] and "acompressor" in filters[0]
+
+
+def test_spoken_form_fixes_trouble_titles_but_coverage_still_matches():
+    from movie_pipeline.voice import spoken_coverage, spoken_form
+    assert spoken_form("M3GAN vs. Se7en: Part II, 2025–2026") == "Megan versus Seven: Part Two, 2025 to 2026"
+    cues = [{"text": "Megan versus Seven part two"}]
+    assert spoken_coverage("M3GAN vs. Se7en Part II", cues) == 1.0

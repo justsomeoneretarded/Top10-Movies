@@ -8,6 +8,75 @@ from pathlib import Path
 from .core import PipelineError, duration, ffmpeg, key
 
 
+# Spoken forms for titles text-to-speech tends to mangle. Captions keep the written form.
+PRONUNCIATIONS = {
+    r"\bM3GAN\b": "Megan", r"\bSe7en\b": "Seven", r"\bThir13en\b": "Thirteen", r"\bWALL[-·]E\b": "Wall-E",
+    r"\bvs\.?(?=\s)": "versus", r"\bPt\.\s*": "Part ", r"\bDr\.\s": "Doctor ", r"\bMr\.\s": "Mister ", r"\bMrs\.\s": "Missus ",
+    r"\bSt\.\s(?=[A-Z])": "Saint ", r"\b(Part|Chapter|Episode)\s+II\b": r"\1 Two", r"\b(Part|Chapter|Episode)\s+III\b": r"\1 Three",
+    r"\b(Part|Chapter|Episode)\s+IV\b": r"\1 Four", r"\b(Part|Chapter|Episode)\s+V\b": r"\1 Five", r"&": " and ",
+    r"\b(\d{4})[–-](\d{4})\b": r"\1 to \2", r"\b(\d{4})[–-](\d{2})\b": r"\1 to \2",
+}
+
+# Pause after each sentence, by its final punctuation (seconds). A reveal ('Number 3: Title.')
+# gets a short silence before it and a beat after it.
+SENTENCE_GAPS = {"?": 0.42, "!": 0.3, ".": 0.24, ":": 0.32, ";": 0.2}
+REVEAL_LEAD, REVEAL_BEAT = 0.55, 0.45
+
+# Delivery -> original Chatterbox emotion settings (exaggeration, cfg_weight, temperature).
+# 'normal' and 'calm' lines use the faster Turbo model.
+EMOTION = {"hype": (0.75, 0.35, 0.8), "dramatic": (0.62, 0.3, 0.75)}
+
+# Broadcast narrator chain: low cut, de-esser, gentle compression, warmth and presence,
+# light saturation, then loudness.
+VOICE_CHAIN = ("asetpts=PTS-STARTPTS,highpass=f=70,"
+               "agate=threshold=0.001:ratio=1.5:range=0.25:attack=5:release=180:knee=4,"
+               "deesser=i=0.35:m=0.5:f=0.5:s=o,"
+               "acompressor=threshold=-21dB:ratio=3:attack=8:release=140:makeup=3:knee=4,"
+               "equalizer=f=160:t=q:w=0.9:g=2,equalizer=f=3200:t=q:w=0.8:g=2,highshelf=f=10000:g=1.5,"
+               "asoftclip=type=tanh:threshold=0.95,"
+               "adelay={lead}:all=1,apad=pad_dur=0.26,loudnorm=I=-18:TP=-2:LRA=9")
+
+
+def spoken_form(text: str) -> str:
+    """The text as the narrator should say it (respellings for known trouble titles and abbreviations)."""
+    for pattern, replacement in PRONUNCIATIONS.items():
+        text = re.sub(pattern, replacement, text)
+    return " ".join(text.split())
+
+
+def sentences(text: str) -> list[str]:
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'“‘])", text) if part.strip()]
+    merged = []
+    for part in parts:
+        # Very short fragments ('Number 3: Sinners.') stay separate only when they are reveals.
+        if merged and len(part.split()) < 3 and not re.match(r"Number\s+\w+", part):
+            merged[-1] += " " + part
+        else:
+            merged.append(part)
+    return merged or [text]
+
+
+def take_score(samples, rate: int, words: int) -> float:
+    """Higher is better: natural speed, no long dead air inside, lively (not flat) energy."""
+    import numpy as np
+    if samples.size < rate * 0.3:
+        return float("-inf")
+    frame = max(1, rate // 50)
+    usable = samples[: samples.size // frame * frame].reshape(-1, frame)
+    energy = 20 * np.log10(np.sqrt((usable ** 2).mean(axis=1)) + 1e-6)
+    voiced = energy > energy.max() - 35
+    first, last = (np.argmax(voiced), len(voiced) - np.argmax(voiced[::-1])) if voiced.any() else (0, len(voiced))
+    inside = ~voiced[first:last]
+    longest, run = 0, 0
+    for silent in inside:
+        run = run + 1 if silent else 0
+        longest = max(longest, run)
+    seconds = (last - first) / 50
+    wpm = words * 60 / max(0.3, seconds)
+    liveliness = float(np.std(energy[first:last][voiced[first:last]])) if voiced[first:last].any() else 0.0
+    return -abs(wpm - 165) / 25 - max(0, longest / 50 - 0.7) * 3 + min(liveliness, 12) / 6
+
+
 class Narrator:
     def __init__(self, reference: Path, cache: Path):
         import torch
@@ -18,15 +87,59 @@ class Narrator:
             raise PipelineError("TTS_MODEL must be turbo or nano.")
         self.model = ChatterboxTurboTTS.from_pretrained(device="cpu", nano=self.model_name == "nano")
         self.model.prepare_conditionals(str(reference))
+        self.reference = reference
         self.reference_hash = key(reference.read_bytes().hex())
         self.cache = cache
         self.cache.mkdir(parents=True, exist_ok=True)
+        self.emotional = None  # original Chatterbox, loaded on first emotional line
+        self.emotion_enabled = os.getenv("VOICE_EMOTION", "true").strip().lower() != "false"
+        self.takes = max(1, min(3, int(os.getenv("VOICE_TAKES", "2"))))
+        self.deliveries: dict[str, str] = {}
 
-    def speak(self, text: str, attempt_offset: int = 0, *, force: bool = False) -> Path:
+    def _emotional_model(self):
+        if self.emotional is None:
+            try:
+                from chatterbox.tts import ChatterboxTTS
+                self.emotional = ChatterboxTTS.from_pretrained(device="cpu")
+                # Optional darker sample for tense lines, e.g. assets/voices/warguy-dark.ogg.
+                dark = self.reference.with_name(f"{self.reference.stem}-dark{self.reference.suffix}")
+                self.emotional.prepare_conditionals(str(dark if dark.exists() else self.reference), exaggeration=0.6)
+                print("Expressive voice model loaded for hype and dramatic lines.", flush=True)
+            except Exception as exc:  # noqa: BLE001 -- Turbo still voices every line
+                print(f"Expressive voice model unavailable ({type(exc).__name__}); using Turbo for every line.", flush=True)
+                self.emotional = False
+        return self.emotional or None
+
+    def _generate(self, text: str, delivery: str, seed: int):
+        import torch
+        torch.manual_seed(seed)
+        settings = EMOTION.get(delivery) if self.emotion_enabled else None
+        model = self._emotional_model() if settings else None
+        with torch.inference_mode():
+            if model is not None:
+                exaggeration, cfg_weight, temperature = settings
+                wave = model.generate(text, exaggeration=exaggeration, cfg_weight=cfg_weight, temperature=temperature)
+                return wave.squeeze().detach().cpu().numpy(), model.sr
+            wave = self.model.generate(text)
+            return wave.squeeze().detach().cpu().numpy(), self.model.sr
+
+    @staticmethod
+    def _trim(samples, rate: int):
+        import numpy as np
+        loud = np.flatnonzero(np.abs(samples) > max(1e-4, float(np.abs(samples).max()) * 0.02))
+        if not loud.size:
+            return samples[:0]
+        margin = int(rate * 0.04)
+        return samples[max(0, loud[0] - margin): min(samples.size, loud[-1] + margin)]
+
+    def speak(self, text: str, attempt_offset: int = 0, *, force: bool = False, delivery: str | None = None) -> Path:
         import numpy as np
         import soundfile as sf
-        import torch
-        baseline = key("voice-v3-clean-presence", text, self.reference_hash, self.model_name)
+        if delivery:
+            self.deliveries[text] = delivery
+        delivery = delivery or self.deliveries.get(text, "normal")
+        emotional = self.emotion_enabled and delivery in EMOTION
+        baseline = key("voice-v4-designed", text, self.reference_hash, self.model_name, delivery if emotional else "turbo", self.takes)
         token = key("voice-retry-v1", baseline, attempt_offset) if force else baseline
         output = self.cache / f"{token}.wav"
         suffix = 0
@@ -38,27 +151,45 @@ class Narrator:
             while output.exists() or output.with_suffix(".captions.json").exists():
                 suffix += 1
                 output = self.cache / f"{token}-{suffix}.wav"
+        reveal = bool(re.match(r"\s*Number\s+\w+\s*:", text))
         for attempt in range(3):
-            torch.manual_seed(int(baseline[:8], 16) + attempt + attempt_offset + suffix*1009)
-            with torch.inference_mode():
-                wave = self.model.generate(text)
-            raw = output.with_suffix(".raw.wav")
-            samples = wave.squeeze().detach().cpu().numpy()
-            if not np.isfinite(samples).all() or not samples.size or np.max(np.abs(samples)) < 1e-5:
-                print(f"Voice attempt {attempt+1}: empty, silent, or invalid audio; retrying.", flush=True)
+            pieces, rate = [], None
+            seed_base = int(baseline[:8], 16) + attempt * 7919 + attempt_offset + suffix * 1009
+            try:
+                for index, sentence in enumerate(sentences(spoken_form(text))):
+                    best, best_score = None, float("-inf")
+                    # Best of N takes for each sentence (one take for the slower expressive model).
+                    for take in range(1 if emotional else self.takes):
+                        samples, rate = self._generate(sentence, delivery, seed_base + index * 131 + take * 17)
+                        if not np.isfinite(samples).all() or not samples.size or np.max(np.abs(samples)) < 1e-5:
+                            continue
+                        samples = self._trim(samples.astype(np.float32), rate)
+                        score = take_score(samples, rate, len(sentence.split()))
+                        if score > best_score:
+                            best, best_score = samples, score
+                    if best is None:
+                        raise ValueError("silent take")
+                    gap = SENTENCE_GAPS.get(sentence.rstrip("\"'”’)")[-1:], 0.24)
+                    if index == 0 and reveal:
+                        gap = REVEAL_BEAT
+                    pieces += [best, np.zeros(int(rate * gap), dtype=np.float32)]
+            except (ValueError, RuntimeError) as exc:
+                print(f"Voice attempt {attempt+1}: unusable take ({type(exc).__name__}); retrying.", flush=True)
                 continue
-            sf.write(raw, samples, self.model.sr, subtype="PCM_24")
-            # Keep the first/last phonemes clear of encoder and edit boundaries.
-            # Padding adds real silence; it never trims or shifts speech out of the file.
-            ffmpeg("-i", raw, "-af",
-                   "asetpts=PTS-STARTPTS,highpass=f=65,agate=threshold=0.001:ratio=1.5:range=0.25:attack=5:release=180:knee=4,equalizer=f=3000:t=q:w=0.8:g=1.5,adelay=160:all=1,apad=pad_dur=0.26,loudnorm=I=-18:TP=-2:LRA=9",
-                   "-ar", "48000", "-ac", "1", output)
+            samples = np.concatenate(pieces[:-1]) if len(pieces) > 1 else pieces[0]
+            raw = output.with_suffix(".raw.wav")
+            sf.write(raw, samples, rate, subtype="PCM_24")
+            # Keep the first/last phonemes clear of encoder and edit boundaries; a reveal gets a
+            # short silence first so the rank lands. Padding adds real silence, never trims speech.
+            lead = int((REVEAL_LEAD if reveal else 0.16) * 1000)
+            ffmpeg("-i", raw, "-af", VOICE_CHAIN.format(lead=lead), "-ar", "48000", "-ac", "1", output)
             raw.unlink(missing_ok=True)
             seconds = duration(output)
             # Rate is diagnostic only. Actual missing/repeated speech is checked by transcription.
             if 0.15 <= seconds <= max(30, len(text.split())*2+10):
                 wpm = len(text.split()) * 60 / seconds
-                print(f"Voice generated: {len(text.split())} words, {seconds:.1f}s, {wpm:.0f} words/min; transcript verification follows.", flush=True)
+                print(f"Voice generated ({delivery}{', expressive' if emotional and self.emotional else ''}): "
+                      f"{len(text.split())} words, {seconds:.1f}s, {wpm:.0f} words/min; transcript verification follows.", flush=True)
                 return output
             print(f"Voice attempt {attempt+1}: unusable audio duration {seconds:.1f}s; retrying.", flush=True)
             output.unlink(missing_ok=True)
@@ -66,6 +197,7 @@ class Narrator:
 
     def close(self):
         del self.model
+        self.emotional = None
         gc.collect()
 
 
@@ -93,7 +225,7 @@ def spoken_coverage(expected: str, cues: list[dict]) -> float:
     from difflib import SequenceMatcher
 
     from .core import normalized
-    a = normalized(expected).split()
+    a = normalized(spoken_form(expected)).split()
     b = normalized(" ".join(c["text"] for c in cues)).split()
     matched = sum(block.size for block in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks())
     return matched / max(1, len(a))

@@ -188,6 +188,8 @@ def fake_speaker(monkeypatch, tmp_path: Path, samples):
     speaker.model_name = "turbo"
     speaker.cache = tmp_path
     speaker.model = SimpleNamespace(sr=24000, generate=Mock(return_value=Wave(samples)))
+    speaker.deliveries, speaker.emotion_enabled, speaker.takes, speaker.emotional = {}, False, 1, None
+    speaker.reference = tmp_path / "ref.wav"
     return speaker
 
 
