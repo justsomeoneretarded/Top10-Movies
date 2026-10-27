@@ -135,6 +135,8 @@ def download_secondary(film: dict, root: Path, primary: Path, minimum_size: tupl
 def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tuple[int,int]) -> Path | None:
     import yt_dlp
     record = json.loads(primary.with_suffix('.json').read_text())
+    if record.get('stills_fallback'):
+        return None  # no trailer was reachable for this film; do not search again
     source = record.get('source')
     if not isinstance(source,str) or not source:
         return None

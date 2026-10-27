@@ -869,7 +869,14 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     if os.getenv("REVIEW_REPORT", "true").strip().lower() != "false":
         from .review import build_review
         try:
-            review = build_review(output, all_cues, chapters, genre)
+            stills_films = []
+            for film, trailer in zip(films, trailers):
+                try:
+                    if json.loads(trailer.with_suffix(".json").read_text()).get("stills_fallback"):
+                        stills_films.append(film["title"])
+                except (OSError, ValueError):
+                    pass
+            review = build_review(output, all_cues, chapters, genre, stills_films=stills_films)
             notice("Review report", f"review.html: {review['black_frames']} black-frame runs, {review['repeated_shots']} repeated shots, "
                    f"{review['loudness_spikes']} loudness spikes, {review['captions_on_silence']} captions over silence.")
         except Exception as exc:  # noqa: BLE001 -- the report is advisory

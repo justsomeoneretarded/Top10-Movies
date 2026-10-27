@@ -143,7 +143,8 @@ def _time(seconds: float) -> str:
     return f"{int(seconds // 60)}:{int(seconds % 60):02}"
 
 
-def build_review(output: Path, cues: list[dict], chapters: list[dict], genre: str, *, ending_seconds: float = 20.0) -> dict:
+def build_review(output: Path, cues: list[dict], chapters: list[dict], genre: str, *, ending_seconds: float = 20.0,
+                 stills_films: list[str] | None = None) -> dict:
     video = output / "final-video.mp4"
     length = duration(video)
     frames = _frames(video, 2.0)
@@ -160,7 +161,11 @@ def build_review(output: Path, cues: list[dict], chapters: list[dict], genre: st
     def status(count: int, warn: int = 1) -> str:
         return "ok" if count < warn else "check"
 
+    stills_films = stills_films or []
+    summary["stills_fallback"] = stills_films
     items = [
+        ("Films shown with stills (no trailer could be downloaded)", status(len(stills_films)),
+         ", ".join(html.escape(name) for name in stills_films) or "none"),
         ("Black frames", status(len(blacks)), ", ".join(f"{_time(a)}–{_time(b)}" for a, b in blacks[:12]) or "none"),
         ("Same shot shown twice", status(len(repeats)), ", ".join(f"{_time(a)} and {_time(b)}" for a, b in repeats[:12]) or "none"),
         ("Loudness spikes", status(len(spikes), 3), ", ".join(_time(t) for t in spikes[:15]) or "none"),

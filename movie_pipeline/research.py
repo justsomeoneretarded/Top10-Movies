@@ -180,7 +180,7 @@ def extra_facts(details: dict, kind: str) -> dict:
     backdrops = [b for b in images.get("backdrops", []) if isinstance(b, dict) and b.get("file_path") and (b.get("width") or 0) >= 1280]
     # Text-free stills first (no language), then the most-voted.
     backdrops.sort(key=lambda b: (b.get("iso_639_1") is None, b.get("vote_average") or 0, b.get("width") or 0), reverse=True)
-    facts["backdrops"] = [b["file_path"] for b in backdrops[:8]]
+    facts["backdrops"] = [b["file_path"] for b in backdrops[:14]]  # thumbnails use the first few; stills fallback uses more
     if not facts["backdrops"] and details.get("backdrop_path"):
         facts["backdrops"] = [details["backdrop_path"]]
     return {name: value for name, value in facts.items() if value not in (None, "", [])}

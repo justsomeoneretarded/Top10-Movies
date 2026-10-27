@@ -184,6 +184,7 @@ def analyse(path: Path, cache: Path) -> list[dict]:
     previous_hist = None
     boundaries = [max(2.0, length * 0.04)]
     samples = []
+    sampled = {}
     for tick in np.arange(boundaries[0], end, 0.5):
         cap.set(cv2.CAP_PROP_POS_MSEC, float(tick) * 1000)
         ok, frame = cap.read()
@@ -199,6 +200,10 @@ def analyse(path: Path, cache: Path) -> list[dict]:
         if motion > 38 and correlation < .65 and tick - boundaries[-1] >= 1.5:
             boundaries.append(float(tick))
         samples.append((float(tick), motion, float(gray.mean()), float(gray.std())))
+        # Keep a small JPEG of every sampled frame so card checks never seek the (often 4K) file again.
+        ok, encoded = cv2.imencode(".jpg", cv2.resize(frame, (960, 540)), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if ok:
+            sampled[float(tick)] = encoded
         previous = gray
         previous_hist = histogram
     boundaries.append(end)
@@ -222,10 +227,18 @@ def analyse(path: Path, cache: Path) -> list[dict]:
             if high > low:
                 shot["punch_at"] = round((low + int(np.argmax(np.diff(envelope[max(0, low - 1):high], prepend=envelope[max(0, low - 1)])))) / 10, 2)
         shot["peak"] = round(0.6 * shot["punch"] + 0.4 * min(shot["motion"], 40) / 40, 3)
-        try:
-            kind = text_card_kind(frame_text(get_frame(path, (shot["start"] + shot["end"]) / 2)))
-        except PipelineError:
-            kind = None
+        kind = None
+        middle = (shot["start"] + shot["end"]) / 2
+        tick = min(sampled, key=lambda value: abs(value - middle)) if sampled else None
+        if tick is not None:
+            frames_dir = path.with_suffix(".frames")
+            frames_dir.mkdir(exist_ok=True)
+            (frames_dir / f"{shots.index(shot):04}.jpg").write_bytes(sampled[tick].tobytes())
+            image = cv2.imdecode(sampled[tick], cv2.IMREAD_COLOR)
+            small = cv2.cvtColor(cv2.resize(image, (160, 90)), cv2.COLOR_BGR2GRAY)
+            # Rating, release and studio cards sit on dark or plain backgrounds; only those are read.
+            if float(small.mean()) < 80 or float(small.std()) < 40:
+                kind = text_card_kind(frame_text(Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))))
         if kind:
             shot["text_card"] = kind
     cards = sum(1 for shot in shots if shot.get("text_card"))
@@ -233,6 +246,18 @@ def analyse(path: Path, cache: Path) -> list[dict]:
         print(f"{cards} rating/promo/text cards found in {path.name}; they are kept out of the edit.", flush=True)
     save_json(cache, shots)
     return shots
+
+
+def shot_frame(path: Path, shots: list[dict], index: int) -> Image.Image:
+    """The shot's middle frame, from analysis's saved copy when present (no seek into the video)."""
+    saved = path.with_suffix(".frames") / f"{index:04}.jpg"
+    if saved.exists():
+        try:
+            return Image.open(saved).convert("RGB")
+        except OSError:
+            pass
+    shot = shots[index]
+    return get_frame(path, (float(shot["start"]) + float(shot["end"])) / 2)
 
 
 def get_frame(path: Path, seconds: float) -> Image.Image:

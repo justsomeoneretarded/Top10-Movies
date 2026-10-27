@@ -113,11 +113,19 @@ def download(film: dict, root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     height = export_size()[1]
     path = root / f"{film['kind']}-{film['id']}-{height}p.mp4"
+    stills_cached = False
     if _valid_cached(path):
-        return path
+        try:
+            stills_cached = bool(json.loads(path.with_suffix(".json").read_text()).get("stills_fallback"))
+        except (OSError, ValueError):
+            stills_cached = False
+        if not stills_cached:
+            return path
+        # A warm-up job had to use stills; try the real trailer once more before keeping them.
     require_disk(root)
     base = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 30, "retries": 3, "fragment_retries": 3, "js_runtimes": {"node": {}}}
     tried = []
+    last_error: Exception | None = None
     for route in download_access.routes():
         try:
             result = _download_route(film, root, path, height, download_access.options(base, route), yt_dlp)
@@ -126,9 +134,32 @@ def download(film: dict, root: Path) -> Path:
             if route == "direct" and download_access.fallback_proxy():
                 print(f"YouTube bot check on the direct route for {film['title']}; retrying through the fallback route.", flush=True)
             continue
+        except PipelineError as exc:
+            # No usable copy on this route (for example every candidate errored); try the next route.
+            last_error = exc
+            tried.append(route)
+            continue
         download_access.record_route_success(route)
         return result
-    raise _blocked()
+    return _stills_or_raise(film, root, path, stills_cached, last_error or _blocked())
+
+
+def _stills_or_raise(film: dict, root: Path, path: Path, stills_cached: bool, error: Exception) -> Path:
+    """When no trailer can be downloaded, use the film's TMDB images instead of stopping the video."""
+    if stills_cached and path.exists():
+        return path
+    if os.getenv("STILLS_FALLBACK", "true").strip().lower() == "false":
+        raise error
+    from .core import notice
+    from .stills_trailer import build
+    try:
+        built = build(film, path, root)
+    except Exception as exc:  # noqa: BLE001 -- report the original download failure
+        print(f"Stills fallback unavailable for {film.get('title')} ({type(exc).__name__}: {exc}).", flush=True)
+        raise error from exc
+    notice("No trailer: using stills", f"{film.get('title')} ({film.get('year')}): no trailer could be downloaded "
+           f"({type(error).__name__}); its section uses official TMDB images. Consider re-running or swapping this film.", "warning")
+    return built
 
 
 def _download_route(film: dict, root: Path, path: Path, height: int, common: dict, yt_dlp) -> Path:

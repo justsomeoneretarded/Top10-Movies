@@ -84,14 +84,14 @@ def describe_trailer(trailer: Path, shots: list[dict]) -> dict | None:
     cached = load(trailer, len(shots))
     if cached:
         return cached
-    from .shots import get_frame
+    from .shots import shot_frame
     try:
         _pull(VISION_MODEL)
         _pull(EMBED_MODEL)
         descriptions = []
-        for shot in shots:
+        for index, shot in enumerate(shots):
             try:
-                frame = get_frame(trailer, (float(shot["start"]) + float(shot["end"])) / 2)
+                frame = shot_frame(trailer, shots, index)
                 descriptions.append(_describe(frame) or "a scene from the trailer")
             except (PipelineError, requests.RequestException, ValueError):
                 descriptions.append("a scene from the trailer")
