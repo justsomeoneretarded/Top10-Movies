@@ -49,7 +49,7 @@ if attempt 300; then
 fi
 report "Package install failed on the default mirror; retrying with Ubuntu's main archive"
 use_main_archive
-if attempt 300; then
+if attempt 600; then
   version_notice
   exit 0
 fi
