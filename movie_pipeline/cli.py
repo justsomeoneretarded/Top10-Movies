@@ -866,6 +866,14 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             build_shorts(output / "final-video.mp4", chapters, all_cues, films, package["title"], output / "shorts", work / "shorts")
         except Exception as exc:  # noqa: BLE001 -- Shorts never block the main video
             notice("Shorts skipped", f"{type(exc).__name__}: {str(exc)[-300:]}", "warning")
+    if os.getenv("REVIEW_REPORT", "true").strip().lower() != "false":
+        from .review import build_review
+        try:
+            review = build_review(output, all_cues, chapters, genre)
+            notice("Review report", f"review.html: {review['black_frames']} black-frame runs, {review['repeated_shots']} repeated shots, "
+                   f"{review['loudness_spikes']} loudness spikes, {review['captions_on_silence']} captions over silence.")
+        except Exception as exc:  # noqa: BLE001 -- the report is advisory
+            notice("Review report skipped", f"{type(exc).__name__}: {str(exc)[-300:]}", "warning")
     save_json(work / "timeline.json", {"speed": speed, "events": timeline, "chapters": chapters})
     for part in parts:
         part.unlink(missing_ok=True)
