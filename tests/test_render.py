@@ -176,12 +176,15 @@ def test_j_cut_mixes_trailer_sound_under_the_end_of_a_part(tmp_path):
 
     from movie_pipeline.render import j_cut
     part = tmp_path/'part.mov'
-    ffmpeg('-f', 'lavfi', '-i', 'color=c=black:size=320x180:rate=30', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
-           '-t', 3, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'alac', part)
+    # Audio deliberately 0.33 s shorter than the video, as narration parts can be.
+    ffmpeg('-f', 'lavfi', '-i', 'color=c=black:size=320x180:rate=30:duration=3', '-f', 'lavfi', '-i',
+           'anullsrc=r=48000:cl=stereo', '-t', 3, '-af', 'atrim=end=2.67', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'alac', part)
     source = tmp_path/'trailer.mp4'
     ffmpeg('-f', 'lavfi', '-i', 'color=c=red:size=320x180:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
            '-t', 6, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', source)
     assert j_cut(part, source, 3.0, lead=0.6)
+    from movie_pipeline.render import validate_audio_video_duration
+    validate_audio_video_duration(part, metadata=probe(part))     # lengths now match exactly
     raw = tmp_path/'a.raw'
     ffmpeg('-i', part, '-f', 's16le', '-ac', '1', '-ar', '8000', raw)
     samples = np.frombuffer(raw.read_bytes(), dtype=np.int16).astype(float)

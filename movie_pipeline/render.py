@@ -336,7 +336,11 @@ def j_cut(part: Path, source: Path, source_start: float, *, lead: float = 0.6, g
     The audio is taken from just before ``source_start``, so it continues seamlessly into
     the clip that follows. Video is copied; only the audio is remixed.
     """
-    length = duration(part)
+    streams = probe(part).get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"), {})
+    # The clip's video length rules: the rebuilt audio is padded or trimmed to exactly match it,
+    # so the final assembly never sees an audio/video length mismatch.
+    length = float(video.get("duration") or duration(part))
     lead = min(lead, max(0.0, source_start), length * 0.4)
     if lead < 0.2 or not any(s.get("codec_type") == "audio" for s in probe(source).get("streams", [])):
         return False
@@ -344,7 +348,8 @@ def j_cut(part: Path, source: Path, source_start: float, *, lead: float = 0.6, g
     delay = int((length - lead) * 1000)
     ffmpeg("-i", part, "-ss", source_start - lead, "-t", lead, "-i", source, "-filter_complex",
            f"[1:a]aresample=48000,aformat=channel_layouts=stereo,afade=t=in:d={lead},volume={gain},adelay={delay}:all=1[lead];"
-           f"[0:a][lead]amix=inputs=2:duration=first:normalize=0[a]",
+           f"[0:a]aresample=48000,aformat=channel_layouts=stereo[base];"
+           f"[base][lead]amix=inputs=2:duration=longest:normalize=0,apad=whole_dur={length:.4f},atrim=end={length:.4f}[a]",
            "-map", "0:v", "-map", "[a]", "-c:v", "copy", *LOSSLESS_AUDIO, temp)
     temp.replace(part)
     return True
