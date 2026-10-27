@@ -43,13 +43,13 @@ version_notice() {
   echo "::notice title=FFmpeg installed::$(ffmpeg -version 2>/dev/null | head -n 1 | cut -c1-120)"
 }
 
-if attempt 600; then
+if attempt 300; then
   version_notice
   exit 0
 fi
 report "Package install failed on the default mirror; retrying with Ubuntu's main archive"
 use_main_archive
-if attempt 600; then
+if attempt 300; then
   version_notice
   exit 0
 fi
