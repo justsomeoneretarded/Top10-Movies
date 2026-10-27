@@ -853,9 +853,21 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
         trailer = download(film, Path("work/footage"))
         shots = analyse(trailer, trailer.with_suffix(".shots.json"))
         scenes.describe_trailer(trailer, shots)
+        extra = None
+        try:
+            # The optional second trailer too: the final job reuses it when it meets the export size.
+            from .secondary_footage import download_secondary
+            details = inspect_sources([trailer])[0]
+            floor = max(720, round(min(details["height"], details["width"]*9/16) / MAX_UPSCALE))
+            extra = download_secondary(film, Path("work/footage"), trailer, (round(floor*16/9), floor))
+            if extra is not None:
+                scenes.describe_trailer(extra, analyse(extra, extra.with_suffix(".shots.json")))
+        except Exception as exc:  # noqa: BLE001 -- optional; the final job can still try
+            print(f"Second trailer warm-up skipped for {film['title']} ({type(exc).__name__}).", flush=True)
         scenes.unload()
-        print(f"Warmed footage for {film['title']}: {trailer.name}, {len(shots)} shots.", flush=True)
-        return {"trailer": str(trailer)}
+        print(f"Warmed footage for {film['title']}: {trailer.name}, {len(shots)} shots; "
+              f"second trailer: {extra.name if extra else 'none'}.", flush=True)
+        return {"trailer": str(trailer), "extra": str(extra) if extra else ""}
     raise PipelineError(f"Unknown stage {stage!r}.")
 
 

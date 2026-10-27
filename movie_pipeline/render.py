@@ -539,7 +539,10 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
                 "[2:a]equalizer=f=220:t=q:w=0.8:g=-3,equalizer=f=2400:t=q:w=0.7:g=-4[bed];"
                 "[bed][control]sidechaincompress=threshold=0.025:ratio=6:attack=15:release=300[duck];"
                 + ("[3:a]asetpts=PTS-STARTPTS[fx];" if effects else "")
-                + f"{mix_inputs}:duration=longest:normalize=0,volume=1.26,alimiter=limit=0.84:attack=5:release=50:level=0:latency=1,afade=t=out:st={final_duration-1.2}:d=1.2[a]"
+                # Rebuild the sample clock after mixing: the muxer then always receives
+                # strictly increasing audio timestamps, whatever FFmpeg build is installed.
+                + f"{mix_inputs}:duration=longest:normalize=0,aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB,"
+                  f"volume=1.26,alimiter=limit=0.84:attack=5:release=50:level=0:latency=1,afade=t=out:st={final_duration-1.2}:d=1.2,asetpts=N/SR/TB[a]"
             )
             record("encoding", planned_duration=final_duration, music_theme=music_theme or ("action" if action else "drama"))
             for source, name in ((combined_audio, "edit-without-music.wav"), (music, "background-only.wav")):

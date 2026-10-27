@@ -448,6 +448,9 @@ class Writer:
                  or (rank is not None and facts.get("title") and facts["title"].casefold() not in edited[0].casefold()))
         if issue:
             print(f"Editor pass kept the original draft for {role}.", flush=True)
+            if cache:
+                # Remember the decision too, so the final job never repeats a rejected edit.
+                save_json(cache, {"paragraphs": paragraphs, "delivery": defaults})
             return paragraphs, defaults
         removed = [c for c in result.get("unsupported_claims", []) if isinstance(c, str) and c.strip()]
         if removed:

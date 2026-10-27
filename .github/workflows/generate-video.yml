@@ -124,7 +124,7 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: System dependencies
-        timeout-minutes: 20
+        timeout-minutes: 35
         run: bash scripts/install_system_packages.sh ffmpeg
       - name: Install light dependencies and validate inputs
         run: |
@@ -181,7 +181,7 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: System dependencies
-        timeout-minutes: 20
+        timeout-minutes: 35
         run: bash scripts/install_system_packages.sh ffmpeg
       - name: Install Python dependencies
         run: |
@@ -244,7 +244,7 @@ jobs:
         with:
           node-version: '22'
       - name: System dependencies
-        timeout-minutes: 20
+        timeout-minutes: 35
         run: bash scripts/install_system_packages.sh ffmpeg tesseract-ocr
       - name: Install Python dependencies
         run: |
@@ -344,7 +344,7 @@ jobs:
           sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
           free -h
       - name: System dependencies
-        timeout-minutes: 20
+        timeout-minutes: 35
         run: bash scripts/install_system_packages.sh ffmpeg libsndfile1 fonts-dejavu-core zstd tesseract-ocr
       - name: Install light dependencies and validate inputs
         run: |
