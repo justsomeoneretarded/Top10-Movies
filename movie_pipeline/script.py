@@ -723,13 +723,15 @@ class Writer:
             sections[-1]["delivery"] = aligned_delivery(sections[-1])
         schema = {"type": "object", "properties": {
             "titles": {"type": "array", "items": {"type": "string"}, "minItems": 5, "maxItems": 10},
+            "hook": {"type": "string"},
             "description": {"type": "string"},
             "thumbnail_texts": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
             "tags": {"type": "array", "items": {"type": "string"}, "minItems": 5, "maxItems": 20},
-        }, "required": ["titles", "description", "thumbnail_texts", "tags"], "additionalProperties": False}
+        }, "required": ["titles", "hook", "description", "thumbnail_texts", "tags"], "additionalProperties": False}
         package = self.ask(f"Create YouTube packaging for topic {title!r}. Brief: {brief}. Films: {json.dumps([{'title':f['title'],'year':f['year'],'status':f.get('status')} for f in films])}. "
                            "Recommend 6 to 8 distinct, accurate, compelling video titles (each under 70 characters, ideally 45 to 60; lead with the "
                            "searchable topic and the number of picks; curiosity without clickbait or false promises), "
+                           "a hook: the description's first one or two sentences (under 200 characters) that YouTube shows in search: start with the main search phrase (for example '8 horror movies from 2025'), name the two or three biggest titles, and say what viewers get; "
                            "a short description in plain everyday search words, three distinct thumbnail phrases of 2–4 punchy words, "
                            "and 10 to 15 YouTube search tags (short phrases viewers type, such as best action movies, movies to watch, and each title with its year). "
                            "Use natural phrases viewers search only when relevant. Avoid fancy wording like curated selection, visual innovation, perception, captivating, or thought-provoking concepts. "
@@ -740,8 +742,15 @@ class Writer:
         ranked = rank_titles(options, title, len(films))
         if not ranked:
             raise PipelineError("Generated video title must be 1–100 characters.")
-        package["title"] = ranked[0]
-        package["title_options"] = ranked[:3]
+        # The title typed into the workflow is a deliberate choice: it is used as-is, and the best
+        # generated alternatives are offered for YouTube's title test (title-options.txt).
+        typed = " ".join(str(title).split())
+        if 1 <= len(typed) <= 100:
+            package["title"] = typed
+            package["title_options"] = [typed, *[t for t in ranked if t.casefold() != typed.casefold()][:2]]
+        else:
+            package["title"] = ranked[0]
+            package["title_options"] = ranked[:3]
         package["tags"] = youtube_tags(package.get("tags", []), title, films)
         if plan.get("comment_question"):
             package["pinned_comment"] = plan["comment_question"]

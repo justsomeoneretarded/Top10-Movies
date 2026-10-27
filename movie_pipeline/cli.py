@@ -787,7 +787,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     quality_report["sources"] = [source for source in sources if source["file"] in active_files]
     save_json(work / "quality-report.json", quality_report)
     source_links = [json.loads(t.with_suffix('.json').read_text())["source"] for t in credited_trailers]
-    (output / "description.txt").write_text(build_description(script, films, chapters, source_links)+"\n\n"+music_credit(music_theme)+"\n")
+    (output / "description.txt").write_text(build_description(script, films, chapters, source_links, music_credit(music_theme)))
     embed_chapters(output / "final-video.mp4", chapters, final_duration, work)
     if os.getenv("COMPARISON_EXPORT", "false").lower() == "true":
         # Optional (repository variable COMPARISON_EXPORT=true): roughly doubles the final encode time.

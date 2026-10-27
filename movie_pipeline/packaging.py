@@ -100,39 +100,68 @@ def topic_hashtags(title: str, films: list[dict]) -> list[str]:
     return tags
 
 
-def build_description(script: dict, films: list[dict], chapters: list[dict], trailer_sources: list[str]) -> str:
-    """Keep the first two spoken paragraphs verbatim, then readable search-friendly metadata."""
+def description_hook(script: dict, films: list[dict]) -> str:
+    """The first ~150 characters: what YouTube shows in search and above '...more'.
+
+    It must carry the search phrase and the biggest names, so it never reuses narration.
+    The writer's hook is used when it names at least two of the films; otherwise a plain
+    sentence is built from the title and the top picks.
+    """
     package = script.get("package", {})
-    spoken = [text for section in script.get("sections", []) if section.get("kind") != "subscribe"
-              for text in section.get("paragraphs", []) if isinstance(text, str) and text.strip()]
-    chunks = [text.strip() for text in spoken[:2]]
+    hook = " ".join(str(package.get("hook", "")).split())
+    titles = [film["title"] for film in films if film.get("title")]
+    if hook and len(hook) <= 240 and sum(title.casefold() in hook.casefold() for title in titles) >= min(2, len(titles)):
+        return hook
+    title = " ".join(str(package.get("title", "")).split()).rstrip(".!?")
+    names = titles[:3]
+    featuring = (", ".join(names[:-1]) + " and " + names[-1]) if len(names) > 1 else (names[0] if names else "")
+    kind = "show" if films and all(film.get("kind") == "tv" for film in films) else "movie"
+    first = f"{title}, featuring {featuring}." if title and featuring else (f"{title}." if title else "")
+    return (first + f" What makes each {kind} worth your time, and where you can stream it.").strip()
+
+
+def where_to_watch(film: dict) -> str:
+    """Recognised services only: streaming first, otherwise rent/buy."""
+    from .availability import services
+    data = _availability(film)
+    stream = services(data, ("subscription", "free", "ads"), limit=2)
+    if stream:
+        return " and ".join(stream)
+    store = services(data, ("rent", "buy"), limit=2)
+    return ("rent or buy on " + " and ".join(store)) if store else ""
+
+
+def build_description(script: dict, films: list[dict], chapters: list[dict], trailer_sources: list[str],
+                      credit: str = "") -> str:
+    """Search-ready hook, the countdown with where to watch, chapters, a comment prompt, credits, hashtags."""
+    package = script.get("package", {})
+    chunks = [description_hook(script, films)]
     summary = str(package.get("description", "")).strip()
     # Old checkpoint copy may contain the exact paragraph the owner asked to remove.
     summary = re.sub(r"Film information:\s*TMDB\.\s*This product uses the TMDB API but is not endorsed or certified by TMDB\.?", "", summary, flags=re.IGNORECASE).strip()
-    if summary:
+    if summary and summary.casefold() not in chunks[0].casefold():
         chunks.append(summary)
-    chunks.append(" ".join(topic_hashtags(str(package.get("title", "")), films)))
     if chapters:
         chunks.append("Chapters\n" + "\n".join(f"{chapter_time(c['start'])} {c['title']}" for c in chapters))
-    chunks.append(featured_heading(films) + "\n" + "\n".join(f"{i+1}. {film['title']} ({film['year']})" for i, film in enumerate(films)))
-    listings = []
-    dates = set()
-    labels = {"subscription": "Stream", "free": "Free", "ads": "With ads", "rent": "Rent", "buy": "Buy"}
-    for film in films:
-        data = _availability(film)
-        groups = []
-        for category, label in labels.items():
-            names = _provider_names(data.get(category))[:3]
-            if names:
-                groups.append(label+": "+", ".join(names))
-        if groups:
-            listings.append(f"{film['title']}: " + "; ".join(groups))
-            if data.get("checked_at"):
-                dates.add(str(data["checked_at"])[:10])
-    if listings:
-        checked = ", ".join(sorted(dates))
-        heading = "Where to watch (US listings" + (f", checked {checked}" if checked else "") + ")"
-        chunks.append(heading + "\n" + "\n".join(listings) + "\nAvailability can change. Subscription, rental, and purchase options are listed separately.")
-    if trailer_sources:
-        chunks.append("Trailer sources\n" + "\n".join(dict.fromkeys(trailer_sources)))
+    rows = []
+    for rank in range(len(films), 0, -1):  # same order as the video: countdown to number one
+        film = films[rank - 1]
+        where = where_to_watch(film)
+        rows.append(f"#{rank} {film['title']} ({film['year']})" + (f" — {where}" if where else ""))
+    heading = featured_heading(films)
+    dates = sorted({str(_availability(f).get("checked_at", ""))[:10] for f in films if _availability(f).get("checked_at")})
+    note = f"\nWhere to watch: US listings{', checked ' + ', '.join(dates) if dates else ''}; availability can change." \
+        if any(where_to_watch(f) for f in films) else ""
+    chunks.append(heading + "\n" + "\n".join(rows) + note)
+    question = str(package.get("pinned_comment", "")).strip()
+    if question:
+        chunks.append(f"{question} Tell me in the comments.")
+    chunks.append("Subscribe for more countdowns and honest recommendations.")
+    sources = "Trailer sources\n" + "\n".join(dict.fromkeys(trailer_sources)) if trailer_sources else ""
+    chunks.append("\n".join(part for part in (
+        "Trailer clips are used for commentary and review.", sources, credit.strip()) if part))
+    # YouTube shows the first three hashtags above the title; they go last in the text.
+    tags = topic_hashtags(str(package.get("title", "")), films)
+    generic = {"#MovieRecommendations", "#TVRecommendations", "#WhatToWatch"}
+    chunks.append(" ".join([t for t in tags if t not in generic] + [t for t in tags if t in generic]))
     return "\n\n".join(chunk for chunk in chunks if chunk) + "\n"

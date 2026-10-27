@@ -588,7 +588,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert (records['final_duration']-written_cues[-1]['end'])*timeline['speed'] == pytest.approx(cli.END_SCREEN_SECONDS+3)
     assert events[-1]['type'] == 'end-screen'
     description = (output / 'description.txt').read_text()
-    assert description.startswith(first+'\n\n'+second+'\n\n')
+    assert first not in description.split('\n\n')[0]  # opens with a search hook, not narration
+    assert 'featuring' in description.split('\n\n')[0]
     assert '00:00 Intro' in description
     assert ('#ActionShows' if expected_kind == 'tv' else '#ActionMovies') in description
     if extra_mode == 'found':
@@ -597,7 +598,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     else:
         assert 'https://example.org/extra/' not in description
     assert ('Featured shows / series' if expected_kind == 'tv' else 'Featured movies') in description
-    assert 'Stream: Netflix; Rent: Amazon Video' in description
+    assert ' — Netflix' in description and 'Scott Buckley' in description
     assert 'Film information: TMDB' not in description
     assert any('Netflix' in event.get('text', '') for event in events)
     assert all('US' not in event.get('text', '') for event in events)
