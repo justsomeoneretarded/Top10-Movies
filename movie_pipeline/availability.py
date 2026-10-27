@@ -118,7 +118,7 @@ def enrich_availability(films: list[dict], research, cache: Path) -> list[dict]:
 BRAND_SUFFIX = re.compile(
     r"\s+(?:(?:amazon|apple\s+tv|roku\s+premium|youtube)\s+channel|channel|with\s+ads|standard(?:\s+with\s+ads)?|"
     r"basic(?:\s+with\s+ads)?|premium(?:\s+plus)?|essential|ad[- ]free|kids|store)$", re.IGNORECASE)
-BRAND_ALIASES = {"amazon prime video": "Prime Video", "amazon video": "Prime Video", "max": "Max", "hbo max": "Max",
+BRAND_ALIASES = {"amazon prime video": "Prime Video", "amazon video": "Prime Video", "max": "HBO Max", "hbo max": "HBO Max", "hbo": "HBO Max",
                  "fandango at home": "Fandango at Home", "vudu": "Fandango at Home", "google play movies": "Google Play"}
 
 
@@ -137,7 +137,7 @@ def brand_name(name: str) -> str:
 # anything else in the listing data (aggregators like "JustWatch TV", cable or TV-provider
 # portals, tiny niche channels, unfamiliar regional names) is silently left out.
 KNOWN_SERVICES = {name.casefold(): name for name in (
-    "Netflix", "Prime Video", "Hulu", "Disney Plus", "Max", "Paramount Plus", "Peacock", "Apple TV",
+    "Netflix", "Prime Video", "Hulu", "Disney Plus", "HBO Max", "Paramount Plus", "Peacock", "Apple TV",
     "Starz", "MGM Plus", "AMC Plus", "Shudder", "Crunchyroll", "Tubi", "Pluto TV", "The Roku Channel",
     "Plex", "Fandango at Home", "Google Play", "YouTube", "Kanopy", "Hoopla", "MUBI", "Criterion Channel",
     "BritBox", "Acorn TV", "BET Plus", "Sundance Now", "Hallmark Plus", "Sony Pictures Core", "Freevee",

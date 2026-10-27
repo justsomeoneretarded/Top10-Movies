@@ -41,9 +41,11 @@ def test_letterbox_bars_are_removed():
 def test_three_distinct_text_free_thumbnails(offline, tmp_path, monkeypatch):
     monkeypatch.delenv("THUMBNAIL_TEXT", raising=False)
     report = studio.build(films(), [], [], ["Watch these"], tmp_path, tmp_path / "work")
-    assert [r["style"] for r in report] == ["hero-crop", "diagonal-panels", "signature-frame"]
-    pixels = [np.asarray(Image.open(tmp_path / f"thumbnail-0{i}.jpg"), dtype=float) for i in (1, 2, 3)]
+    assert [r["style"] for r in report] == ["hero-crop", "diagonal-panels", "signature-frame", "service-mark", "headline"]
+    pixels = [np.asarray(Image.open(tmp_path / f"thumbnail-0{i}.jpg"), dtype=float) for i in (1, 2, 3, 4, 5)]
     assert all(p.shape == (720, 1280, 3) for p in pixels)
+    assert report[3]["service"] in studio.RANDOM_SERVICES and report[3]["service_reason"].startswith("random")
+    assert report[4]["text"] == "Watch these"
     assert np.abs(pixels[0] - pixels[2]).mean() > 10  # option 3 is a different picture
     assert report[2]["service_badge"] is None
 
@@ -116,3 +118,17 @@ def test_vision_logo_flag_excludes_a_candidate(monkeypatch):
     monkeypatch.setattr("movie_pipeline.scenes.rate_thumbnail", lambda image, *a, **k: next(verdicts))
     studio.rate_with_vision(candidates, profile=studio.GENRE_PROFILES["horror"])
     assert candidates[0].score < candidates[1].score
+
+
+def test_service_mark_prefers_a_real_listing():
+    listed = films("Shudder Amazon Channel")
+    assert studio.choose_service(listed, [1, 2])[0] == "Shudder"
+    other = films()
+    other[2]["watch_availability"] = {"subscription": ["Hulu"]}
+    assert studio.choose_service(other, [1, 2]) == ("Hulu", "listed for Three")
+    assert studio.choose_service(films(), [], "seed")[0] in studio.RANDOM_SERVICES
+
+
+def test_short_phrase_uses_model_phrase_or_title_words():
+    assert studio.short_phrase("x", ["Can't Sleep Horror"], "horror") == "Can't Sleep Horror"
+    assert studio.short_phrase("Action Movies You Can't Miss", ["one", "a much too long thumbnail phrase here"], "action") == "Action Movies You"

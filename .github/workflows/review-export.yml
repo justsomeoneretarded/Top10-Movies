@@ -117,7 +117,7 @@ jobs:
 
           ancillary = ['subtitles.srt', 'description.txt', 'recommended-title.txt',
                        'sources-and-credits.txt', 'thumbnail-01.jpg',
-                       'thumbnail-02.jpg', 'thumbnail-03.jpg']
+                       'thumbnail-02.jpg', 'thumbnail-03.jpg', 'thumbnail-04.jpg', 'thumbnail-05.jpg']
           for name in ancillary:
               source = video.parent / name
               if source.is_file() and not source.is_symlink():

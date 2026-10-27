@@ -16,7 +16,7 @@ def test_unrecognised_or_unwatchable_services_are_never_spoken(name):
     assert availability_line({"subscription": [name], "free": ["Tubi"]}) == "You can find it on Tubi."
 
 
-@pytest.mark.parametrize("raw, plain", [("Netflix Standard with Ads", "Netflix"), ("Max Amazon Channel", "Max"),
+@pytest.mark.parametrize("raw, plain", [("Netflix Standard with Ads", "Netflix"), ("Max Amazon Channel", "HBO Max"), ("HBO Max", "HBO Max"),
                                         ("Paramount+ with Showtime", "Paramount Plus"), ("Apple TV+", "Apple TV"),
                                         ("Shudder Amazon Channel", "Shudder"), ("Disney+", "Disney Plus"),
                                         ("Peacock Premium", "Peacock"), ("fuboTV", "Fubo")])

@@ -13,6 +13,9 @@ Designs:
 1. Hero: number one's most genre-defining face, cut out over a darkened, blurred scene.
 2. Diagonal panels: the most genre-defining frame from three titles.
 3. Signature frame: the single most genre-defining frame of the list, full bleed.
+4. Service mark: number one with a large streaming-service mark (its real service when
+   listed; a random big service only when no featured film has a recognised listing).
+5. Headline: a two-to-four-word phrase from the title in huge letters beside a face.
 A service badge appears only when number one is listed on a recognised service.
 Text is off unless THUMBNAIL_TEXT=minimal.
 """
@@ -362,7 +365,11 @@ def face_crop(candidate: Candidate, width: int = WIDTH, height: int = HEIGHT, *,
     cx, cy = (x + w / 2) * scale, (y + h / 2) * scale
     left = int(min(max(0, cx - width * face_x), resized.width - width))
     top = int(min(max(0, cy - height * face_y), resized.height - height))
-    return resized.crop((left, top, left + width, top + height))
+    crop = resized.crop((left, top, left + width, top + height))
+    if scale > 1.2:
+        # Enlarged faces go soft; restore edge detail in proportion to the enlargement.
+        crop = crop.filter(ImageFilter.UnsharpMask(radius=1.2 + scale * 0.6, percent=int(min(160, 60 * scale)), threshold=2))
+    return crop
 
 
 def rim_light(subject: Image.Image, color=(255, 214, 160), width: int = 4, strength: float = 0.6) -> Image.Image:
@@ -440,6 +447,127 @@ def service_badge(canvas: Image.Image, service: str) -> Image.Image:
     draw.rounded_rectangle((34, 30, 34 + width + 40, 92), radius=12, fill=color + (240,))
     draw.text((54, 61), text, font=face, anchor="lm", fill=(255, 255, 255))
     return canvas
+
+
+# Simple drawn wordmarks (our own lettering in each service's colours; no copied artwork).
+SERVICE_MARKS = {
+    "netflix": {"text": "N", "fg": (229, 9, 20), "bg": None},
+    "hbo max": {"text": "HBO max", "fg": (255, 255, 255), "bg": (0, 26, 140), "bg2": (90, 40, 200)},
+    "prime video": {"text": "prime video", "fg": (255, 255, 255), "bg": (0, 120, 200), "bg2": (0, 168, 225), "smile": True},
+    "hulu": {"text": "hulu", "fg": (28, 231, 131), "bg": (10, 10, 12)},
+    "disney plus": {"text": "Disney+", "fg": (255, 255, 255), "bg": (4, 26, 92), "bg2": (17, 60, 207)},
+    "paramount plus": {"text": "Paramount+", "fg": (255, 255, 255), "bg": (0, 64, 200), "bg2": (0, 100, 255)},
+    "peacock": {"text": "peacock", "fg": (255, 255, 255), "bg": (12, 12, 12)},
+    "apple tv": {"text": "tv", "fg": (255, 255, 255), "bg": (12, 12, 12), "apple": True},
+    "shudder": {"text": "SHUDDER", "fg": (255, 255, 255), "bg": (200, 10, 20)},
+}
+RANDOM_SERVICES = ("Netflix", "HBO Max", "Prime Video")
+
+
+def service_mark(canvas: Image.Image, service: str, *, height: int = 150, corner: str = "left") -> Image.Image:
+    """A large, eye-catching service mark in the upper corner (thumbnail 4)."""
+    canvas = canvas.convert("RGBA")
+    spec = SERVICE_MARKS.get(service.casefold())
+    margin = 40
+    if spec and spec["text"] == "N":
+        mark = Image.new("RGBA", (125, 175))
+        draw = ImageDraw.Draw(mark)
+        draw.polygon([(0, 0), (36, 0), (36, 158), (0, 164)], fill="#ad0610")
+        draw.polygon([(78, 0), (114, 0), (114, 164), (78, 158)], fill="#ad0610")
+        draw.polygon([(0, 0), (36, 0), (114, 164), (78, 158)], fill="#e50914")
+        scale = height * 1.5 / 175
+        mark = mark.resize((round(125 * scale), round(175 * scale)), Image.LANCZOS)
+    else:
+        spec = spec or {"text": service, "fg": (255, 255, 255), "bg": SERVICE_COLORS.get(service.casefold(), (200, 20, 30))}
+        font = brand_font("body", round(height * 0.5))
+        probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        text_width = probe.textlength(spec["text"], font=font)
+        width = round(text_width + height * 0.8 + (height * 0.45 if spec.get("apple") else 0))
+        mark = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        if spec.get("bg"):
+            fill = Image.new("RGBA", (width, height), spec["bg"] + (255,))
+            if spec.get("bg2"):
+                ramp = np.linspace(0, 1, width)[None, :, None]
+                colors = np.asarray(spec["bg"], np.float32) * (1 - ramp) + np.asarray(spec["bg2"], np.float32) * ramp
+                fill = Image.fromarray(np.repeat(colors, height, axis=0).astype(np.uint8)).convert("RGBA")
+            rounded = Image.new("L", (width, height), 0)
+            ImageDraw.Draw(rounded).rounded_rectangle((0, 0, width - 1, height - 1), radius=height // 5, fill=255)
+            mark.paste(fill, (0, 0), rounded)
+        draw = ImageDraw.Draw(mark)
+        x = height * 0.4
+        if spec.get("apple"):
+            r = height * 0.16
+            cx, cy = x + r, height * 0.52
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r * 1.1), fill=spec["fg"])
+            draw.ellipse((cx + r * 0.1, cy - r * 1.9, cx + r * 0.8, cy - r * 1.1), fill=spec["fg"])
+            x += height * 0.45
+        draw.text((x, height * (0.44 if spec.get("smile") else 0.5)), spec["text"], font=font, anchor="lm", fill=spec["fg"])
+        if spec.get("smile"):
+            draw.arc((x, height * 0.42, x + text_width * 0.6, height * 0.86), 20, 160, fill=spec["fg"], width=max(3, height // 22))
+    glow = Image.new("RGBA", (mark.width + 80, mark.height + 80), (0, 0, 0, 0))
+    glow.putalpha(Image.new("L", glow.size, 0))
+    shadow = Image.new("RGBA", glow.size, (0, 0, 0, 0))
+    shadow.paste((0, 0, 0, 170), (40, 40), mark.getchannel("A"))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(16))
+    x = margin if corner == "left" else WIDTH - mark.width - margin
+    canvas.alpha_composite(shadow, (x - 40 + 6, margin - 40 + 8))
+    canvas.alpha_composite(mark, (x, margin))
+    return canvas
+
+
+def choose_service(films: list[dict], shown: list[int], seed: str = "") -> tuple[str, str]:
+    """The service for thumbnail 4: number one's own; else a featured film's; else a random big one."""
+    from .availability import services
+    for index in [0, *[i for i in shown if i != 0], *range(len(films))]:
+        if index < len(films):
+            found = services(films[index].get("watch_availability", {}), ("subscription", "free", "ads"), limit=1)
+            if found:
+                return found[0], f"listed for {films[index].get('title', '')}"
+    import hashlib
+    pick = RANDOM_SERVICES[int(hashlib.sha256(seed.encode()).hexdigest()[:6], 16) % len(RANDOM_SERVICES)]
+    return pick, "random (no recognised listing)"
+
+
+def headline(canvas: Image.Image, phrase: str, color, *, side: str = "left") -> Image.Image:
+    """Thumbnail 5: two to four huge words, stacked, in the genre colour over a dark fade."""
+    canvas = canvas.convert("RGBA")
+    words = [w for w in re.sub(r"[^\w'’ -]", " ", phrase).upper().split() if w][:4] or ["MUST", "WATCH"]
+    # One word per line for up to three words (bigger letters); pairs for four.
+    lines = words if len(words) <= 3 else [" ".join(words[:2]), " ".join(words[2:])]
+    shade = Image.new("L", canvas.size, 0)
+    ramp = np.clip(1.15 - np.linspace(0, 1.6, WIDTH), 0, 1)
+    if side == "right":
+        ramp = ramp[::-1]
+    shade = Image.fromarray((np.repeat(ramp[None, :], HEIGHT, axis=0) * 205).astype(np.uint8))
+    dark = Image.new("RGBA", canvas.size, (0, 0, 0, 255))
+    dark.putalpha(shade)
+    canvas = Image.alpha_composite(canvas, dark)
+    draw = ImageDraw.Draw(canvas)
+    box_width = WIDTH * 0.58
+    size = 230
+    while size > 70 and len(lines) * size * 0.98 > HEIGHT * 0.9:
+        size -= 6
+    while size > 70 and max(draw.textlength(line, font=brand_font("display", size)) for line in lines) > box_width:
+        size -= 6
+    font = brand_font("display", size)
+    total = len(lines) * size * 0.98
+    y = (HEIGHT - total) / 2 + size * 0.49
+    for i, line in enumerate(lines):
+        x = 60 if side == "left" else WIDTH - 60 - draw.textlength(line, font=font)
+        fill = color if i == len(lines) - 1 and len(lines) > 1 else (255, 255, 255)
+        draw.text((x, y), line, font=font, anchor="lm", fill=fill, stroke_width=max(4, size // 22), stroke_fill=(0, 0, 0))
+        y += size * 0.98
+    return canvas
+
+
+def short_phrase(title: str, phrases: list[str], genre_label: str) -> str:
+    """Two to four words for thumbnail 5, e.g. 'HORROR MOVIES YOU CAN'T MISS' -> 'CAN'T MISS HORROR'."""
+    for phrase in phrases:
+        words = str(phrase).split()
+        if 2 <= len(words) <= 4 and len(str(phrase)) <= 28:
+            return str(phrase)
+    words = [w for w in re.findall(r"[A-Za-z']+", title) if w.casefold() not in {"the", "of", "that", "will", "from", "your", "a", "to"}]
+    return " ".join(words[:3]) if words else f"{genre_label} must-watch"
 
 
 def minimal_label(canvas: Image.Image, phrase: str) -> Image.Image:
@@ -542,6 +670,36 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     save(canvas, output / "thumbnail-03.jpg")
     report.append({"file": "thumbnail-03.jpg", "style": "signature-frame", "film": films[signature.film]["title"],
                    "genre_fit": round(signature.genre_fit, 2), "description": signature.description, "service_badge": service})
+    # 4. Streaming mark: number one (a different frame from design 1) with a big service mark.
+    alternatives = [c for c in top if c is not hero and id(c) not in used] or [c for c in candidates if c is not hero] or [hero]
+    star = max(alternatives, key=lambda c: (c.face is not None) * 2 + c.genre_fit * 2 + c.score * 0.3)
+    mark_service, mark_reason = choose_service(films, [p.film for p in picks], title)
+    subject = cutter.cut(star.image) if star.face else None
+    if subject is not None:
+        image = depth_composite(subject, star.image, height_fraction=1.1, x_fraction=0.64, blur=10,
+                                darken=0.45 if grade == "horror" else 0.6, rim=profile["rim"])
+    else:
+        image = face_crop(star, face_height=0.42, face_x=0.64)
+    canvas = service_mark(finish(image, grade), mark_service)
+    save(canvas, output / "thumbnail-04.jpg")
+    report.append({"file": "thumbnail-04.jpg", "style": "service-mark", "film": films[star.film]["title"],
+                   "service": mark_service, "service_reason": mark_reason})
+
+    # 5. Headline: a short phrase from the title in huge letters beside a cut-out face.
+    used |= {id(star)}
+    pool = [c for c in candidates if id(c) not in used] or candidates
+    face_pick = max(pool, key=lambda c: (c.face is not None) * 3 + c.genre_fit * 2 + c.score * 0.3)
+    phrase = short_phrase(title, phrases, profile["label"])
+    subject = cutter.cut(face_pick.image) if face_pick.face else None
+    if subject is not None:
+        image = depth_composite(subject, face_pick.image, height_fraction=1.08, x_fraction=0.74, blur=12,
+                                darken=0.4 if grade == "horror" else 0.55, rim=profile["rim"])
+    else:
+        image = face_crop(face_pick, face_height=0.46, face_x=0.76)
+    canvas = headline(finish(image, grade), phrase, profile["rim"])
+    save(canvas, output / "thumbnail-05.jpg")
+    report.append({"file": "thumbnail-05.jpg", "style": "headline", "film": films[face_pick.film]["title"], "text": phrase})
+
     save_json(work / "thumbnail-report.json", {"genre": genre, "vision_rated": rated, "candidates": len(candidates),
                                                "thumbnails": report})
     print(f"Studio thumbnails ({genre}): {', '.join(item['style'] for item in report)}; "
