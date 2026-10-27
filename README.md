@@ -102,10 +102,12 @@ No approval or publication steps occur. Successful runs deliver downloadable fil
 
 One **Run workflow** press starts several jobs on separate free runners:
 
-1. **prepare** — research (TMDB, Wikipedia, watch listings) and the episode plan.
-2. **script** — one job per title plus one for the intro and outro, all at once: each writes and fact-checks its section.
-3. **footage** — one job per title, at the same time as script: trailer download, end-slate scan, shot analysis and AI scene descriptions.
-4. **produce** — the full pipeline. It finds the warm-up results already cached and continues with narration, editing, mixing, thumbnails and packaging, then uploads the single **movie-video-N** artifact.
+1. **prepare** — research only (TMDB, Wikipedia, watch listings) and the video's genre; a few minutes.
+2. **plan** — the episode plan: the video's promise, hooks, comparison anchors and standout scenes.
+3. **footage** — one job per title, starting right after research: primary and second trailer download, end-slate and text-card scan, sound-peak and shot analysis, AI scene descriptions.
+4. **music** — an original instrumental score in the video's genre with ACE-Step 1.5 (MIT); if it fails, the bundled licensed track is used. Turn off with the repository variable `GENRE_MUSIC=false`.
+5. **script** — one job per title plus intro and outro, after the plan: each writes, edits and fact-checks its section and records its narration.
+6. **produce** — the full pipeline. It reuses every warm-up result and continues with the joining pass, remaining narration, editing, mixing, thumbnails, Shorts, the review report and packaging, then uploads the single **movie-video-N** artifact.
 
 Warm-up jobs are optional: if one fails, produce does that part itself, so a failed warm-up only costs time.
 

@@ -97,6 +97,8 @@ jobs:
     outputs:
       script_parts: ${{ steps.plan.outputs.script_parts }}
       footage_parts: ${{ steps.plan.outputs.footage_parts }}
+      genre: ${{ steps.plan.outputs.genre }}
+      music_seconds: ${{ steps.plan.outputs.music_seconds }}
     env:
       VIDEO_TITLE: ${{ inputs.title }}
       VIDEO_BRIEF: ${{ inputs.description }}
@@ -131,12 +133,11 @@ jobs:
           python -m pip install --upgrade pip
           bash scripts/run_logged.sh "Dependency install" python -m pip install -e .
           bash scripts/run_logged.sh "Input check" python -m scripts.preflight
-      - name: Prepare local script model
-        run: bash scripts/bootstrap_ollama.sh
-      - name: Research and plan the episode
+      - name: Research the episode
         id: plan
-        run: bash scripts/run_logged.sh "Research and plan" python -m movie_pipeline.cli --stage prepare
-      - name: Package research and plan
+        # Research only (a few minutes), so footage and music start right away; planning has its own job.
+        run: bash scripts/run_logged.sh "Research" python -m movie_pipeline.cli --stage prepare
+      - name: Package research
         run: tar -czf warm-prepare.tgz work/jobs
       - uses: actions/upload-artifact@v4
         with:
@@ -144,8 +145,118 @@ jobs:
           path: warm-prepare.tgz
           retention-days: 1
 
-  script:
+  plan:
+    # The episode plan (promise, hooks, anchors) that every script section follows.
     needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VIDEO_TITLE: ${{ inputs.title }}
+      VIDEO_BRIEF: ${{ inputs.description }}
+      MOVIE_LIST: ${{ inputs.movies }}
+      VIDEO_TYPE: ${{ inputs.content_type }}
+      NARRATOR: ${{ inputs.narrator }}
+      TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
+      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      SCRIPT_MODEL: gemma4:12b
+      TRY_4K: "${{ inputs.try_4k }}"
+      FACT_CHECK: "${{ inputs.fact_check }}"
+      VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
+      OLLAMA_HOST: 127.0.0.1:11435
+      OLLAMA_URL: http://127.0.0.1:11435
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_FLASH_ATTENTION: '1'
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_MODELS: ${{ github.workspace }}/work/ollama-models
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: System dependencies
+        timeout-minutes: 35
+        run: bash scripts/install_system_packages.sh ffmpeg
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          bash scripts/run_logged.sh "Dependency install" python -m pip install -e .
+      - uses: actions/download-artifact@v4
+        with:
+          name: warm-prepare
+      - run: tar -xzf warm-prepare.tgz && rm warm-prepare.tgz
+      - name: Prepare local script model
+        run: bash scripts/bootstrap_ollama.sh
+      - name: Plan the episode
+        run: bash scripts/run_logged.sh "Episode plan" python -m movie_pipeline.cli --stage plan
+      - name: Package the plan
+        run: tar -czf warm-plan.tgz work/jobs/*/script-sections
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warm-plan
+          path: warm-plan.tgz
+          retention-days: 1
+
+  music:
+    # An original instrumental score in the video's genre (ACE-Step 1.5, MIT). Optional: any
+    # failure leaves no score and production uses the bundled licensed track.
+    needs: prepare
+    if: ${{ vars.GENRE_MUSIC != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    continue-on-error: true
+    env:
+      ACESTEP_INIT_LLM: 'false'
+      GENRE: ${{ needs.prepare.outputs.genre }}
+      MUSIC_SECONDS: ${{ needs.prepare.outputs.music_seconds }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk for the music model
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: System dependencies
+        timeout-minutes: 35
+        run: bash scripts/install_system_packages.sh ffmpeg libsndfile1
+      - name: Install ACE-Step 1.5 (CPU)
+        shell: bash
+        run: |
+          set -o pipefail
+          git clone --depth 1 https://github.com/ACE-Step/ACE-Step-1.5 "$RUNNER_TEMP/acestep"
+          python -m pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -3
+          cd "$RUNNER_TEMP/acestep"
+          python - <<'INSTALL'
+          import collections, subprocess, sys, tomllib
+          deps = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]
+          skip = ("torch==", "torch>", "torch;", "torchvision", "torchaudio", "nano-vllm", "mlx")
+          keep = [d for d in deps if not d.replace(" ", "").lower().startswith(skip) and d.split(";")[0].strip().lower() != "torch"]
+          locked = collections.defaultdict(set)
+          for package in tomllib.load(open("uv.lock", "rb"))["package"]:
+              if "version" in package and "editable" not in package.get("source", {}) and "path" not in package.get("source", {}):
+                  locked[package["name"]].add(package["version"].split("+")[0])
+          pins = [f"{name}=={next(iter(versions))}" for name, versions in sorted(locked.items())
+                  if len(versions) == 1 and not name.startswith(("nvidia", "triton", "nano-vllm", "flash"))]
+          open("cpu-constraints.txt", "w").write("\n".join(pins) + "\n")
+          for dep in keep:
+              subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-c", "cpu-constraints.txt", dep], capture_output=True)
+          INSTALL
+          python -m pip install -q --no-deps -e . 2>&1 | tail -3
+      - name: Generate the genre score
+        run: python scripts/generate_music.py "$RUNNER_TEMP/acestep" "$GENRE" "$MUSIC_SECONDS" work/music-generated/score.wav
+      - name: Package the score
+        run: if [ -f work/music-generated/score.wav ]; then tar -czf warm-music.tgz work/music-generated; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warm-music
+          path: warm-music.tgz
+          if-no-files-found: ignore
+          retention-days: 1
+
+  script:
+    needs: [prepare, plan]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     continue-on-error: true
@@ -208,6 +319,11 @@ jobs:
         with:
           name: warm-prepare
       - run: tar -xzf warm-prepare.tgz && rm warm-prepare.tgz
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: warm-plan
+      - run: if [ -f warm-plan.tgz ]; then tar -xzf warm-plan.tgz && rm warm-plan.tgz; fi
       - name: Prepare local script model
         run: bash scripts/bootstrap_ollama.sh
       - name: Write and fact-check one section
@@ -303,7 +419,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/youtube-cookies.txt"
 
   produce:
-    needs: [prepare, script, footage]
+    needs: [prepare, plan, script, footage, music]
     # Runs even if some warm-up jobs failed; it does any missing work itself.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04

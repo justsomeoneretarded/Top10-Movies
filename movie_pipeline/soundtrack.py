@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import re
 import wave
+import os
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,13 @@ RATE = 48000
 
 
 def theme_for(title: str, brief: str = "") -> str:
+    """Bundled-track family: action, mystery (dark/tense), romance or drama."""
+    genre = os.getenv("VIDEO_GENRE", "").strip().lower()
+    by_genre = {"horror": "mystery", "thriller": "mystery", "scifi": "mystery", "action": "action", "adventure": "action",
+                "fantasy": "action", "romance": "romance", "family": "romance", "comedy": "romance",
+                "drama": "drama", "documentary": "drama"}
+    if genre in by_genre:
+        return by_genre[genre]
     text = title.casefold()
     # The title takes precedence over incidental examples in the creative brief.
     for source in (text, brief.casefold()):
@@ -38,7 +46,35 @@ def selected_track(theme: str) -> dict:
     return json.loads((MUSIC_ROOT / "catalog.json").read_text())[name]
 
 
+# A genre score generated in the parallel music job (ACE-Step 1.5, MIT licence; output is ours to use).
+GENERATED_SCORE = Path(os.getenv("GENERATED_SCORE", "work/music-generated/score.wav"))
+
+# What the score should sound like for each genre (instrumental only).
+GENRE_MUSIC = {
+    "horror": "dark horror film score, low drones, dissonant strings, sparse eerie piano notes, distant metallic textures, slow heartbeat pulse, creeping tension, no vocals",
+    "thriller": "suspenseful thriller underscore, ticking pulse, low synth bass, tense staccato strings, building tension, no vocals",
+    "action": "epic action trailer score, driving taiko percussion, brass hits, aggressive strings, powerful and fast, no vocals",
+    "scifi": "atmospheric science fiction score, analog synth arpeggios, deep pads, wide reverb, sense of wonder and scale, no vocals",
+    "comedy": "playful upbeat comedy underscore, pizzicato strings, light percussion, bouncy bass, cheeky and fun, no vocals",
+    "family": "whimsical family film score, bright orchestra, glockenspiel, warm strings, joyful and adventurous, no vocals",
+    "adventure": "sweeping adventure film score, soaring horns, heroic strings, timpani, epic and hopeful, no vocals",
+    "romance": "romantic cinematic piano with warm strings, tender and hopeful, gentle build, no vocals",
+    "fantasy": "magical fantasy film score, harp, celesta, wordless choir pads, epic strings, enchanted, instrumental",
+    "documentary": "thoughtful documentary underscore, soft piano, ambient pads, steady pulse, no vocals",
+    "drama": "emotional cinematic drama score, piano and strings, slow build, heartfelt, no vocals",
+}
+
+
+def generated_score() -> Path | None:
+    try:
+        return GENERATED_SCORE if GENERATED_SCORE.exists() and GENERATED_SCORE.stat().st_size > 48000 * 4 * 20 else None
+    except OSError:
+        return None
+
+
 def music_credit(theme: str) -> str:
+    if generated_score():
+        return "Music: original score generated for this video with ACE-Step 1.5 (open-source, MIT licence)."
     track = selected_track(theme)
     return (f"Music: '{track['title']}' by Scott Buckley — CC BY 4.0. "
             f"{track['source']} License: {track['license_url']} "
@@ -54,9 +90,23 @@ def music_bed(path: Path, seconds: float, action: bool = False, *, theme: str | 
     from .core import PipelineError
     track = selected_track(theme or ("action" if action else "drama"))
     source = MUSIC_ROOT / track["file"]
-    if hashlib.sha256(source.read_bytes()).hexdigest() != track["sha256"]:
-        raise PipelineError("Bundled music failed its integrity check.")
-    samples, rate = sf.read(source, dtype="float32", always_2d=True)
+    score = generated_score()
+    if score is not None:
+        try:
+            samples, rate = sf.read(score, dtype="float32", always_2d=True)
+            if samples.shape[1] == 1:
+                samples = np.repeat(samples, 2, axis=1)
+            if rate != RATE:
+                positions = np.arange(0, len(samples) - 1, rate / RATE)
+                samples = np.stack([np.interp(positions, np.arange(len(samples)), samples[:, c]) for c in range(2)], axis=1).astype(np.float32)
+                rate = RATE
+            source = score
+        except Exception:  # noqa: BLE001 -- the bundled track remains
+            score = None
+    if score is None:
+        if hashlib.sha256(source.read_bytes()).hexdigest() != track["sha256"]:
+            raise PipelineError("Bundled music failed its integrity check.")
+        samples, rate = sf.read(source, dtype="float32", always_2d=True)
     if rate != RATE or len(samples) < RATE*8 or samples.shape[1] != 2:
         raise PipelineError("Bundled music must be stereo 48 kHz with a readable loop.")
     overlap = RATE*3

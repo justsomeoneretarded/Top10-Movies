@@ -93,3 +93,53 @@ def test_export_is_normalized_to_youtube_loudness(tmp_path):
     assert report["gain_db"] > 5
     assert after["integrated"] == pytest.approx(-14, abs=1.5)
     assert after["true_peak"] <= -0.5
+
+
+def test_each_genre_gets_its_own_reveal_sounds():
+    from movie_pipeline.sound_design import GENRE_SOUNDS, effect_events, effects_track
+    timeline = [{"type": "cold-open", "start": 0}, {"type": "review-preview", "start": 10}]
+    horror = effect_events(timeline, 1.0, "horror")
+    assert ("stinger" in [name for _, name, _ in horror]) and ("subdrop" in [name for _, name, _ in horror])
+    riser = next(when for when, name, _ in horror if name == "riser")
+    assert abs(riser + 1.6 - 10.5) < 1e-6           # the riser ends exactly on the reveal hit
+    comedy = [name for _, name, _ in effect_events(timeline, 1.0, "comedy")]
+    assert "pop" in comedy and "stinger" not in comedy
+    assert {"horror", "comedy", "family", "romance", "action", "adventure", "fantasy", "scifi", "thriller"} <= set(GENRE_SOUNDS)
+
+
+def test_effects_track_renders_every_genre_sound(tmp_path, monkeypatch):
+    from movie_pipeline.sound_design import GENRE_SOUNDS, effects_track
+    timeline = [{"type": "cold-open", "start": 0}, {"type": "review-preview", "start": 3}]
+    for genre in GENRE_SOUNDS:
+        monkeypatch.setenv("VIDEO_GENRE", genre)
+        assert effects_track(tmp_path / f"{genre}.wav", timeline, 1.0, 6.0) >= 3
+
+
+def test_generated_genre_score_replaces_the_bundled_track(tmp_path, monkeypatch):
+    import wave
+
+    import numpy as np
+    import soundfile as sf
+
+    from movie_pipeline import soundtrack
+    score = tmp_path / "score.wav"
+    t = np.arange(48000 * 30) / 48000
+    sf.write(score, np.column_stack([0.2 * np.sin(2 * np.pi * 110 * t)] * 2), 48000)
+    monkeypatch.setattr(soundtrack, "GENERATED_SCORE", score)
+    assert "ACE-Step" in soundtrack.music_credit("drama")
+    out = tmp_path / "bed.wav"
+    soundtrack.music_bed(out, 40, theme="drama")
+    with wave.open(str(out)) as stream:
+        assert stream.getnframes() == 48000 * 40
+    monkeypatch.setattr(soundtrack, "GENERATED_SCORE", tmp_path / "missing.wav")
+    assert "Scott Buckley" in soundtrack.music_credit("drama")
+
+
+def test_genre_picks_the_bundled_fallback_family(monkeypatch):
+    from movie_pipeline.soundtrack import theme_for
+    monkeypatch.setenv("VIDEO_GENRE", "horror")
+    assert theme_for("anything") == "mystery"
+    monkeypatch.setenv("VIDEO_GENRE", "adventure")
+    assert theme_for("anything") == "action"
+    monkeypatch.setenv("VIDEO_GENRE", "family")
+    assert theme_for("anything") == "romance"

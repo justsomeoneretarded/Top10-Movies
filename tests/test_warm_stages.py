@@ -29,7 +29,7 @@ class FakeWriter:
         pass
 
 
-def test_prepare_plans_and_reports_parallel_parts(monkeypatch, tmp_path):
+def test_prepare_researches_and_reports_parallel_parts(monkeypatch, tmp_path):
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     monkeypatch.setattr(cli, "setup_run", lambda *a: context(tmp_path))
@@ -38,9 +38,12 @@ def test_prepare_plans_and_reports_parallel_parts(monkeypatch, tmp_path):
     parts = cli.warm("prepare", "", "t", "b", "m", tmp_path, tmp_path / "out")
     assert parts["script_parts"] == ["intro", "outro", "film-0", "film-1", "film-2"]
     assert parts["footage_parts"] == ["0", "1", "2"]
-    assert ("plan",) in FakeWriter.calls
+    assert ("plan",) not in FakeWriter.calls  # planning runs in its own job
     lines = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert json.loads(lines["script_parts"]) == parts["script_parts"]
+    assert lines["genre"] == parts["genre"] and int(lines["music_seconds"]) >= 90
+    cli.warm("plan", "", "t", "b", "m", tmp_path, tmp_path / "out")
+    assert ("plan",) in FakeWriter.calls
 
 
 def test_script_stage_writes_only_its_section(monkeypatch, tmp_path):

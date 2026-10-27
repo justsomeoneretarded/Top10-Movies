@@ -128,18 +128,104 @@ def impact(seconds: float = 1.1, seed: int = 2) -> np.ndarray:
     return np.column_stack((hit, hit)).astype(np.float32)
 
 
-def effect_events(timeline: list[dict], speed: float) -> list[tuple[float, str, float]]:
-    """(time, effect, gain) in final-timeline seconds."""
+def riser(seconds: float = 1.6, seed: int = 3) -> np.ndarray:
+    """Tension build into a reveal: filtered noise and a pitch climbing to a sudden stop."""
+    count = round(seconds * RATE)
+    t = np.linspace(0, 1, count, dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    noise = rng.standard_normal(count).astype(np.float32)
+    band = _one_pole_lowpass(noise, 400 + 7000 * t ** 2) - _one_pole_lowpass(noise, 120 + 900 * t ** 2)
+    frequency = 110 * 2 ** (t * 2.5)
+    tone = np.sin(2 * np.pi * np.cumsum(frequency) / RATE) * 0.35
+    signal = (band / max(float(np.max(np.abs(band))), 1e-9) + tone) * t ** 2.6
+    signal /= max(float(np.max(np.abs(signal))), 1e-9)
+    return np.column_stack((signal, signal)).astype(np.float32)
+
+
+def stinger(seconds: float = 1.4, seed: int = 4) -> np.ndarray:
+    """Horror stab: a dissonant cluster of detuned saw tones with tremolo, sharp attack, long decay."""
+    count = round(seconds * RATE)
+    t = np.arange(count, dtype=np.float32) / RATE
+    cluster = sum(2 * ((t * f) % 1) - 1 for f in (233.0, 246.9, 261.6, 277.2, 466.2))
+    tremolo = 0.75 + 0.25 * np.sin(2 * np.pi * 11 * t)
+    envelope = np.minimum(1, t / 0.006) * np.exp(-t * 2.4)
+    signal = _one_pole_lowpass((cluster * tremolo * envelope).astype(np.float32), np.full(count, 3200.0))
+    signal /= max(float(np.max(np.abs(signal))), 1e-9)
+    return np.column_stack((signal, np.roll(signal, 240))).astype(np.float32)
+
+
+def subdrop(seconds: float = 1.5) -> np.ndarray:
+    """Deep falling sub-bass that you feel more than hear."""
+    count = round(seconds * RATE)
+    t = np.arange(count, dtype=np.float32) / RATE
+    frequency = 28 + 50 * np.exp(-t * 3)
+    signal = np.sin(2 * np.pi * np.cumsum(frequency) / RATE) * np.minimum(1, t / 0.01) * np.exp(-t * 1.8)
+    return np.column_stack((signal, signal)).astype(np.float32)
+
+
+def shimmer(seconds: float = 1.6) -> np.ndarray:
+    """Bright magical/sci-fi sparkle: high bell partials with a soft decay."""
+    count = round(seconds * RATE)
+    t = np.arange(count, dtype=np.float32) / RATE
+    signal = sum(np.sin(2 * np.pi * f * t + i) * np.exp(-t * (2 + i)) for i, f in enumerate((1568.0, 2093.0, 2637.0, 3136.0)))
+    signal = signal * np.minimum(1, t / 0.02)
+    signal /= max(float(np.max(np.abs(signal))), 1e-9)
+    return np.column_stack((signal, np.roll(signal, 480))).astype(np.float32)
+
+
+def pop(seconds: float = 0.35) -> np.ndarray:
+    """Light comedy/family accent: a quick rising pluck."""
+    count = round(seconds * RATE)
+    t = np.arange(count, dtype=np.float32) / RATE
+    frequency = 520 + 900 * np.minimum(1, t / 0.05)
+    signal = np.sin(2 * np.pi * np.cumsum(frequency) / RATE) * np.exp(-t * 16) * np.minimum(1, t / 0.003)
+    return np.column_stack((signal, signal)).astype(np.float32)
+
+
+def swell(seconds: float = 1.8) -> np.ndarray:
+    """Soft warm swell for romance/drama: a gentle chord that breathes in and out."""
+    count = round(seconds * RATE)
+    t = np.linspace(0, 1, count, dtype=np.float32)
+    seconds_axis = np.arange(count, dtype=np.float32) / RATE
+    chord = sum(np.sin(2 * np.pi * f * seconds_axis) for f in (220.0, 277.2, 329.6, 440.0))
+    signal = chord * np.sin(np.pi * t) ** 2
+    signal /= max(float(np.max(np.abs(signal))), 1e-9)
+    return np.column_stack((signal, signal)).astype(np.float32)
+
+
+# Per genre: what leads into a reveal, what hits on it (with gains), and an optional low layer.
+GENRE_SOUNDS = {
+    "horror": {"pre": ("riser", 0.55), "hits": (("stinger", 0.55), ("subdrop", 0.7)), "open": ("stinger", 0.45)},
+    "thriller": {"pre": ("riser", 0.45), "hits": (("impact", 0.6), ("subdrop", 0.5)), "open": ("impact", 0.5)},
+    "action": {"pre": ("riser", 0.45), "hits": (("impact", 0.8), ("subdrop", 0.45)), "open": ("impact", 0.6)},
+    "scifi": {"pre": ("riser", 0.4), "hits": (("impact", 0.55), ("shimmer", 0.3)), "open": ("shimmer", 0.35)},
+    "fantasy": {"pre": ("whoosh", 0.45), "hits": (("impact", 0.5), ("shimmer", 0.4)), "open": ("shimmer", 0.4)},
+    "adventure": {"pre": ("whoosh", 0.5), "hits": (("impact", 0.65),), "open": ("impact", 0.5)},
+    "comedy": {"pre": ("whoosh", 0.35), "hits": (("pop", 0.45),), "open": ("pop", 0.4)},
+    "family": {"pre": ("whoosh", 0.35), "hits": (("pop", 0.4), ("shimmer", 0.25)), "open": ("shimmer", 0.35)},
+    "romance": {"pre": ("whoosh", 0.25), "hits": (("swell", 0.35),), "open": ("swell", 0.3)},
+    "drama": {"pre": ("whoosh", 0.4), "hits": (("impact", 0.55),), "open": ("impact", 0.45)},
+    "documentary": {"pre": ("whoosh", 0.3), "hits": (("swell", 0.3),), "open": ("swell", 0.25)},
+}
+LEADS = {"riser": 1.6, "whoosh": 0.32}
+
+
+def effect_events(timeline: list[dict], speed: float, genre: str | None = None) -> list[tuple[float, str, float]]:
+    """(time, effect, gain) in final-timeline seconds, shaped by the video's genre."""
+    import os
+    pack = GENRE_SOUNDS.get((genre or os.getenv("VIDEO_GENRE", "drama")).strip().lower(), GENRE_SOUNDS["drama"])
     events = []
     for index, entry in enumerate(timeline):
         start = float(entry.get("start", 0)) / speed
         kind = entry.get("type")
         if kind == "cold-open" and index == 0:
-            events.append((0.02, "impact", 0.55))
+            events.append((0.02, *pack["open"]))
         elif kind == "review-preview":
             # The rank label slides in over about half a second; the hit lands with it.
-            events.append((max(0.0, start - 0.32), "whoosh", 0.5))
-            events.append((start + 0.5, "impact", 0.7))
+            hit = start + 0.5
+            name, gain = pack["pre"]
+            events.append((max(0.0, hit - LEADS.get(name, 0.8) - (0.0 if name == "riser" else 0.5)), name, gain))
+            events += [(hit, name, gain) for name, gain in pack["hits"]]
         elif kind == "subscribe":
             events.append((max(0.0, start - 0.25), "whoosh", 0.3))
         elif kind == "narration" and entry.get("section_kind") == "outro" and \
@@ -151,7 +237,8 @@ def effect_events(timeline: list[dict], speed: float) -> list[tuple[float, str, 
 def effects_track(path: Path, timeline: list[dict], speed: float, total: float) -> int:
     """Write a stereo 16-bit WAV with every transition effect; returns the event count."""
     samples = np.zeros((max(1, round(total * RATE)), 2), dtype=np.float32)
-    sounds = {"whoosh": whoosh(), "impact": impact()}
+    sounds = {"whoosh": whoosh(), "impact": impact(), "riser": riser(), "stinger": stinger(), "subdrop": subdrop(),
+              "shimmer": shimmer(), "pop": pop(), "swell": swell()}
     events = effect_events(timeline, speed)
     for when, name, gain in events:
         sound = sounds[name]

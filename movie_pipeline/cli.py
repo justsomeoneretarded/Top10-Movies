@@ -904,7 +904,8 @@ def warm_voice(sections: list[dict], ctx) -> int:
 def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path, output: Path) -> dict:
     """Fill the run's caches in a parallel workflow job; the final produce job then reuses them.
 
-    prepare  research and the episode plan; reports the parts for the other jobs
+    prepare  research; reports the parts, genre and score length for the other jobs
+    plan     the episode plan every script section follows
     script   one script section: "intro", "outro" or "film-<index>" (0 is number one)
     footage  one title's primary trailer: download, end-slate scan, shot analysis, scene descriptions
     """
@@ -913,17 +914,23 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
     started = time.time()
     ctx = setup_run(title, brief, movies, work, output, started)
     films = ctx.films
-    if stage == "prepare":
+    if stage == "plan":
         writer = Writer(cache_dir=ctx.work / "script-sections")
         writer.plan(title, brief, films)
         writer.unload()
+        return {"planned": True}
+    if stage == "prepare":
+        # Research only: footage and music jobs start from this; the plan job follows.
+        from .thumbnail_studio import detect_genre
         parts = {"script_parts": ["intro", "outro", *[f"film-{i}" for i in range(len(films))]],
-                 "footage_parts": [str(i) for i in range(len(films))]}
+                 "footage_parts": [str(i) for i in range(len(films))],
+                 "genre": detect_genre(films, title, brief),
+                 "music_seconds": int(min(240, max(90, ctx.spec.target * 0.4)))}
         target = os.getenv("GITHUB_OUTPUT")
         if target:
             with open(target, "a", encoding="utf-8") as stream:
                 for name, value in parts.items():
-                    stream.write(f"{name}={json.dumps(value)}\n")
+                    stream.write(f"{name}={value if isinstance(value, (str, int)) else json.dumps(value)}\n")
         return parts
     if stage == "script":
         writer = Writer(cache_dir=ctx.work / "script-sections")
@@ -964,7 +971,7 @@ def main():
     parser.add_argument("--movies", default=os.getenv("MOVIE_LIST", ""))
     parser.add_argument("--work", type=Path, default=Path("work/jobs"))
     parser.add_argument("--output", type=Path, default=Path("output"))
-    parser.add_argument("--stage", choices=["produce", "prepare", "script", "footage"], default=os.getenv("PIPELINE_STAGE", "produce"))
+    parser.add_argument("--stage", choices=["produce", "prepare", "plan", "script", "footage"], default=os.getenv("PIPELINE_STAGE", "produce"))
     parser.add_argument("--part", default=os.getenv("PIPELINE_PART", ""))
     args = parser.parse_args()
     if args.stage != "produce":
