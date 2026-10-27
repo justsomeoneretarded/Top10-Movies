@@ -178,6 +178,54 @@ def get_frame(path: Path, seconds: float) -> Image.Image:
     return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
 
+class SigLIP:
+    """SigLIP 2 image/text features through OpenCLIP (independent of the transformers version
+    the voice model pins), or through transformers when that is new enough."""
+
+    def __init__(self, torch, backend: str, model, preprocess, tokenizer):
+        self.torch, self.backend, self.model, self.preprocess, self.tokenizer = torch, backend, model, preprocess, tokenizer
+
+    def _norm(self, values):
+        if not isinstance(values, self.torch.Tensor):
+            values = values.pooler_output
+        return values / values.norm(dim=-1, keepdim=True)
+
+    def images(self, images):
+        with self.torch.inference_mode():
+            if self.backend == "open_clip":
+                batch = self.torch.stack([self.preprocess(image.convert("RGB")) for image in images])
+                return self._norm(self.model.encode_image(batch))
+            return self._norm(self.model.get_image_features(**self.preprocess(images=images, return_tensors="pt")))
+
+    def text(self, text: str):
+        with self.torch.inference_mode():
+            if self.backend == "open_clip":
+                return self._norm(self.model.encode_text(self.tokenizer([text])))
+            inputs = self.preprocess(text=[text], return_tensors="pt", padding="max_length", max_length=64, truncation=True)
+            return self._norm(self.model.get_text_features(**inputs))
+
+
+def load_siglip(torch) -> SigLIP | None:
+    errors = []
+    name = os.getenv("SIGLIP_OPEN_CLIP", "hf-hub:timm/ViT-B-16-SigLIP2")
+    try:
+        import open_clip
+        model, _, preprocess = open_clip.create_model_and_transforms(name)
+        print(f"SigLIP 2 loaded through OpenCLIP ({name}).", flush=True)
+        return SigLIP(torch, "open_clip", model.eval(), preprocess, open_clip.get_tokenizer(name))
+    except Exception as exc:  # noqa: BLE001 -- try transformers next
+        errors.append(f"OpenCLIP {type(exc).__name__}: {str(exc)[:120]}")
+    try:
+        from transformers import AutoModel, AutoProcessor
+        hf_name = os.getenv("SIGLIP_MODEL", "google/siglip2-base-patch16-224")
+        return SigLIP(torch, "transformers", AutoModel.from_pretrained(hf_name).eval(), AutoProcessor.from_pretrained(hf_name), None)
+    except Exception as exc:  # noqa: BLE001 -- CLIP matching remains available
+        errors.append(f"transformers {type(exc).__name__}: {str(exc)[:120]}")
+    from .core import notice
+    notice("SigLIP 2 unavailable", "Matching footage with CLIP. " + " | ".join(errors), "warning")
+    return None
+
+
 class ShotSelector:
     """Soft CLIP relevance, stable shots, and occasional face holds; all CPU."""
     def __init__(self):
@@ -192,14 +240,8 @@ class ShotSelector:
         self.siglip_features = {}
         self.scene_embeddings = {}
         if os.getenv("SHOT_MATCH_MODEL", "siglip2").lower() != "clip":
-            try:
-                from transformers import AutoModel, AutoProcessor
-                name = os.getenv("SIGLIP_MODEL", "google/siglip2-base-patch16-224")
-                self.siglip = AutoModel.from_pretrained(name).eval()
-                self.siglip_processor = AutoProcessor.from_pretrained(name)
-            except Exception as exc:  # noqa: BLE001 -- CLIP matching remains available
-                print(f"SigLIP 2 unavailable ({type(exc).__name__}); matching footage with CLIP.", flush=True)
-                self.siglip = self.siglip_processor = None
+            self.siglip = load_siglip(torch)
+            self.siglip_processor = self.siglip
         self.features = {}
         self.uses = {}
         self.last_shots = {}
@@ -244,12 +286,7 @@ class ShotSelector:
                 vectors.append(values / values.norm(dim=-1, keepdim=True))
             if self.siglip is not None:
                 try:
-                    siglip_inputs = self.siglip_processor(images=images, return_tensors="pt")
-                    with self.torch.inference_mode():
-                        values = self.siglip.get_image_features(**siglip_inputs)
-                        if not isinstance(values, self.torch.Tensor):
-                            values = values.pooler_output
-                    siglip_vectors.append(values / values.norm(dim=-1, keepdim=True))
+                    siglip_vectors.append(self.siglip.images(images))
                 except Exception as exc:  # noqa: BLE001
                     print(f"SigLIP 2 image features failed ({type(exc).__name__}); using CLIP for {path.name}.", flush=True)
                     siglip_vectors = None
@@ -328,13 +365,8 @@ class ShotSelector:
         signals = []
         if self.siglip is not None and str(path) in self.siglip_features:
             try:
-                inputs = self.siglip_processor(text=[text.lower()], return_tensors="pt", padding="max_length",
-                                               max_length=64, truncation=True)
+                vector = self.siglip.text(text.lower())
                 with self.torch.inference_mode():
-                    vector = self.siglip.get_text_features(**inputs)
-                    if not isinstance(vector, self.torch.Tensor):
-                        vector = vector.pooler_output
-                    vector = vector / vector.norm(dim=-1, keepdim=True)
                     signals.append((0.6, (self.siglip_features[str(path)] @ vector.T).squeeze(-1).numpy()))
             except Exception:  # noqa: BLE001 -- fall back to CLIP below
                 signals = []

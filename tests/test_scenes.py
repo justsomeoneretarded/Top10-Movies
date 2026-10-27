@@ -67,8 +67,7 @@ def test_relevance_blends_image_and_description_matches_on_clip_scale(monkeypatc
     selector = object.__new__(ShotSelector)
     selector.torch = torch
     path = "movie.mp4"
-    selector.siglip = SimpleNamespace(get_text_features=lambda **kw: torch.tensor([[1.0, 0.0]]))
-    selector.siglip_processor = lambda **kw: {}
+    selector.siglip = SimpleNamespace(text=lambda text: torch.tensor([[1.0, 0.0]]))
     selector.siglip_features = {path: torch.tensor([[1.0, 0.0], [0.0, 1.0], [0.7, 0.7]])}
     selector.scene_embeddings = {path: np.array([[0, 1], [1, 0], [0.7, 0.7]], dtype=np.float32)}
     monkeypatch.setattr(scenes, "embed", lambda texts: np.array([[1.0, 0.0]], dtype=np.float32))
@@ -80,3 +79,18 @@ def test_relevance_blends_image_and_description_matches_on_clip_scale(monkeypatc
 
 def test_zscore_handles_flat_scores():
     assert np.all(_zscore([0.3, 0.3, 0.3]) == 0)
+
+
+def test_siglip_loader_reports_and_falls_back_to_clip(monkeypatch, capsys):
+    import builtins
+
+    from movie_pipeline.shots import load_siglip
+    real = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name in ("open_clip", "transformers"):
+            raise ImportError(name)
+        return real(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    assert load_siglip(object()) is None
+    assert "SigLIP 2 unavailable" in capsys.readouterr().out
