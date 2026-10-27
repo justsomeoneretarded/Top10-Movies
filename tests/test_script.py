@@ -254,3 +254,15 @@ def test_rank_lead_in_is_short_without_removing_the_actual_premise():
     assert short_rank_opening('Arrival follows a translator.', 7, 'Arrival') == 'Number 7: Arrival follows a translator.'
     original = 'A translator faces a choice in Arrival.'
     assert short_rank_opening(original, 7, 'Arrival') == original
+
+
+def test_long_opening_is_trimmed_keeping_hook_and_tease():
+    from movie_pipeline.script import fit_opening
+    draft = ["Some movies feel like a plane ticket. These three drop you in jungles, deserts and lost cities. "
+             "Each one has heroes in way over their heads. Every one of them is perfect for a lazy weekend. "
+             "And number one is the trip you'll want to take twice."]
+    fitted = fit_opening(draft, 30)
+    assert fitted and len(fitted[0].split()) <= 30
+    assert fitted[0].startswith("Some movies feel like a plane ticket.")
+    assert fitted[0].endswith("number one is the trip you'll want to take twice.")
+    assert fit_opening(["One very long sentence " * 10 + "."], 20) == []

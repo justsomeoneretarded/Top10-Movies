@@ -269,6 +269,24 @@ def _editorial_issue(paragraphs: list[str], *, opening: bool = False, theme: str
     return None
 
 
+def fit_opening(paragraphs: list[str], maximum: int) -> list[str]:
+    """Shorten an otherwise good opening: keep its first sentence and its closing tease, then
+    as many middle sentences as fit. Returns [] when even that is too long."""
+    sentences = [part for part in re.split(r"(?<=[.!?])\s+", " ".join(paragraphs).strip()) if part]
+    if len(sentences) < 2:
+        return []
+    first, last = sentences[0], sentences[-1]
+    kept = [first]
+    budget = maximum - len(first.split()) - len(last.split())
+    for sentence in sentences[1:-1]:
+        if len(sentence.split()) <= budget:
+            kept.append(sentence)
+            budget -= len(sentence.split())
+    if budget < 0:
+        return []
+    return [" ".join([*kept, last])]
+
+
 def _fallback_intro(topic: str, brief: str, facts: dict) -> list[str]:
     count = max(1, facts.get("count") or len(facts.get("titles", [])) or 1)
     kind = facts.get("kind") or ("shows" if re.search(r"\b(shows?|series|tv)\b", topic, re.IGNORECASE) else "movies")
@@ -557,7 +575,7 @@ class Writer:
                      f"in the spirit of: {hook!r}. " + planned +
                      "Then make the video's promise clear (what kind of list this is and why it is worth watching), "
                      "and end by teasing number one WITHOUT naming it, for example: 'and number one is the one you really shouldn't watch alone.' "
-                     "Two or three short complete sentences, about twelve seconds. Do not name any selected title or list the ranks. "
+                     f"Two or three short complete sentences, about twelve seconds: at most {maximum} words in total. Do not name any selected title or list the ranks. "
                      "Do not explain how the countdown works. Do not invent statistics or a personal viewing history. ")
         elif closing:
             style = ("SECTION ROLE: OUTRO ONLY. Every review is finished and number one has ALREADY been revealed. "
@@ -653,12 +671,21 @@ class Writer:
                 best, best_distance = cleaned, abs(words-target)
             if minimum <= words <= maximum:
                 return completed(cleaned)
+            if opening and words > maximum:
+                fitted = fit_opening(cleaned, maximum)
+                if fitted and not (_section_issue(fitted, facts, opening=True, closing=False)
+                                   or _editorial_issue(fitted, opening=True, theme=_theme(topic, brief, facts))):
+                    print(f"Opening shortened from {words} to {len(fitted[0].split())} words, keeping its hook and tease.", flush=True)
+                    return completed(fitted)
             correction = f"Previous output had {words} words. Rewrite to approximately {target} words; each paragraph must be under 65 words."
         if closing:
             print("Using a concise fallback closing after three unsuccessful drafts.", flush=True)
             if target < 20:
                 return completed(["Like, subscribe, and watch our other picks. Bad movie nights have had enough chances."])
             return completed(["Which pick gets your vote? Like, subscribe, and watch our other recommendations. Bad movie nights have had enough chances."])
+        if opening and best and best_distance <= max(12, target):
+            print("Using the closest opening draft; total audio timing will determine length.", flush=True)
+            return completed(best)
         if opening:
             print("Using a concise fallback opening after three unsuccessful drafts.", flush=True)
             from .core import notice
