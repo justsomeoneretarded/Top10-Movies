@@ -113,14 +113,14 @@ def unload():
             pass
 
 
-THUMBNAIL_PROMPT = ("You are choosing a YouTube thumbnail for a movie countdown. Judge this frame: "
-                    "does it show a large, clear human face? how intense is the emotion (fear, rage, shock, focus)? "
-                    "is there visible action, a weapon, a creature, an explosion or spectacle? "
-                    "Return JSON only.")
 
 
-def rate_thumbnail(image) -> dict | None:
-    """Vision-model judgement of a frame as thumbnail material; None when the model is unavailable."""
+def rate_thumbnail(image, genre: str = "", genre_hint: str = "") -> dict | None:
+    """Vision-model judgement of a frame as thumbnail material; None when the model is unavailable.
+
+    ``genre_hint`` describes what the genre looks like ("fear, screaming, creatures, masks,
+    blood, darkness"), so the model rates how instantly the frame reads as that genre.
+    """
     small = image.convert("RGB").copy()
     small.thumbnail((512, 288))
     buffer = io.BytesIO()
@@ -128,18 +128,33 @@ def rate_thumbnail(image) -> dict | None:
     schema = {"type": "object", "properties": {
         "large_face": {"type": "boolean"}, "emotion_intensity": {"type": "integer", "minimum": 0, "maximum": 10},
         "action_or_spectacle": {"type": "integer", "minimum": 0, "maximum": 10},
+        "genre_fit": {"type": "integer", "minimum": 0, "maximum": 10},
+        "logo_or_text": {"type": "boolean"},
         "thumbnail_score": {"type": "integer", "minimum": 0, "maximum": 10}},
-        "required": ["large_face", "emotion_intensity", "action_or_spectacle", "thumbnail_score"]}
+        "required": ["large_face", "emotion_intensity", "action_or_spectacle", "genre_fit", "logo_or_text", "thumbnail_score"]}
+    prompt = THUMBNAIL_PROMPT
+    if genre:
+        prompt += (f" The video is a {genre} countdown. genre_fit: how instantly a viewer scrolling past would know this "
+                   f"is a {genre} film from this frame alone ({genre_hint}); calm, smiling or neutral everyday frames score low.")
     try:
         response = requests.post(_url() + "/api/generate", json={
-            "model": VISION_MODEL, "prompt": THUMBNAIL_PROMPT, "images": [base64.b64encode(buffer.getvalue()).decode()],
+            "model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(buffer.getvalue()).decode()],
             "format": schema, "stream": False, "think": False, "keep_alive": "10m",
-            "options": {"temperature": 0.1, "num_predict": 80, "num_ctx": 2048}}, timeout=300)
+            "options": {"temperature": 0.1, "num_predict": 100, "num_ctx": 2048}}, timeout=300)
         response.raise_for_status()
         data = json.loads(response.json().get("response", "{}"))
         return {"large_face": bool(data.get("large_face")),
                 "emotion": max(0, min(10, int(data.get("emotion_intensity", 0)))),
                 "action": max(0, min(10, int(data.get("action_or_spectacle", 0)))),
+                "genre_fit": max(0, min(10, int(data.get("genre_fit", 5)))),
+                "logo": bool(data.get("logo_or_text")),
                 "score": max(0, min(10, int(data.get("thumbnail_score", 0))))}
     except (requests.RequestException, ValueError, TypeError, KeyError):
         return None
+
+
+THUMBNAIL_PROMPT = ("You are choosing a YouTube thumbnail for a movie countdown. Judge this frame: "
+                    "does it show a large, clear human face? how intense is the emotion (fear, rage, shock, focus)? "
+                    "is there visible action, a weapon, a creature, an explosion or spectacle? "
+                    "is any logo, watermark, channel bug or written text visible anywhere, even small in a corner? "
+                    "Return JSON only.")
