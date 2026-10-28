@@ -272,43 +272,114 @@ def genre_shots(trailer: Path, shots: list[dict], profile: dict, limit: int = 8)
     return ranked[:limit]
 
 
+_DETECTORS = {}
+
+
+def _detector(name: str):
+    if name not in _DETECTORS:
+        path = Path(cv2.data.haarcascades) / name
+        _DETECTORS[name] = cv2.CascadeClassifier(str(path)) if path.exists() else None
+    return _DETECTORS[name]
+
+
+def frame_sharpness(image: Image.Image) -> float:
+    """Detail at a fixed 960-pixel width; below about 25 the frame is soft, blurred or bokeh."""
+    gray = np.asarray(image.convert("L").resize((960, max(1, round(960 * image.height / image.width)))), dtype=np.uint8)
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def face_quality(image: Image.Image) -> tuple[tuple[int, int, int, int] | None, float, bool]:
+    """(face box, quality score, good) for the best front-facing face.
+
+    Good means: big enough to read on a phone (about a tenth of the frame height or more),
+    sharp, eyes visible, sensibly exposed and not cut off at the top.
+    """
+    detector = _detector("haarcascade_frontalface_default.xml")
+    if detector is None:
+        return None, 0.0, False
+    scale = 640 / image.width
+    small = np.asarray(image.convert("L").resize((640, max(1, round(image.height * scale)))), dtype=np.uint8)
+    boxes = detector.detectMultiScale(small, 1.1, 6, minSize=(36, 36))
+    if not len(boxes):
+        return None, 0.0, False
+    eyes = _detector("haarcascade_eye.xml")
+    best, best_score, best_good = None, 0.0, False
+    for x, y, w, h in boxes:
+        face = small[y:y + h, x:x + w]
+        size = h / small.shape[0]
+        crisp = cv2.Laplacian(cv2.resize(face, (160, 160)), cv2.CV_64F).var()
+        found_eyes = len(eyes.detectMultiScale(face[: h // 2 + h // 8], 1.1, 5, minSize=(max(8, w // 8), max(8, w // 8)))) if eyes is not None else 1
+        exposure = 1 - min(1.0, abs(float(face.mean()) - 125) / 110)
+        s_size, s_sharp = min(1.0, size / 0.22), min(1.0, crisp / 260)
+        score = 2 * s_size + 2 * s_sharp + (1.0 if found_eyes else 0.3) + 0.5 * exposure
+        good = size >= 0.1 and s_sharp >= 0.35 and found_eyes > 0 and y > 2 and exposure > 0.25
+        if score > best_score:
+            best = tuple(int(v / scale) for v in (x, y, w, h))
+            best_score, best_good = score, good
+    return best, best_score, best_good
+
+
+def _dhash(image: Image.Image) -> int:
+    gray = np.asarray(image.convert("L").resize((9, 8)), dtype=np.int16)
+    return sum(int(bit) << i for i, bit in enumerate((gray[:, 1:] > gray[:, :-1]).reshape(-1)))
+
+
 def gather(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], work: Path,
-           per_film: int = 3, profile: dict | None = None) -> list[Candidate]:
+           per_film: int = 8, profile: dict | None = None) -> list[Candidate]:
+    """Sharp, varied candidates per title: full-resolution TMDB stills first, then the best trailer frames."""
     from .shots import get_frame
+    from .stills_trailer import fetch_original
     profile = profile or GENRE_PROFILES[DEFAULT_GENRE]
     candidates: list[Candidate] = []
     for index, film in enumerate(films[:max(3, min(len(films), 5))]):
         pool = []
-        for path in film.get("backdrops", [])[:4]:
-            image = fetch_still(path, work / "stills")
+        for path in film.get("backdrops", [])[:10]:
+            image = fetch_original(path, work / "stills") or fetch_still(path, work / "stills")
             if image is not None:
                 pool.append(Candidate(image, index, "tmdb-still"))
         if index < len(trailers) and index < len(shot_sets):
             chosen = genre_shots(trailers[index], shot_sets[index], profile)
             seen = {id(shot) for shot, _, _ in chosen}
-            busiest = [s for s in sorted(shot_sets[index], key=lambda s: -float(s.get("motion", 0))) if id(s) not in seen][:4]
+            busiest = [s for s in sorted(shot_sets[index], key=lambda s: -float(s.get("peak", s.get("motion", 0)))) if id(s) not in seen][:4]
             for shot, fit, text in [*chosen, *((s, 0.0, "") for s in busiest)]:
-                try:
-                    frame = get_frame(trailers[index], (float(shot["start"]) + float(shot["end"])) / 2)
-                except PipelineError:
+                if shot.get("text_card"):
                     continue
-                if frame.width >= 960:
-                    pool.append(Candidate(frame, index, "trailer-frame", genre_fit=fit, description=text))
+                middle = (float(shot["start"]) + float(shot["end"])) / 2
+                frames = []
+                for offset in (0.0, 0.35):
+                    try:
+                        frames.append(get_frame(trailers[index], middle + offset))
+                    except PipelineError:
+                        continue
+                if frames:
+                    frame = max(frames, key=frame_sharpness)  # the steadier of two nearby frames
+                    if frame.width >= 1280:
+                        pool.append(Candidate(frame, index, "trailer-frame", genre_fit=fit, description=text,
+                                              action=min(1.0, float(shot.get("peak", 0)))))
+        kept, hashes = [], []
         for candidate in pool:
             candidate.image = trim_bars(candidate.image)
-            candidate.score, candidate.face = heuristic(candidate.image, profile["exposure"])
-            candidate.score += candidate.genre_fit * 2.5
-        pool.sort(key=lambda c: -c.score)
-        kept = []
-        for candidate in pool:
-            if len(kept) >= per_film * 2:
-                break
-            if not has_burned_text(candidate.image):
-                kept.append(candidate)
-        if not kept and pool:
-            kept = pool[:2]  # better than nothing; the vision check below still drops logo frames
-        candidates.extend(kept)
+            sharp = frame_sharpness(candidate.image)
+            if sharp < 25:
+                continue  # soft, motion-blurred or out-of-focus frames never become thumbnails
+            candidate.face, quality, good = face_quality(candidate.image)
+            candidate.notes = {"sharpness": round(sharp), "face_quality": round(quality, 2), "good_face": good}
+            base, _ = heuristic(candidate.image, profile["exposure"])
+            candidate.score = base * 0.4 + quality * (1.2 if good else 0.5) + candidate.genre_fit * 2.0 + min(sharp, 400) / 400
+            value = _dhash(candidate.image)
+            if any((value ^ old).bit_count() <= 8 for old in hashes):
+                continue  # near-duplicate of a frame already kept
+            candidate.notes["hash"] = value
+            kept.append(candidate)
+            hashes.append(value)
+        kept.sort(key=lambda c: -c.score)
+        clean = [c for c in kept if not has_burned_text(c.image)][:per_film]
+        candidates.extend(clean or kept[:2])
     return candidates
+
+
+def good_face(candidate: Candidate) -> bool:
+    return bool(candidate.face is not None and candidate.notes.get("good_face") and not candidate.notes.get("logo"))
 
 
 def rate_with_vision(candidates: list[Candidate], limit: int = 18, profile: dict | None = None) -> int:
@@ -323,7 +394,7 @@ def rate_with_vision(candidates: list[Candidate], limit: int = 18, profile: dict
         if verdict is None:
             break
         rated += 1
-        candidate.notes = verdict
+        candidate.notes = {**candidate.notes, **verdict}
         candidate.action = verdict["action"] / 10
         candidate.genre_fit = max(candidate.genre_fit, verdict.get("genre_fit", 0) / 10)
         candidate.score += (verdict["score"] * 0.2 + verdict["emotion"] * 0.12 + verdict.get("genre_fit", 0) * 0.45
@@ -344,8 +415,8 @@ def cinematic_grade(image: Image.Image, strength: float = 1.0) -> Image.Image:
     luminance = rgb.mean(axis=2, keepdims=True) / 255
     shadows = np.clip(1 - luminance * 1.8, 0, 1)
     highlights = np.clip(luminance * 1.6 - 0.6, 0, 1)
-    rgb += shadows * np.array([-7, 3, 10], dtype=np.float32) * strength
-    rgb += highlights * np.array([12, 5, -9], dtype=np.float32) * strength
+    rgb += shadows * np.array([-4, 2, 6], dtype=np.float32) * strength
+    rgb += highlights * np.array([8, 4, -5], dtype=np.float32) * strength
     hsv = cv2.cvtColor(np.clip(rgb, 0, 255).astype(np.uint8), cv2.COLOR_RGB2HSV).astype(np.float32)
     hsv[..., 1] = np.clip(hsv[..., 1] * (1 + 0.15 * strength), 0, 255)
     rgb = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB).astype(np.float32)
@@ -411,9 +482,22 @@ def genre_grade(image: Image.Image, grade: str, strength: float = 1.0) -> Image.
 
 
 # ---------------------------------------------------------------- framing
+def face_light(canvas: Image.Image, center: tuple[float, float], radius: float, amount: float = 0.14) -> Image.Image:
+    """Lift the face slightly above its surroundings (the 'lit subject' look of channel thumbnails)."""
+    w, h = canvas.size
+    y, x = np.ogrid[:h, :w]
+    distance = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2) / max(1.0, radius)
+    gain = 1 + amount * np.clip(1 - distance, 0, 1) ** 1.5
+    rgb = np.asarray(canvas.convert("RGB")).astype(np.float32) * gain[..., None]
+    return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+
+
 def face_crop(candidate: Candidate, width: int = WIDTH, height: int = HEIGHT, *, face_height: float = 0.40,
-              face_x: float = 0.62, face_y: float = 0.40) -> Image.Image:
-    """Crop so the face fills about ``face_height`` of the frame at the chosen position."""
+              face_x: float = 0.62, face_y: float = 0.40, light: bool = True) -> Image.Image:
+    """Crop so the face fills about ``face_height`` of the frame at the chosen position.
+
+    Enlargement is capped (1.6x) so faces never turn soft; the face gets a gentle light.
+    """
     image = candidate.image.convert("RGB")
     if candidate.face is None:
         scale = max(width / image.width, height / image.height)
@@ -421,16 +505,45 @@ def face_crop(candidate: Candidate, width: int = WIDTH, height: int = HEIGHT, *,
         left, top = (resized.width - width) // 2, (resized.height - height) // 2
         return resized.crop((left, top, left + width, top + height))
     x, y, w, h = candidate.face
-    scale = max(width / image.width, height / image.height, min(2.4, face_height * height / max(h, 1)))
+    cover = max(width / image.width, height / image.height)
+    scale = max(cover, min(max(cover, 1.6), face_height * height / max(h, 1)))
     resized = image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
     cx, cy = (x + w / 2) * scale, (y + h / 2) * scale
     left = int(min(max(0, cx - width * face_x), resized.width - width))
     top = int(min(max(0, cy - height * face_y), resized.height - height))
     crop = resized.crop((left, top, left + width, top + height))
-    if scale > 1.2:
-        # Enlarged faces go soft; restore edge detail in proportion to the enlargement.
-        crop = crop.filter(ImageFilter.UnsharpMask(radius=1.2 + scale * 0.6, percent=int(min(160, 60 * scale)), threshold=2))
+    if scale > 1.1:
+        crop = crop.filter(ImageFilter.UnsharpMask(radius=1.0 + scale * 0.5, percent=int(min(120, 50 * scale)), threshold=2))
+    if light:
+        crop = face_light(crop, (cx - left, cy - top), h * scale * 1.3)
     return crop
+
+
+def clean_cutout(subject: Image.Image | None) -> Image.Image | None:
+    """Keep a cut-out only when its edge is clean: one solid shape, no stray blobs.
+
+    The alpha edge is tightened by a pixel (removes the old background's colour fringe)
+    and softened slightly so it never looks jagged.
+    """
+    if subject is None:
+        return None
+    alpha = np.asarray(subject.getchannel("A"))
+    solid = (alpha > 128).astype(np.uint8)
+    if solid.sum() < 1000:
+        return None
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(solid, 8)
+    largest = stats[1:, cv2.CC_STAT_AREA].max() if count > 1 else 0
+    if largest < 0.93 * solid.sum():
+        return None
+    contours, _ = cv2.findContours(solid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour = max(contours, key=cv2.contourArea)
+    hull = cv2.contourArea(cv2.convexHull(contour))
+    if hull <= 0 or cv2.contourArea(contour) / hull < 0.68:
+        return None  # ragged, spiky or hollow shape: a failed cut-out
+    refined = Image.fromarray(alpha).filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.1))
+    result = subject.copy()
+    result.putalpha(refined)
+    return result
 
 
 def rim_light(subject: Image.Image, color=(255, 214, 160), width: int = 4, strength: float = 0.6) -> Image.Image:
@@ -443,10 +556,12 @@ def rim_light(subject: Image.Image, color=(255, 214, 160), width: int = 4, stren
 
 
 def depth_composite(subject: Image.Image, background: Image.Image, *, height_fraction: float = 1.05,
-                    x_fraction: float = 0.62, blur: float = 14, darken: float = 0.55,
-                    rim=(255, 214, 160)) -> Image.Image:
-    """Cut-out subject over a blurred, darkened background, with a soft shadow and rim light."""
-    canvas = background.convert("RGB").resize((WIDTH, HEIGHT), Image.LANCZOS).filter(ImageFilter.GaussianBlur(blur))
+                    x_fraction: float = 0.62, blur: float = 8, darken: float = 0.5, rim=None) -> Image.Image:
+    """Cut-out subject over a different, softened and darkened scene, with a soft shadow (no glow)."""
+    cover = max(WIDTH / background.width, HEIGHT / background.height)
+    canvas = background.convert("RGB").resize((round(background.width * cover), round(background.height * cover)), Image.LANCZOS)
+    left, top = (canvas.width - WIDTH) // 2, (canvas.height - HEIGHT) // 2
+    canvas = canvas.crop((left, top, left + WIDTH, top + HEIGHT)).filter(ImageFilter.GaussianBlur(blur))
     canvas = ImageEnhance.Brightness(canvas).enhance(darken).convert("RGBA")
     scale = HEIGHT * height_fraction / subject.height
     subject = subject.resize((max(1, round(subject.width * scale)), max(1, round(subject.height * scale))), Image.LANCZOS)
@@ -454,9 +569,10 @@ def depth_composite(subject: Image.Image, background: Image.Image, *, height_fra
     x = max(-subject.width // 4, min(WIDTH - subject.width * 3 // 4, x))
     y = HEIGHT - subject.height + round(HEIGHT * 0.06)
     shadow = Image.new("RGBA", subject.size, (0, 0, 0, 0))
-    shadow.putalpha(subject.getchannel("A").point(lambda v: int(v * 0.55)).filter(ImageFilter.GaussianBlur(18)))
-    canvas.alpha_composite(shadow, (x + 14, y + 10))
-    canvas.alpha_composite(rim_light(subject, rim), (x, y))
+    shadow.putalpha(subject.getchannel("A").point(lambda v: int(v * 0.6)).filter(ImageFilter.GaussianBlur(22)))
+    canvas.alpha_composite(shadow, (x + 18, y + 12))
+    if rim:
+        canvas.alpha_composite(rim_light(subject, rim, width=2, strength=0.35), (x, y))
     canvas.alpha_composite(subject, (x, y))
     return canvas.convert("RGB")
 
@@ -470,7 +586,7 @@ def panels(candidates: list[Candidate], divider=(255, 255, 255)) -> Image.Image:
     for index, candidate in enumerate(candidates):
         left, right = edges[index], edges[index + 1]
         panel_width = right - left + slant * 2
-        piece = face_crop(candidate, panel_width, HEIGHT, face_height=0.38, face_x=0.5, face_y=0.38)
+        piece = face_crop(candidate, panel_width, HEIGHT, face_height=0.42, face_x=0.5, face_y=0.40)
         mask = Image.new("L", (WIDTH, HEIGHT), 0)
         top_left = left + (slant if index else -slant)
         top_right = right + (slant if index < count - 1 else slant * 2)
@@ -663,6 +779,55 @@ def finish(image: Image.Image, grade: str = "blockbuster") -> Image.Image:
 
 
 # ---------------------------------------------------------------- designs
+def _similar(a: Candidate, b: Candidate) -> bool:
+    return a is b or ("hash" in a.notes and "hash" in b.notes and (a.notes["hash"] ^ b.notes["hash"]).bit_count() <= 10)
+
+
+class _Picker:
+    """Hands out candidates so no image (or near-identical frame) appears in two designs."""
+
+    def __init__(self, candidates: list[Candidate]):
+        self.candidates = sorted(candidates, key=lambda c: -c.score)
+        self.used: list[Candidate] = []
+
+    def free(self, *, film: int | None = None, faces: bool = False) -> list[Candidate]:
+        return [c for c in self.candidates if not any(_similar(c, u) for u in self.used)
+                and (film is None or c.film == film) and (not faces or good_face(c))]
+
+    def any(self, *, film: int | None = None, faces: bool = False) -> Candidate:
+        """The best unused match; when everything has been used, the best overall (small lists)."""
+        for options in (self.free(film=film, faces=faces), self.free(faces=faces), self.free(film=film), self.free()):
+            if options:
+                return options[0]
+        return self.candidates[0]
+
+    def take(self, candidate: Candidate | None) -> Candidate | None:
+        if candidate is not None:
+            self.used.append(candidate)
+        return candidate
+
+
+def _backdrop_for(picker: _Picker, subject: Candidate) -> Candidate | None:
+    """A different scene for behind a cut-out: same film first, preferring frames without a big face."""
+    options = [c for c in picker.free(film=subject.film) if not _similar(c, subject)] or \
+              [c for c in picker.free() if not _similar(c, subject)]
+    if not options:
+        return None
+    return max(options, key=lambda c: (c.face is None) * 2 + c.action + c.genre_fit)
+
+
+def _face_design(picker: _Picker, cutter, candidate: Candidate, grade: str, *, face_x: float, height_fraction: float,
+                 face_height: float = 0.5) -> tuple[Image.Image, str]:
+    """Clean cut-out over another scene when possible, otherwise a tight, lit full-frame crop."""
+    subject = clean_cutout(cutter.cut(candidate.image))
+    backdrop = _backdrop_for(picker, candidate) if subject is not None else None
+    if subject is not None and backdrop is not None:
+        picker.take(backdrop)
+        return depth_composite(subject, backdrop.image, height_fraction=height_fraction, x_fraction=face_x,
+                               darken=0.42 if grade == "horror" else 0.5), "cutout"
+    return face_crop(candidate, face_height=face_height, face_x=face_x, face_y=0.42), "crop"
+
+
 def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], phrases: list[str],
           output: Path, work: Path, title: str | None = None, brief: str | None = None) -> list[dict]:
     work.mkdir(parents=True, exist_ok=True)
@@ -675,94 +840,66 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
         raise PipelineError("No usable thumbnail image for number one.")
     rated = rate_with_vision(candidates, profile=profile)
     candidates = [c for c in candidates if not c.notes.get("logo")] or candidates
-    by_film: dict[int, list[Candidate]] = {}
-    for candidate in sorted(candidates, key=lambda c: -c.score):
-        by_film.setdefault(candidate.film, []).append(candidate)
-    top = by_film.get(0) or sorted(candidates, key=lambda c: -c.score)
+    for candidate in candidates:
+        if candidate.notes.get("large_face") is False and candidate.face is not None and not candidate.notes.get("good_face"):
+            candidate.face = None  # the vision model sees no real face here
+    picker = _Picker(candidates)
     cutter = Cutter()
     report = []
-    text_mode = os.getenv("THUMBNAIL_TEXT", "none").strip().lower()
-    service = service_on_number_one(films)
     grade = profile["grade"]
 
-    # 1. Hero: number one's most genre-defining face, cut out over a darkened scene.
-    hero = next((c for c in top if c.face), top[0])
-    subject = cutter.cut(hero.image) if hero.face else None
-    if subject is not None:
-        # For dark genres the backdrop is the list's most genre-defining frame (the threat behind the face).
-        backdrop = hero
-        if grade in ("horror", "cold"):
-            backdrop = max((c for c in candidates if c is not hero), key=lambda c: c.genre_fit, default=hero)
-        image = depth_composite(subject, backdrop.image, height_fraction=1.12, x_fraction=0.6,
-                                blur=6 if backdrop is not hero else 14, darken=0.42 if grade == "horror" else 0.55,
-                                rim=profile["rim"])
-        style = "hero-depth"
+    def save_design(number: int, image: Image.Image, style: str, chosen: list[Candidate], **extra):
+        save(image, output / f"thumbnail-0{number}.jpg")
+        report.append({"file": f"thumbnail-0{number}.jpg", "style": style,
+                       "films": [films[c.film]["title"] for c in chosen], "sources": [c.source for c in chosen],
+                       "faces": [c.notes.get("face_quality") for c in chosen], **extra})
+
+    # 1. Hero: number one's best face, as big as possible.
+    hero = picker.take(picker.any(film=0, faces=True))
+    image, mode = _face_design(picker, cutter, hero, grade, face_x=0.6, height_fraction=1.15, face_height=0.52)
+    save_design(1, finish(image, grade), f"hero-{mode}", [hero])
+
+    # 2. Faces: the best face from two or three titles (only titles that have a good one).
+    faces = []
+    for film_index in sorted({c.film for c in picker.candidates}):
+        option = next(iter(picker.free(film=film_index, faces=True)), None)
+        if option is not None:
+            faces.append(picker.take(option))
+        if len(faces) == 3:
+            break
+    if len(faces) >= 2:
+        save_design(2, finish(panels(faces, profile["divider"]), grade), f"faces-{len(faces)}", faces)
     else:
-        image = face_crop(hero, face_height=0.42)
-        style = "hero-crop"
-    canvas = finish(image, grade)
-    save(canvas, output / "thumbnail-01.jpg")
-    report.append({"file": "thumbnail-01.jpg", "style": style, "source": hero.source, "film": films[hero.film]["title"],
-                   "genre_fit": round(hero.genre_fit, 2), "description": hero.description, "vision": hero.notes,
-                   "cutout_model": cutter.model})
+        for face in faces:
+            picker.used.remove(face)
+        single = picker.take(picker.any(faces=True))
+        image, mode = _face_design(picker, cutter, single, grade, face_x=0.42, height_fraction=1.1)
+        save_design(2, finish(image, grade), f"face-{mode}", [single])
 
-    # 2. Diagonal panels: the most genre-defining frame from up to three titles.
-    picks = []
-    for index in sorted(by_film)[:3]:
-        options = sorted(by_film[index], key=lambda c: -(c.genre_fit * 3 + c.score * 0.3))
-        picks.append(next((c for c in options if c is not hero), options[0]))
-    if len(picks) < 2 and len(top) > 1:
-        picks.append(top[1])
-    canvas = finish(panels(picks, profile["divider"]) if len(picks) >= 2 else face_crop(top[0]), grade)
-    if text_mode == "minimal" and phrases:
-        canvas = minimal_label(canvas, phrases[0])
-    save(canvas, output / "thumbnail-02.jpg")
-    report.append({"file": "thumbnail-02.jpg", "style": "diagonal-panels", "films": [films[p.film]["title"] for p in picks],
-                   "descriptions": [p.description for p in picks]})
+    # 3. Spectacle: the strongest scene of the list (action, scale, genre moment), full frame, no text.
+    scenes_left = picker.free() or picker.candidates
+    spectacle = picker.take(max(scenes_left, key=lambda c: c.action * 2 + c.genre_fit * 2 + c.notes.get("score", 5) / 5
+                                + (0.0 if c.face is None else -0.4)))
+    save_design(3, finish(face_crop(spectacle, face_height=0.4, face_x=0.5), grade), "spectacle", [spectacle])
 
-    # 3. Signature frame: the list's single most genre-defining frame, full bleed (never the hero image).
-    used = {id(hero), *(id(p) for p in picks)}
-    others = [c for c in candidates if id(c) not in used] or [c for c in candidates if c is not hero] or [hero]
-    signature = max(others, key=lambda c: c.genre_fit * 3 + c.score * 0.3 + c.action)
-    image = face_crop(signature, face_height=0.36, face_x=0.5)
-    canvas = finish(image, grade)
-    if service:
-        canvas = service_badge(canvas, service)
-    save(canvas, output / "thumbnail-03.jpg")
-    report.append({"file": "thumbnail-03.jpg", "style": "signature-frame", "film": films[signature.film]["title"],
-                   "genre_fit": round(signature.genre_fit, 2), "description": signature.description, "service_badge": service})
-    # 4. Streaming mark: number one (a different frame from design 1) with a big service mark.
-    alternatives = [c for c in top if c is not hero and id(c) not in used] or [c for c in candidates if c is not hero] or [hero]
-    star = max(alternatives, key=lambda c: (c.face is not None) * 2 + c.genre_fit * 2 + c.score * 0.3)
-    mark_service, mark_reason = choose_service(films, [p.film for p in picks], title)
-    subject = cutter.cut(star.image) if star.face else None
-    if subject is not None:
-        image = depth_composite(subject, star.image, height_fraction=1.1, x_fraction=0.64, blur=10,
-                                darken=0.45 if grade == "horror" else 0.6, rim=profile["rim"])
-    else:
-        image = face_crop(star, face_height=0.42, face_x=0.64)
-    canvas = service_mark(finish(image, grade), mark_service)
-    save(canvas, output / "thumbnail-04.jpg")
-    report.append({"file": "thumbnail-04.jpg", "style": "service-mark", "film": films[star.film]["title"],
-                   "service": mark_service, "service_reason": mark_reason})
+    # 4. Streaming mark: a strong face (number one first) on the right, the service mark top-left.
+    mark_service, mark_reason = choose_service(films, [c.film for c in faces], title)
+    star = picker.take(picker.any(film=0, faces=True))
+    image, mode = _face_design(picker, cutter, star, grade, face_x=0.66, height_fraction=1.1)
+    save_design(4, service_mark(finish(image, grade), mark_service), f"service-{mode}", [star],
+                service=mark_service, service_reason=mark_reason)
 
-    # 5. Headline: a short phrase from the title in huge letters beside a cut-out face.
-    used |= {id(star)}
-    pool = [c for c in candidates if id(c) not in used] or candidates
-    face_pick = max(pool, key=lambda c: (c.face is not None) * 3 + c.genre_fit * 2 + c.score * 0.3)
+    # 5. Headline: two to four huge words on the left, a strong face on the right.
+    face_pick = picker.take(picker.any(faces=True))
     phrase = short_phrase(title, phrases, profile["label"])
-    subject = cutter.cut(face_pick.image) if face_pick.face else None
-    if subject is not None:
-        image = depth_composite(subject, face_pick.image, height_fraction=1.08, x_fraction=0.74, blur=12,
-                                darken=0.4 if grade == "horror" else 0.55, rim=profile["rim"])
-    else:
-        image = face_crop(face_pick, face_height=0.46, face_x=0.76)
-    canvas = headline(finish(image, grade), phrase, profile["rim"])
-    save(canvas, output / "thumbnail-05.jpg")
-    report.append({"file": "thumbnail-05.jpg", "style": "headline", "film": films[face_pick.film]["title"], "text": phrase})
+    image, mode = _face_design(picker, cutter, face_pick, grade, face_x=0.74, height_fraction=1.08)
+    save_design(5, headline(finish(image, grade), phrase, profile["rim"]), f"headline-{mode}", [face_pick], text=phrase)
 
     save_json(work / "thumbnail-report.json", {"genre": genre, "vision_rated": rated, "candidates": len(candidates),
-                                               "thumbnails": report})
+              "good_faces": sum(good_face(c) for c in candidates), "thumbnails": report,
+              "pool": [{"film": films[c.film]["title"], "source": c.source, **{k: v for k, v in c.notes.items() if k != "hash"}}
+                       for c in picker.candidates]})
     print(f"Studio thumbnails ({genre}): {', '.join(item['style'] for item in report)}; "
-          f"{rated} candidates rated by the vision model.", flush=True)
+          f"{sum(good_face(c) for c in candidates)} good faces among {len(candidates)} candidates; "
+          f"{rated} rated by the vision model.", flush=True)
     return report

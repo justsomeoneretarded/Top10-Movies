@@ -20,6 +20,7 @@ def still(color, bars=False):
 def offline(monkeypatch):
     images = {"/a": still((150, 60, 40), bars=True), "/b": still((40, 90, 150)), "/c": still((60, 140, 70)), "/d": still((140, 130, 40))}
     monkeypatch.setattr(studio, "fetch_still", lambda path, cache: images.get(path))
+    monkeypatch.setattr("movie_pipeline.stills_trailer.fetch_original", lambda path, cache: None)
     monkeypatch.setattr(studio, "has_burned_text", lambda image: False)
     monkeypatch.setattr("movie_pipeline.scenes.rate_thumbnail", lambda image, *args, **kw: None)
     monkeypatch.setattr(studio.Cutter, "cut", lambda self, image: None)
@@ -41,13 +42,13 @@ def test_letterbox_bars_are_removed():
 def test_three_distinct_text_free_thumbnails(offline, tmp_path, monkeypatch):
     monkeypatch.delenv("THUMBNAIL_TEXT", raising=False)
     report = studio.build(films(), [], [], ["Watch these"], tmp_path, tmp_path / "work")
-    assert [r["style"] for r in report] == ["hero-crop", "diagonal-panels", "signature-frame", "service-mark", "headline"]
+    assert [r["style"].split("-")[0] for r in report] == ["hero", "face", "spectacle", "service", "headline"]
     pixels = [np.asarray(Image.open(tmp_path / f"thumbnail-0{i}.jpg"), dtype=float) for i in (1, 2, 3, 4, 5)]
     assert all(p.shape == (720, 1280, 3) for p in pixels)
     assert report[3]["service"] in studio.RANDOM_SERVICES and report[3]["service_reason"].startswith("random")
     assert report[4]["text"] == "Watch these"
-    assert np.abs(pixels[0] - pixels[2]).mean() > 10  # option 3 is a different picture
-    assert report[2]["service_badge"] is None
+    # With only four source images some reuse is unavoidable; uniqueness is tested with a larger pool below.
+    assert "service" not in report[2]  # only design 4 carries a service mark
 
 
 def test_panels_have_white_diagonal_dividers(offline):
@@ -58,7 +59,7 @@ def test_panels_have_white_diagonal_dividers(offline):
 
 def test_service_badge_only_when_number_one_is_listed(offline, tmp_path):
     report = studio.build(films("Paramount+ Amazon Channel"), [], [], ["x"], tmp_path, tmp_path / "work")
-    assert report[2]["service_badge"] == "Paramount Plus"
+    assert report[3]["service"] == "Paramount Plus"
     assert studio.service_on_number_one(films()) is None
 
 
@@ -132,3 +133,32 @@ def test_service_mark_prefers_a_real_listing():
 def test_short_phrase_uses_model_phrase_or_title_words():
     assert studio.short_phrase("x", ["Can't Sleep Horror"], "horror") == "Can't Sleep Horror"
     assert studio.short_phrase("Action Movies You Can't Miss", ["one", "a much too long thumbnail phrase here"], "action") == "Action Movies You"
+
+
+def test_blurry_frames_and_ragged_cutouts_are_rejected():
+    sharp = still((120, 80, 60))
+    soft = sharp.filter(__import__("PIL.ImageFilter", fromlist=["x"]).GaussianBlur(12))
+    assert studio.frame_sharpness(sharp) > 25 > studio.frame_sharpness(soft)
+    solid = Image.new("RGBA", (400, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(solid).ellipse((50, 50, 350, 580), fill=(200, 150, 120, 255))
+    assert studio.clean_cutout(solid) is not None
+    ragged = solid.copy()
+    draw = ImageDraw.Draw(ragged)
+    for x in range(0, 400, 40):
+        draw.rectangle((x, 0, x + 6, 600), fill=(0, 0, 0, 0))  # stripes torn through the subject
+    draw.rectangle((0, 0, 30, 30), fill=(255, 255, 255, 255))   # a stray background blob
+    assert studio.clean_cutout(ragged) is None
+
+
+def test_no_design_repeats_an_image(offline, tmp_path):
+    many = {f"/{i}": still((40 + 25 * i, 200 - 20 * i, 60 + 15 * (i % 3))) for i in range(9)}
+    for i, image in many.items():
+        ImageDraw.Draw(image).ellipse((200 + 90 * int(i[1:]), 200, 700 + 60 * int(i[1:]), 900), fill=(250, 250, 250))
+    import movie_pipeline.thumbnail_studio as module
+    module.fetch_still = lambda path, cache: many.get(path)
+    titles = [{"title": f"T{k}", "backdrops": [f"/{k * 3 + j}" for j in range(3)]} for k in range(3)]
+    report = studio.build(titles, [], [], ["Big words"], tmp_path, tmp_path / "work")
+    used = [tuple(r["sources"]) + tuple(r["films"]) for r in report]
+    assert len(report) == 5
+    hashes = [studio._dhash(Image.open(tmp_path / f"thumbnail-0{i}.jpg")) for i in range(1, 6)]
+    assert len(set(hashes)) == 5
