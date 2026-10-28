@@ -359,6 +359,10 @@ def gather(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]],
         kept, hashes = [], []
         for candidate in pool:
             candidate.image = trim_bars(candidate.image)
+            if candidate.image.width > 2560:
+                # 4K stills and frames are ~25 MB each in memory; 2560 px is plenty for a 1280x720 thumbnail.
+                ratio = 2560 / candidate.image.width
+                candidate.image = candidate.image.resize((2560, round(candidate.image.height * ratio)), Image.LANCZOS)
             sharp = frame_sharpness(candidate.image)
             if sharp < 25:
                 continue  # soft, motion-blurred or out-of-focus frames never become thumbnails

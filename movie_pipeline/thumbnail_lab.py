@@ -70,4 +70,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import traceback
+    try:
+        main()
+    except Exception as exc:  # report the cause on the run page (logs are not always readable)
+        notice("Thumbnail Lab failed", f"{type(exc).__name__}: {str(exc)[-600:]}\n{traceback.format_exc()[-1500:]}", "error")
+        raise

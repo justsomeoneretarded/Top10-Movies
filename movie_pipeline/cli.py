@@ -946,7 +946,9 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
         parts = {"script_parts": ["intro", "outro", *[f"film-{i}" for i in range(len(films))]],
                  "footage_parts": [str(i) for i in range(len(films))],
                  "genre": detect_genre(films, title, brief),
-                 "music_seconds": int(min(240, max(90, ctx.spec.target * 0.4)))}
+                 # ACE-Step stops any generation after 10 minutes (about 120 s of music on the CPU);
+                 # 100 s stays safely inside that, and the music bed loops it with crossfades.
+                 "music_seconds": 100}
         target = os.getenv("GITHUB_OUTPUT")
         if target:
             with open(target, "a", encoding="utf-8") as stream:

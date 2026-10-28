@@ -291,6 +291,9 @@ jobs:
         with:
           path: sdcpp
           key: sdcpp-cpu-avx2-${{ steps.sd.outputs.commit }}
+      - name: System dependencies
+        timeout-minutes: 35
+        run: bash scripts/install_system_packages.sh ffmpeg
       - name: Build stable-diffusion.cpp (CPU)
         run: bash scripts/build_sdcpp.sh "${{ steps.sd.outputs.commit }}"
       - name: Install Python dependencies
