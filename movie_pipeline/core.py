@@ -47,7 +47,9 @@ def duration(path: Path) -> float:
 def save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    # numpy numbers and booleans (from image analysis) are written as plain values, never a crash.
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False,
+                              default=lambda value: value.item() if hasattr(value, "item") else str(value)))
     tmp.replace(path)
 
 

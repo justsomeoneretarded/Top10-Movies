@@ -312,10 +312,10 @@ def face_quality(image: Image.Image) -> tuple[tuple[int, int, int, int] | None, 
         exposure = 1 - min(1.0, abs(float(face.mean()) - 125) / 110)
         s_size, s_sharp = min(1.0, size / 0.22), min(1.0, crisp / 260)
         score = 2 * s_size + 2 * s_sharp + (1.0 if found_eyes else 0.3) + 0.5 * exposure
-        good = size >= 0.1 and s_sharp >= 0.35 and found_eyes > 0 and y > 2 and exposure > 0.25
+        good = bool(size >= 0.1 and s_sharp >= 0.35 and found_eyes > 0 and y > 2 and exposure > 0.25)
         if score > best_score:
             best = tuple(int(v / scale) for v in (x, y, w, h))
-            best_score, best_good = score, good
+            best_score, best_good = float(score), good
     return best, best_score, best_good
 
 
@@ -851,7 +851,7 @@ def actor_cutouts(picker: _Picker, cutter, films: list[dict], limit_per_film: in
 def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], phrases: list[str],
           output: Path, work: Path, title: str | None = None, brief: str | None = None) -> list[dict]:
     from . import art
-    from .thumbnail_composite import background, compose
+    from .thumbnail_composite import actor_x, background, compose, focal_side
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     title = os.getenv("VIDEO_TITLE", "") if title is None else title
@@ -911,7 +911,8 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     # 1. Hero: number one's actor, huge, in the hero scene.
     hero_pick = actor(0) if "hero" in scenes else None
     if hero_pick:
-        image = compose(background(scenes["hero"], grade_scene), [(hero_pick[1], 0.6, 1.18, 1.0)], genre, seed=1)
+        scene = background(scenes["hero"], grade_scene)
+        image = compose(scene, [(hero_pick[1], actor_x(scene, 0.66), 1.02, 1.0)], genre, seed=1)
         save_design(1, finish_composite(image), "composite-hero", [hero_pick[0]], scene="hero")
     else:
         hero = picker.take(picker.any(film=0, faces=True))
@@ -923,7 +924,7 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     faces = []
     if pair:
         image = compose(background(scenes["faceoff"], grade_scene),
-                        [(pair[0][1], 0.24, 1.08, 1.0), (pair[1][1], 0.77, 1.08, 1.0)], genre, seed=2)
+                        [(pair[0][1], 0.22, 1.0, 1.0), (pair[1][1], 0.78, 1.0, 1.0)], genre, seed=2)
         save_design(2, finish_composite(image), "composite-faceoff", [pair[0][0], pair[1][0]], scene="faceoff")
         faces = [pair[0][0], pair[1][0]]
     else:
@@ -946,7 +947,7 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     trio = distinct_films(3) if "ensemble" in scenes else None
     if trio:
         image = compose(background(scenes["ensemble"], grade_scene),
-                        [(trio[1][1], 0.2, 0.95, 0.85), (trio[2][1], 0.8, 0.95, 0.85), (trio[0][1], 0.5, 1.15, 1.0)],
+                        [(trio[1][1], 0.2, 0.88, 0.85), (trio[2][1], 0.8, 0.88, 0.85), (trio[0][1], 0.5, 1.02, 1.0)],
                         genre, seed=3)
         save_design(3, finish_composite(image), "composite-ensemble", [c for c, _ in trio], scene="ensemble")
     else:
@@ -959,7 +960,10 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     mark_service, mark_reason = choose_service(films, [c.film for c in faces], title)
     star = (actor(0) or actor() or actor(0, fresh=False)) if "service" in scenes else None
     if star:
-        image = compose(background(scenes["service"], grade_scene), [(star[1], 0.67, 1.12, 1.0)], genre, seed=4)
+        scene = background(scenes["service"], grade_scene)
+        if focal_side(scene) == "right":
+            scene = scene.transpose(Image.FLIP_LEFT_RIGHT)  # keep the actor right; the service mark sits top-left
+        image = compose(scene, [(star[1], 0.68, 1.0, 1.0)], genre, seed=4)
         save_design(4, service_mark(finish_composite(image), mark_service), "composite-service", [star[0]],
                     scene="service", service=mark_service, service_reason=mark_reason)
     else:
@@ -973,8 +977,10 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     words_scene = scenes.get("hero") or scenes.get("service") or scenes.get("ensemble")
     face_pick = (actor() or actor(fresh=False)) if words_scene else None
     if face_pick:
-        scene = background(words_scene, grade_scene).transpose(Image.FLIP_LEFT_RIGHT)
-        image = compose(scene, [(face_pick[1], 0.75, 1.1, 1.0)], genre, seed=5)
+        scene = background(words_scene, grade_scene)
+        if focal_side(scene) != "right":
+            scene = scene.transpose(Image.FLIP_LEFT_RIGHT)  # the scene's drama sits behind the actor, words on the calm side
+        image = compose(scene, [(face_pick[1], 0.76, 1.0, 1.0)], genre, seed=5)
         save_design(5, headline(finish_composite(image), phrase, profile["rim"]), "composite-headline", [face_pick[0]], text=phrase)
     else:
         candidate = picker.take(picker.any(faces=True))

@@ -40,6 +40,30 @@ def scene_light(scene: Image.Image) -> tuple[str, tuple[int, int, int]]:
     return side, tuple(min(255, int(v * 255 / peak)) for v in color)
 
 
+def focal_x(scene: Image.Image) -> float:
+    """Horizontal position (0-1) of the scene's eye-catching element: the centre of its brightest, most colourful area."""
+    rgb = np.asarray(scene.convert("RGB").resize((320, 180)), dtype=np.float32)
+    luminance = cv2.GaussianBlur(rgb.mean(axis=2), (0, 0), 6)
+    saturation = cv2.GaussianBlur(rgb.max(axis=2) - rgb.min(axis=2), (0, 0), 6)
+    salience = luminance * 0.6 + saturation * 0.4
+    top = salience >= np.percentile(salience, 97)
+    columns = np.nonzero(top)[1]
+    return float(columns.mean() / 320) if columns.size else 0.5
+
+
+def focal_side(scene: Image.Image) -> str:
+    x = focal_x(scene)
+    return "left" if x < 0.45 else ("right" if x > 0.55 else "centre")
+
+
+def actor_x(scene: Image.Image, preferred: float) -> float:
+    """Put a single actor on the side away from the scene's focal point, so both read."""
+    x = focal_x(scene)
+    if x < 0.5:
+        return max(preferred, 1 - preferred, min(0.74, x + 0.42))
+    return min(preferred, 1 - preferred, max(0.26, x - 0.42))
+
+
 def harmonize(subject: Image.Image, scene: Image.Image, amount: float = 0.18) -> Image.Image:
     """Pull the actor's colour and contrast toward the scene's (LAB statistics), keeping skin natural."""
     rgba = np.asarray(subject.convert("RGBA"))

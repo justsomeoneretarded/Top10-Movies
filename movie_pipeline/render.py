@@ -702,7 +702,11 @@ def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str]
         try:
             return build_studio(films, trailers, shots, phrases, output, work)
         except Exception as exc:  # noqa: BLE001 -- the headline designs remain available
+            import traceback
+
+            from .core import notice
             print(f"Studio thumbnails unavailable ({type(exc).__name__}: {exc}); using headline still designs.", flush=True)
+            notice("Thumbnail studio fell back", f"{type(exc).__name__}: {str(exc)[:300]}\n{traceback.format_exc()[-1200:]}", "warning")
         try:
             return build_still_thumbnails(films, phrases, output, work)
         except Exception as exc:  # noqa: BLE001 -- stills are preferred, never required

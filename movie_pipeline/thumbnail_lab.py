@@ -63,6 +63,9 @@ def main():
     if report.exists():
         (output / "thumbnail-report.json").write_text(report.read_text())
         data = json.loads(report.read_text())
+        if not isinstance(data, dict):  # the fallback designs write a plain list
+            data = {"genre": "fallback designs", "thumbnails": [{"file": t.get("file", "?"), "style": t.get("style", "?"),
+                    "films": [str(t.get("film", ""))]} for t in data if isinstance(t, dict)]}
         notice("Thumbnail Lab", f"{data.get('genre')}: " + "; ".join(f"{t['file']} {t['style']} ({', '.join(t['films'])})"
                                                                for t in data.get("thumbnails", []))
                + f". Good faces: {data.get('good_faces')} of {data.get('candidates')}. {(time.time()-started)/60:.0f} min.")

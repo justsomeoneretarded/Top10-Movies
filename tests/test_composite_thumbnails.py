@@ -70,3 +70,9 @@ def test_studio_uses_scenes_when_they_exist(monkeypatch, tmp_path):
     assert [r["style"] for r in report] == ["composite-hero", "composite-faceoff", "composite-ensemble",
                                             "composite-service", "composite-headline"]
     assert len(report[2]["films"]) == 3 and len(set(report[1]["films"])) == 2
+
+
+def test_reports_with_numpy_values_are_saved(tmp_path):
+    from movie_pipeline.core import save_json
+    save_json(tmp_path / "r.json", {"good": np.bool_(True), "score": np.float64(2.5), "n": np.int64(3)})
+    assert (tmp_path / "r.json").read_text().count("true") == 1
