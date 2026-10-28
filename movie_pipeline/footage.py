@@ -16,6 +16,36 @@ MAX_CANDIDATES = 8
 MAX_QUALITY_DOWNLOADS = 3
 
 
+def identity_names(film: dict) -> list[str]:
+    """People and networks that a genuine trailer for this title usually names (from TMDB)."""
+    names = [*film.get("cast", [])[:5], *film.get("directors", [])[:2], *film.get("creators", [])[:3],
+             *film.get("networks", [])[:3]]
+    return [str(name) for name in names if isinstance(name, str) and name.strip()]
+
+
+def identity_ok(info: dict, film: dict) -> bool:
+    """A searched video must name someone or something from the right title (cast, director,
+    creator or network), so a remake or another country's version with the same name is rejected."""
+    names = identity_names(film)
+    if not names:
+        return True  # nothing to check against
+    text = " " + normalized(" ".join(str(info.get(field) or "") for field in ("title", "description", "uploader", "channel"))
+                            + " " + " ".join(map(str, info.get("tags") or []))) + " "
+    for name in names:
+        words = normalized(name).split()
+        if not words:
+            continue
+        if f" {' '.join(words)} " in text or (len(words) > 1 and len(words[-1]) >= 4 and f" {words[-1]} " in text):
+            return True
+    return False
+
+
+def search_query(film: dict, extra: str = "official trailer") -> str:
+    """YouTube search text; TV shows add their network so same-named remakes rank lower."""
+    network = (film.get("networks") or [""])[0] if film.get("kind") == "tv" else ""
+    return " ".join(part for part in (film["title"], str(film["year"]), network, extra) if part)
+
+
 def candidate_ok(info: dict, film: dict, curated: bool = False) -> bool:
     title = info.get("title", "")
     length = info.get("duration") or 0
@@ -26,7 +56,8 @@ def candidate_ok(info: dict, film: dict, curated: bool = False) -> bool:
     words = set(normalized(film["title"]).split())
     candidate_words = set(normalized(title).split())
     overlap = len(words & candidate_words) / max(1, len(words))
-    return overlap >= 0.85 and "trailer" in candidate_words and bool(info.get("channel_is_verified"))
+    return (overlap >= 0.85 and "trailer" in candidate_words and bool(info.get("channel_is_verified"))
+            and identity_ok(info, film))
 
 
 def effective_height(width, height) -> float:
@@ -197,7 +228,7 @@ def _download_route(film: dict, root: Path, path: Path, height: int, common: dic
     if not blocked and len(seen) < MAX_CANDIDATES and max((r[0] for r in ranked), default=0) < height:
         try:
             with yt_dlp.YoutubeDL({**common, "extract_flat": True}) as ydl:
-                result = ydl.extract_info(f"ytsearch6:{film['title']} {film['year']} official trailer", download=False)
+                result = ydl.extract_info(f"ytsearch6:{search_query(film)}", download=False)
             discovered = []
             for entry in (result or {}).get("entries", []):
                 if entry and re.fullmatch(r"[\w-]{11}", entry.get("id", "")):

@@ -73,7 +73,6 @@ thumbnail-02.jpg         diagonal panels
 thumbnail-03.jpg         strongest genre frame
 thumbnail-04.jpg         streaming-service mark
 thumbnail-05.jpg         short headline
-shorts/                  2-3 vertical Shorts (#1-#3) with word-by-word captions, plus a title/description .txt each
 review.html              one-page quality report: contact sheet, checks and thumbnail scores
 sources-and-credits.txt
 ```
@@ -109,7 +108,7 @@ One **Run workflow** press starts several jobs on separate free runners:
 3. **footage** — one job per title, starting right after research: primary and second trailer download, end-slate and text-card scan, sound-peak and shot analysis, AI scene descriptions.
 4. **music** — an original instrumental score in the video's genre with ACE-Step 1.5 (MIT); if it fails, the bundled licensed track is used. Turn off with the repository variable `GENRE_MUSIC=false`.
 5. **script** — one job per title plus intro and outro, after the plan: each writes, edits and fact-checks its section and records its narration.
-6. **produce** — the full pipeline. It reuses every warm-up result and continues with the joining pass, remaining narration, editing, mixing, thumbnails, Shorts, the review report and packaging, then uploads the single **movie-video-N** artifact.
+6. **produce** — the full pipeline. It reuses every warm-up result and continues with the joining pass, remaining narration, editing, mixing, thumbnails, the review report and packaging, then uploads the single **movie-video-N** artifact.
 
 Warm-up jobs are optional: if one fails, produce does that part itself, so a failed warm-up only costs time.
 

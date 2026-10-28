@@ -39,6 +39,9 @@ def secondary_candidate_ok(info: dict, film: dict, curated: bool = False) -> boo
     overlap = len(expected & found)/max(1, len(expected))
     if overlap < .85 or "trailer" not in found:
         return False
+    from .footage import identity_ok
+    if not identity_ok(info, film):
+        return False  # same name, different title (a remake or another country's version)
     if info.get("channel_is_verified"):
         return True
     return bool(FAN.search(title)) and str(film["year"]) in title
@@ -132,6 +135,9 @@ def download_secondary(film: dict, root: Path, primary: Path, minimum_size: tupl
         return None
 
 
+from .footage import search_query  # noqa: E402
+
+
 def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tuple[int,int]) -> Path | None:
     import yt_dlp
     record = json.loads(primary.with_suffix('.json').read_text())
@@ -180,7 +186,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
     if not blocked and len(seen)-1 < MAX_METADATA:
         try:
             with yt_dlp.YoutubeDL({**common,'extract_flat':True}) as ydl:
-                result = ydl.extract_info(f"ytsearch6:{film['title']} {film['year']} trailer",download=False)
+                result = ydl.extract_info(f"ytsearch6:{search_query(film, 'trailer')}",download=False)
             inspect([(entry.get('id',''),False) for entry in (result or {}).get('entries',[]) if entry])
         except (yt_dlp.utils.DownloadError,PipelineError,OSError,ValueError):
             blocked = True
