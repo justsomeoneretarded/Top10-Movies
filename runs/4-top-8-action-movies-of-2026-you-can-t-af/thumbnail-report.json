@@ -1,0 +1,17 @@
+[
+  {
+    "file": "thumbnail-01.jpg",
+    "style": "hero-still",
+    "film": "Avengers: Doomsday"
+  },
+  {
+    "file": "thumbnail-02.jpg",
+    "style": "cutout",
+    "cutout_model": "birefnet-portrait"
+  },
+  {
+    "file": "thumbnail-03.jpg",
+    "style": "netflix-style",
+    "netflix_badge": true
+  }
+]
