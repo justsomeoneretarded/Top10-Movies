@@ -46,12 +46,17 @@ def black_frames(video: Path) -> list[tuple[float, float]]:
     return [(float(a), float(b)) for a, b in re.findall(r"black_start:([\d.]+) black_end:([\d.]+)", result.stderr)]
 
 
-def repeated_shots(frames: list[tuple[float, Image.Image]], ignore_after: float, gap: float = 25.0) -> list[tuple[float, float]]:
+def repeated_shots(frames: list[tuple[float, Image.Image]], ignore_after: float, gap: float = 25.0,
+                   ignore: list[tuple[float, float]] | None = None) -> list[tuple[float, float]]:
+    """The same shot shown twice far apart, outside the intro, cold open and outro recap
+    (those deliberately preview or recap clips from the reviews)."""
     seen: list[tuple[float, int]] = []
     repeats = []
     for when, image in frames:
         if when >= ignore_after:
             break
+        if any(low <= when <= high for low, high in ignore or []):
+            continue
         value = _dhash(image)
         if value is None:
             continue
@@ -144,12 +149,12 @@ def _time(seconds: float) -> str:
 
 
 def build_review(output: Path, cues: list[dict], chapters: list[dict], genre: str, *, ending_seconds: float = 20.0,
-                 stills_films: list[str] | None = None) -> dict:
+                 stills_films: list[str] | None = None, montage: list[tuple[float, float]] | None = None) -> dict:
     video = output / "final-video.mp4"
     length = duration(video)
     frames = _frames(video, 2.0)
     blacks = [(a, b) for a, b in black_frames(video) if a < length - ending_seconds]
-    repeats = repeated_shots(frames, length - ending_seconds)
+    repeats = repeated_shots(frames, length - ending_seconds, ignore=montage)
     profile = loudness_profile(video)
     spikes = loudness_spikes(profile)
     drift = silent_captions(cues, profile)
@@ -167,7 +172,7 @@ def build_review(output: Path, cues: list[dict], chapters: list[dict], genre: st
         ("Films shown with stills (no trailer could be downloaded)", status(len(stills_films)),
          ", ".join(html.escape(name) for name in stills_films) or "none"),
         ("Black frames", status(len(blacks)), ", ".join(f"{_time(a)}–{_time(b)}" for a, b in blacks[:12]) or "none"),
-        ("Same shot shown twice", status(len(repeats)), ", ".join(f"{_time(a)} and {_time(b)}" for a, b in repeats[:12]) or "none"),
+        ("Same shot shown twice inside the reviews", status(len(repeats)), ", ".join(f"{_time(a)} and {_time(b)}" for a, b in repeats[:12]) or "none"),
         ("Loudness spikes", status(len(spikes), 3), ", ".join(_time(t) for t in spikes[:15]) or "none"),
         ("Captions over silence (drift)", status(len(drift), 3),
          "; ".join(f"{_time(float(c['start']))} “{html.escape(str(c['text'])[:50])}”" for c in drift[:8]) or "none"),

@@ -28,3 +28,11 @@ def test_review_page_is_written(tmp_path, monkeypatch):
     page = (tmp_path / "review.html").read_text()
     assert "Contact sheet" in page and "thumbnail-01.jpg" in page and "data:image/jpeg;base64," in page
     assert summary["thumbnails"][0]["file"] == "thumbnail-01.jpg"
+
+
+def test_intro_and_recap_repeats_are_not_counted():
+    pattern = Image.effect_mandelbrot((320, 180), (-2, -1, 1, 1), 60).convert("RGB")
+    other = Image.linear_gradient("L").resize((320, 180)).convert("RGB")
+    frames = [(0, pattern), (10, other), (40, pattern)]
+    assert repeated_shots(frames, ignore_after=100, ignore=[(35, 45)]) == []
+    assert repeated_shots(frames, ignore_after=100, ignore=[(0, 5)]) == []

@@ -876,7 +876,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                         stills_films.append(film["title"])
                 except (OSError, ValueError):
                     pass
-            review = build_review(output, all_cues, chapters, genre, stills_films=stills_films)
+            montage = [(entry["start"] / speed, (entry["start"] + entry["duration"]) / speed) for entry in timeline
+                       if entry.get("type") == "cold-open" or entry.get("section_kind") in ("intro", "outro")]
+            review = build_review(output, all_cues, chapters, genre, stills_films=stills_films, montage=montage)
             notice("Review report", f"review.html: {review['black_frames']} black-frame runs, {review['repeated_shots']} repeated shots, "
                    f"{review['loudness_spikes']} loudness spikes, {review['captions_on_silence']} captions over silence.")
         except Exception as exc:  # noqa: BLE001 -- the report is advisory
