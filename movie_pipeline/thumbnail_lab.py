@@ -40,7 +40,8 @@ def main():
     from .render import thumbnails
     from .shots import analyse
     started = time.time()
-    title, brief, movies = os.getenv("VIDEO_TITLE", ""), os.getenv("VIDEO_BRIEF", ""), os.getenv("MOVIE_LIST", "")
+    title, movies = os.getenv("VIDEO_TITLE", ""), os.getenv("MOVIE_LIST", "")
+    brief = os.getenv("VIDEO_BRIEF", "").strip() or f"{title}."  # the lab's brief is optional
     output = Path("lab-output")
     output.mkdir(parents=True, exist_ok=True)
     ctx = setup_run(title, brief, movies, Path("work/jobs"), output, started)

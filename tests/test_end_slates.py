@@ -75,3 +75,16 @@ def test_same_image_under_another_film_is_strongly_penalised():
     selector._scene_ranges["movie-1-extra.mp4"] = [{"start": 0, "end": 4}]
     selector._scene_hashes["movie-1-extra.mp4"] = [0b1011]
     assert selector.visual_reuse_penalty("movie-1-extra.mp4", 0, 3) < 1
+
+
+def test_black_fades_inside_a_trailer_never_become_shots(tmp_path):
+    from movie_pipeline.core import ffmpeg
+    from movie_pipeline.shots import analyse
+    clip = tmp_path / "fade.mp4"
+    # 6 s picture, 2 s black, 6 s picture, plus a lead-in and tail.
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=20", "-vf",
+           "drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='between(t,8,10)'",
+           "-c:v", "libx264", "-preset", "ultrafast", clip)
+    shots = analyse(clip, clip.with_suffix(".shots.json"))
+    assert shots
+    assert not any(shot["start"] < 9.6 and shot["end"] > 8.4 for shot in shots)

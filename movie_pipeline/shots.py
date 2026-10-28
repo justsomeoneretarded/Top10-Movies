@@ -168,7 +168,7 @@ def analyse(path: Path, cache: Path) -> list[dict]:
     combined: the trailer's scare/impact beats) and ``text_card`` for rating, release or
     studio cards found by OCR, which never reach the edit.
     """
-    cache = cache.with_name(cache.stem + ".calm-v5.json")
+    cache = cache.with_name(cache.stem + ".calm-v6.json")
     if cache.exists():
         return json.loads(cache.read_text())
     length = duration(path)
@@ -209,6 +209,11 @@ def analyse(path: Path, cache: Path) -> list[dict]:
     boundaries.append(end)
     cap.release()
     shots = []
+
+    def dark(sample) -> bool:
+        # Trailer fades to black (and near-black title gaps) must never reach the edit.
+        return sample[2] < 14 or (sample[2] < 24 and sample[3] < 7)
+
     for start, end in pairwise(boundaries):
         # Long uncut shots are subdivided to provide useful choices.
         for point in np.arange(start, end - 1.2, 12.0):
@@ -216,7 +221,22 @@ def analyse(path: Path, cache: Path) -> list[dict]:
             metrics = [s for s in samples if point <= s[0] < stop]
             if not metrics or np.mean([s[2] for s in metrics]) < 15 or np.mean([s[3] for s in metrics]) < 12:
                 continue
-            shots.append({"start": float(point), "end": stop, "motion": float(np.mean([s[1] for s in metrics]))})
+            # Split the window around dark samples; keep each lit stretch of at least 1.2 s.
+            runs, current = [], []
+            for sample in metrics:
+                if dark(sample):
+                    if current:
+                        runs.append((current, sample[0]))
+                    current = []
+                else:
+                    current.append(sample)
+            if current:
+                runs.append((current, stop))
+            for run, limit in runs:
+                begin = float(point) if run[0] is metrics[0] else run[0][0]
+                finish = min(limit - 0.25, stop) if limit < stop else stop
+                if finish - begin >= 1.2:
+                    shots.append({"start": begin, "end": finish, "motion": float(np.mean([s[1] for s in run]))})
     if not shots:
         raise PipelineError(f"No usable shots detected in {path.name}.")
     envelope = audio_envelope(path)

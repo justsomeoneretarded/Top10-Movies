@@ -171,11 +171,12 @@ def main() -> int:
     from .thumbnail_studio import detect_genre
     index = int(sys.argv[1])
     started = time.time()
-    title, brief = os.getenv("VIDEO_TITLE", ""), os.getenv("VIDEO_BRIEF", "")
-    ctx = setup_run(title, brief, os.getenv("MOVIE_LIST", ""), Path("work/jobs"), Path("output"), started)
-    genre = detect_genre(ctx.films, title, brief)
-    prompt = prompts(ctx.films, genre)[index]
+    title = os.getenv("VIDEO_TITLE", "")
+    brief = os.getenv("VIDEO_BRIEF", "").strip() or f"{title}."  # optional in the Thumbnail Lab
     try:
+        ctx = setup_run(title, brief, os.getenv("MOVIE_LIST", ""), Path("work/jobs"), Path("output"), started)
+        genre = detect_genre(ctx.films, title, brief)
+        prompt = prompts(ctx.films, genre)[index]
         models = download_models(Path(os.getenv("ART_MODELS", "work/art-models")))
         binary = Path(os.getenv("SD_BINARY", "sdcpp/build/bin/sd-cli"))
         generate(index, binary, models, prompt)
