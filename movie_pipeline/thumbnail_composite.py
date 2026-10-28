@@ -204,8 +204,24 @@ def person_cutout(cutter, image: Image.Image, face: tuple[int, int, int, int], c
     crop = image.crop((left, top, right, image.height))
     if crop.width < 200 or crop.height < 300:
         return None
-    cut = clean(cutter.cut(crop))
+    try:
+        full = cutter.cut(crop, crop=False)
+    except TypeError:  # older cutters always crop
+        full = cutter.cut(crop)
+    if full is None:
+        return None
+    single = True
+    if full.size == crop.size:
+        # At head height a single person is about one and a half face-widths wide; a second head
+        # (or a pet) next to them makes that band much wider.
+        alpha = np.asarray(full.getchannel("A")) > 128
+        row = min(alpha.shape[0] - 1, max(0, int(y - top + h * 0.5)))
+        band = alpha[max(0, row - h // 6): row + h // 6 + 1]
+        widths = band.sum(axis=1)
+        single = bool(widths.size and np.median(widths) <= w * 2.0)
+        box = full.getchannel("A").point(lambda v: 255 if v > 128 else 0).getbbox()
+        full = full.crop(box) if box else full
+    cut = clean(full)
     if cut is not None:
-        # Shoulders are about three face-widths across; much wider means a group (or a pet) came along.
-        cut.info["single"] = cut.width <= w * 3.6
+        cut.info["single"] = single
     return cut

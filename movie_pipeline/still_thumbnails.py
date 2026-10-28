@@ -177,7 +177,7 @@ class Cutter:
         self.model = None
         self.tried = False
 
-    def cut(self, image: Image.Image) -> Image.Image | None:
+    def cut(self, image: Image.Image, crop: bool = True) -> Image.Image | None:
         if not self.tried:
             self.tried = True
             try:
@@ -203,7 +203,7 @@ class Cutter:
         bbox = result.getchannel("A").point(lambda v: 255 if v > 128 else 0).getbbox()
         if not bbox or not 0.04 <= coverage <= 0.65 or (bbox[3] - bbox[1]) < image.height * 0.45:
             return None
-        return result.crop(bbox)
+        return result.crop(bbox) if crop else result
 
 
 def hero(still: Image.Image, phrase: str, count: int) -> Image.Image:

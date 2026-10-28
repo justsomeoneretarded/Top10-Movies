@@ -183,4 +183,9 @@ def extra_facts(details: dict, kind: str) -> dict:
     facts["backdrops"] = [b["file_path"] for b in backdrops[:14]]  # thumbnails use the first few; stills fallback uses more
     if not facts["backdrops"] and details.get("backdrop_path"):
         facts["backdrops"] = [details["backdrop_path"]]
+    # Text-free posters (character posters, key art): one actor, big, sharp - ideal thumbnail faces.
+    posters = [p for p in images.get("posters", []) if isinstance(p, dict) and p.get("file_path")
+               and p.get("iso_639_1") is None and (p.get("height") or 0) >= 1200]
+    posters.sort(key=lambda p: (p.get("vote_average") or 0, p.get("height") or 0), reverse=True)
+    facts["posters"] = [p["file_path"] for p in posters[:8]]
     return {name: value for name, value in facts.items() if value not in (None, "", [])}

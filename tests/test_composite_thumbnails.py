@@ -76,3 +76,27 @@ def test_reports_with_numpy_values_are_saved(tmp_path):
     from movie_pipeline.core import save_json
     save_json(tmp_path / "r.json", {"good": np.bool_(True), "score": np.float64(2.5), "n": np.int64(3)})
     assert (tmp_path / "r.json").read_text().count("true") == 1
+
+
+def test_person_cutout_flags_a_second_head_beside_the_face():
+    from types import SimpleNamespace
+
+    from movie_pipeline.thumbnail_studio import clean_cutout
+    image = Image.new("RGB", (1200, 1400), (50, 50, 50))
+    face = (500, 300, 160, 200)
+
+    def cutter_with(extra):
+        def cut(crop, crop_mode=True, **kw):
+            full = Image.new("RGBA", crop.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(full)
+            cx = 500 - max(0, int(500 - 160 * 1.6))
+            draw.ellipse((cx, 180, cx + 160, 380), fill=(200, 160, 130, 255))  # the face (crop starts 120 px higher)
+            draw.rectangle((cx - 120, 380, cx + 280, crop.height), fill=(60, 60, 90, 255))
+            if extra:
+                draw.ellipse((cx + 170, 190, cx + 370, 400), fill=(230, 220, 200, 255))  # a second head / a pet
+            return full
+        return SimpleNamespace(cut=lambda image, crop=True: cut(image))
+    alone = tc.person_cutout(cutter_with(False), image, face, clean_cutout)
+    crowded = tc.person_cutout(cutter_with(True), image, face, clean_cutout)
+    assert alone is not None and alone.info["single"] is True
+    assert crowded is None or crowded.info["single"] is False

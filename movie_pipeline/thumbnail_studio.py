@@ -340,6 +340,10 @@ def gather(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]],
             image = fetch_original(path, work / "stills") or fetch_still(path, work / "stills")
             if image is not None:
                 pool.append(Candidate(image, index, "tmdb-still"))
+        for path in film.get("posters", [])[:6]:
+            image = fetch_original(path, work / "stills")
+            if image is not None:
+                pool.append(Candidate(image, index, "tmdb-still"))  # text-free character posters
         if index < len(trailers) and index < len(shot_sets):
             chosen = genre_shots(trailers[index], shot_sets[index], profile)
             seen = {id(shot) for shot, _, _ in chosen}
