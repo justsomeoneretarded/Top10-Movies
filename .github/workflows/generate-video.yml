@@ -255,66 +255,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-  art:
-    # Background scenes for composite thumbnails (FLUX.2 [klein] 4B, Apache 2.0), one per job.
-    # Optional: without them the thumbnails use trailer frames and stills.
-    needs: prepare
-    if: ${{ vars.THUMBNAIL_COMPOSITE != 'false' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        scene: [0, 1, 2, 3]
-    env:
-      VIDEO_TITLE: ${{ inputs.title }}
-      VIDEO_BRIEF: ${{ inputs.description }}
-      MOVIE_LIST: ${{ inputs.movies }}
-      VIDEO_TYPE: ${{ inputs.content_type }}
-      NARRATOR: ${{ inputs.narrator }}
-      VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
-      TRY_4K: "${{ inputs.try_4k }}"
-      TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
-      PYTHONUNBUFFERED: '1'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-      - name: Find the current stable-diffusion.cpp version
-        id: sd
-        run: echo "commit=$(git ls-remote https://github.com/leejet/stable-diffusion.cpp HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
-      - name: Restore the stable-diffusion.cpp build
-        uses: actions/cache@v4
-        with:
-          path: sdcpp
-          key: sdcpp-cpu-avx2-${{ steps.sd.outputs.commit }}
-      - name: System dependencies
-        timeout-minutes: 35
-        run: bash scripts/install_system_packages.sh ffmpeg
-      - name: Build stable-diffusion.cpp (CPU)
-        run: bash scripts/build_sdcpp.sh "${{ steps.sd.outputs.commit }}"
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
-      - uses: actions/download-artifact@v4
-        with:
-          name: warm-prepare
-      - run: tar -xzf warm-prepare.tgz && rm warm-prepare.tgz
-      - name: Generate the scene
-        run: python -m movie_pipeline.art ${{ matrix.scene }}
-      - name: Package the scene
-        run: if ls work/art/*.png >/dev/null 2>&1; then tar -czf "warm-art-${{ matrix.scene }}.tgz" work/art; fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: warm-art-${{ matrix.scene }}
-          path: warm-art-*.tgz
-          if-no-files-found: ignore
-          retention-days: 1
-
   script:
     needs: [prepare, plan]
     runs-on: ubuntu-24.04
@@ -479,7 +419,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/youtube-cookies.txt"
 
   produce:
-    needs: [prepare, plan, script, footage, music, art]
+    needs: [prepare, plan, script, footage, music]
     # Runs even if some warm-up jobs failed; it does any missing work itself.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04

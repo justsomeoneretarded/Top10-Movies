@@ -23,7 +23,6 @@ def offline(monkeypatch):
     monkeypatch.setattr("movie_pipeline.stills_trailer.fetch_original", lambda path, cache: None)
     monkeypatch.setattr(studio, "has_burned_text", lambda image: False)
     monkeypatch.setattr("movie_pipeline.scenes.rate_thumbnail", lambda image, *args, **kw: None)
-    monkeypatch.setattr(studio.Cutter, "cut", lambda self, image: None)
 
 
 def films(service=None):
@@ -135,19 +134,10 @@ def test_short_phrase_uses_model_phrase_or_title_words():
     assert studio.short_phrase("Action Movies You Can't Miss", ["one", "a much too long thumbnail phrase here"], "action") == "Action Movies You"
 
 
-def test_blurry_frames_and_ragged_cutouts_are_rejected():
+def test_blurry_frames_are_rejected():
     sharp = still((120, 80, 60))
     soft = sharp.filter(__import__("PIL.ImageFilter", fromlist=["x"]).GaussianBlur(12))
     assert studio.frame_sharpness(sharp) > 25 > studio.frame_sharpness(soft)
-    solid = Image.new("RGBA", (400, 600), (0, 0, 0, 0))
-    ImageDraw.Draw(solid).ellipse((50, 50, 350, 580), fill=(200, 150, 120, 255))
-    assert studio.clean_cutout(solid) is not None
-    ragged = solid.copy()
-    draw = ImageDraw.Draw(ragged)
-    for x in range(0, 400, 40):
-        draw.rectangle((x, 0, x + 6, 600), fill=(0, 0, 0, 0))  # stripes torn through the subject
-    draw.rectangle((0, 0, 30, 30), fill=(255, 255, 255, 255))   # a stray background blob
-    assert studio.clean_cutout(ragged) is None
 
 
 def test_no_design_repeats_an_image(offline, tmp_path):
