@@ -828,9 +828,28 @@ def _face_design(picker: _Picker, cutter, candidate: Candidate, grade: str, *, f
     return face_crop(candidate, face_height=face_height, face_x=face_x, face_y=0.42), "crop"
 
 
+def actor_cutouts(picker: _Picker, cutter, films: list[dict], limit_per_film: int = 3) -> list[tuple[Candidate, Image.Image]]:
+    """Clean person cut-outs from the best good faces, number one first, at most a few per title."""
+    from .thumbnail_composite import person_cutout
+    result, per_film = [], {}
+    ordered = sorted((c for c in picker.candidates if good_face(c)),
+                     key=lambda c: (c.film, c.source != "tmdb-still", -c.score))
+    for candidate in ordered:
+        if per_film.get(candidate.film, 0) >= limit_per_film:
+            continue
+        cut = person_cutout(cutter, candidate.image, candidate.face, clean_cutout)
+        if cut is not None:
+            result.append((candidate, cut))
+            per_film[candidate.film] = per_film.get(candidate.film, 0) + 1
+    return result
+
+
 def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], phrases: list[str],
           output: Path, work: Path, title: str | None = None, brief: str | None = None) -> list[dict]:
+    from . import art
+    from .thumbnail_composite import background, compose
     work.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=True)
     title = os.getenv("VIDEO_TITLE", "") if title is None else title
     brief = os.getenv("VIDEO_BRIEF", "") if brief is None else brief
     genre = detect_genre(films, title, brief)
@@ -847,6 +866,10 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     cutter = Cutter()
     report = []
     grade = profile["grade"]
+    scenes = art.available() if os.getenv("THUMBNAIL_COMPOSITE", "true").strip().lower() != "false" else {}
+    actors = actor_cutouts(picker, cutter, films) if scenes else []
+    used_actors: set[int] = set()
+    grade_scene = (lambda image: genre_grade(image, grade, 0.6)) if grade != "blockbuster" else (lambda image: cinematic_grade(image, 0.6))
 
     def save_design(number: int, image: Image.Image, style: str, chosen: list[Candidate], **extra):
         save(image, output / f"thumbnail-0{number}.jpg")
@@ -854,52 +877,112 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
                        "films": [films[c.film]["title"] for c in chosen], "sources": [c.source for c in chosen],
                        "faces": [c.notes.get("face_quality") for c in chosen], **extra})
 
-    # 1. Hero: number one's best face, as big as possible.
-    hero = picker.take(picker.any(film=0, faces=True))
-    image, mode = _face_design(picker, cutter, hero, grade, face_x=0.6, height_fraction=1.15, face_height=0.52)
-    save_design(1, finish(image, grade), f"hero-{mode}", [hero])
+    def actor(film: int | None = None, *, fresh: bool = True):
+        """The best unused actor cut-out (from ``film`` when given)."""
+        for index, (candidate, cut) in enumerate(actors):
+            if (film is None or candidate.film == film) and (not fresh or index not in used_actors):
+                used_actors.add(index)
+                picker.take(candidate)
+                return candidate, cut
+        return None
 
-    # 2. Faces: the best face from two or three titles (only titles that have a good one).
-    faces = []
-    for film_index in sorted({c.film for c in picker.candidates}):
-        option = next(iter(picker.free(film=film_index, faces=True)), None)
-        if option is not None:
-            faces.append(picker.take(option))
-        if len(faces) == 3:
-            break
-    if len(faces) >= 2:
-        save_design(2, finish(panels(faces, profile["divider"]), grade), f"faces-{len(faces)}", faces)
+    def distinct_films(count: int, fresh: bool = True):
+        chosen, films_seen = [], set()
+        for index, (candidate, cut) in enumerate(actors):
+            if (not fresh or index not in used_actors) and candidate.film not in films_seen:
+                chosen.append((index, candidate, cut))
+                films_seen.add(candidate.film)
+            if len(chosen) == count:
+                break
+        if len(chosen) < count:
+            return distinct_films(count, fresh=False) if fresh else None  # small lists: reuse a picture
+        for index, candidate, _ in chosen:
+            used_actors.add(index)
+            picker.take(candidate)
+        return [(candidate, cut) for _, candidate, cut in chosen]
+
+    def finish_composite(image: Image.Image) -> Image.Image:
+        return finish(image, grade) if grade in ("horror", "cold") else cinematic_grade(image, 0.7)
+
+    # 1. Hero: number one's actor, huge, in the hero scene.
+    hero_pick = actor(0) if "hero" in scenes else None
+    if hero_pick:
+        image = compose(background(scenes["hero"], grade_scene), [(hero_pick[1], 0.6, 1.18, 1.0)], genre, seed=1)
+        save_design(1, finish_composite(image), "composite-hero", [hero_pick[0]], scene="hero")
     else:
-        for face in faces:
-            picker.used.remove(face)
-        single = picker.take(picker.any(faces=True))
-        image, mode = _face_design(picker, cutter, single, grade, face_x=0.42, height_fraction=1.1)
-        save_design(2, finish(image, grade), f"face-{mode}", [single])
+        hero = picker.take(picker.any(film=0, faces=True))
+        image, mode = _face_design(picker, cutter, hero, grade, face_x=0.6, height_fraction=1.15, face_height=0.52)
+        save_design(1, finish(image, grade), f"hero-{mode}", [hero])
 
-    # 3. Spectacle: the strongest scene of the list (action, scale, genre moment), full frame, no text.
-    scenes_left = picker.free() or picker.candidates
-    spectacle = picker.take(max(scenes_left, key=lambda c: c.action * 2 + c.genre_fit * 2 + c.notes.get("score", 5) / 5
-                                + (0.0 if c.face is None else -0.4)))
-    save_design(3, finish(face_crop(spectacle, face_height=0.4, face_x=0.5), grade), "spectacle", [spectacle])
+    # 2. Face-off: two actors from different titles at the edges, the scene's light between them.
+    pair = distinct_films(2) if "faceoff" in scenes else None
+    faces = []
+    if pair:
+        image = compose(background(scenes["faceoff"], grade_scene),
+                        [(pair[0][1], 0.24, 1.08, 1.0), (pair[1][1], 0.77, 1.08, 1.0)], genre, seed=2)
+        save_design(2, finish_composite(image), "composite-faceoff", [pair[0][0], pair[1][0]], scene="faceoff")
+        faces = [pair[0][0], pair[1][0]]
+    else:
+        for film_index in sorted({c.film for c in picker.candidates}):
+            option = next(iter(picker.free(film=film_index, faces=True)), None)
+            if option is not None:
+                faces.append(picker.take(option))
+            if len(faces) == 3:
+                break
+        if len(faces) >= 2:
+            save_design(2, finish(panels(faces, profile["divider"]), grade), f"faces-{len(faces)}", faces)
+        else:
+            for face in faces:
+                picker.used.remove(face)
+            single = picker.take(picker.any(faces=True))
+            image, mode = _face_design(picker, cutter, single, grade, face_x=0.42, height_fraction=1.1)
+            save_design(2, finish(image, grade), f"face-{mode}", [single])
 
-    # 4. Streaming mark: a strong face (number one first) on the right, the service mark top-left.
+    # 3. Ensemble: three titles' actors, the centre one biggest (team-poster layout); else the spectacle frame.
+    trio = distinct_films(3) if "ensemble" in scenes else None
+    if trio:
+        image = compose(background(scenes["ensemble"], grade_scene),
+                        [(trio[1][1], 0.2, 0.95, 0.85), (trio[2][1], 0.8, 0.95, 0.85), (trio[0][1], 0.5, 1.15, 1.0)],
+                        genre, seed=3)
+        save_design(3, finish_composite(image), "composite-ensemble", [c for c, _ in trio], scene="ensemble")
+    else:
+        scenes_left = picker.free() or picker.candidates
+        spectacle = picker.take(max(scenes_left, key=lambda c: c.action * 2 + c.genre_fit * 2 + c.notes.get("score", 5) / 5
+                                    + (0.0 if c.face is None else -0.4)))
+        save_design(3, finish(face_crop(spectacle, face_height=0.4, face_x=0.5), grade), "spectacle", [spectacle])
+
+    # 4. Streaming mark: number one again (another picture) in its scene, the service mark top-left.
     mark_service, mark_reason = choose_service(films, [c.film for c in faces], title)
-    star = picker.take(picker.any(film=0, faces=True))
-    image, mode = _face_design(picker, cutter, star, grade, face_x=0.66, height_fraction=1.1)
-    save_design(4, service_mark(finish(image, grade), mark_service), f"service-{mode}", [star],
-                service=mark_service, service_reason=mark_reason)
+    star = (actor(0) or actor() or actor(0, fresh=False)) if "service" in scenes else None
+    if star:
+        image = compose(background(scenes["service"], grade_scene), [(star[1], 0.67, 1.12, 1.0)], genre, seed=4)
+        save_design(4, service_mark(finish_composite(image), mark_service), "composite-service", [star[0]],
+                    scene="service", service=mark_service, service_reason=mark_reason)
+    else:
+        candidate = picker.take(picker.any(film=0, faces=True))
+        image, mode = _face_design(picker, cutter, candidate, grade, face_x=0.66, height_fraction=1.1)
+        save_design(4, service_mark(finish(image, grade), mark_service), f"service-{mode}", [candidate],
+                    service=mark_service, service_reason=mark_reason)
 
-    # 5. Headline: two to four huge words on the left, a strong face on the right.
-    face_pick = picker.take(picker.any(faces=True))
+    # 5. Headline: two to four huge words left, an actor right, in a mirrored scene.
     phrase = short_phrase(title, phrases, profile["label"])
-    image, mode = _face_design(picker, cutter, face_pick, grade, face_x=0.74, height_fraction=1.08)
-    save_design(5, headline(finish(image, grade), phrase, profile["rim"]), f"headline-{mode}", [face_pick], text=phrase)
+    words_scene = scenes.get("hero") or scenes.get("service") or scenes.get("ensemble")
+    face_pick = (actor() or actor(fresh=False)) if words_scene else None
+    if face_pick:
+        scene = background(words_scene, grade_scene).transpose(Image.FLIP_LEFT_RIGHT)
+        image = compose(scene, [(face_pick[1], 0.75, 1.1, 1.0)], genre, seed=5)
+        save_design(5, headline(finish_composite(image), phrase, profile["rim"]), "composite-headline", [face_pick[0]], text=phrase)
+    else:
+        candidate = picker.take(picker.any(faces=True))
+        image, mode = _face_design(picker, cutter, candidate, grade, face_x=0.74, height_fraction=1.08)
+        save_design(5, headline(finish(image, grade), phrase, profile["rim"]), f"headline-{mode}", [candidate], text=phrase)
 
     save_json(work / "thumbnail-report.json", {"genre": genre, "vision_rated": rated, "candidates": len(candidates),
-              "good_faces": sum(good_face(c) for c in candidates), "thumbnails": report,
+              "good_faces": sum(good_face(c) for c in candidates), "scenes": sorted(scenes), "actor_cutouts": len(actors),
+              "thumbnails": report,
               "pool": [{"film": films[c.film]["title"], "source": c.source, **{k: v for k, v in c.notes.items() if k != "hash"}}
                        for c in picker.candidates]})
-    print(f"Studio thumbnails ({genre}): {', '.join(item['style'] for item in report)}; "
-          f"{sum(good_face(c) for c in candidates)} good faces among {len(candidates)} candidates; "
+    print(f"Studio thumbnails ({genre}): {', '.join(item['style'] for item in report)}; scenes {sorted(scenes)}; "
+          f"{len(actors)} actor cut-outs; {sum(good_face(c) for c in candidates)} good faces among {len(candidates)} candidates; "
           f"{rated} rated by the vision model.", flush=True)
     return report

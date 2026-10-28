@@ -37,7 +37,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  art:
+    # One generated background scene per job (FLUX.2 [klein] 4B on the CPU), all four at once.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        scene: [0, 1, 2, 3]
+    env:
+      VIDEO_TITLE: ${{ inputs.title }}
+      VIDEO_BRIEF: ${{ inputs.description }}
+      MOVIE_LIST: ${{ inputs.movies }}
+      VIDEO_TYPE: ${{ inputs.content_type }}
+      NARRATOR: Warguy
+      VIDEO_MINUTES: Auto
+      TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Find the current stable-diffusion.cpp version
+        id: sd
+        run: echo "commit=$(git ls-remote https://github.com/leejet/stable-diffusion.cpp HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
+      - name: Restore the stable-diffusion.cpp build
+        uses: actions/cache@v4
+        with:
+          path: sdcpp
+          key: sdcpp-cpu-avx2-${{ steps.sd.outputs.commit }}
+      - name: Build stable-diffusion.cpp (CPU)
+        run: bash scripts/build_sdcpp.sh "${{ steps.sd.outputs.commit }}"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+      - name: Generate the scene
+        run: python -m movie_pipeline.art ${{ matrix.scene }}
+      - name: Package the scene
+        run: if ls work/art/*.png >/dev/null 2>&1; then tar -czf "warm-art-${{ matrix.scene }}.tgz" work/art; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warm-art-${{ matrix.scene }}
+          path: warm-art-*.tgz
+          if-no-files-found: ignore
+          retention-days: 1
+
   lab:
+    needs: art
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -90,6 +141,15 @@ jobs:
           sh "$RUNNER_TEMP/ollama.sh"
           (ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &)
           for i in $(seq 1 60); do curl -sf "$OLLAMA_URL/api/tags" >/dev/null && break; sleep 1; done
+      - name: Collect the generated scenes
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: warm-art-*
+          merge-multiple: true
+          path: art-results
+      - name: Unpack the generated scenes
+        run: for archive in art-results/*.tgz; do [ -f "$archive" ] && tar -xzf "$archive"; done; ls work/art 2>/dev/null || echo "no scenes"
       - name: Build the thumbnails
         run: bash scripts/run_logged.sh "Thumbnail Lab" python -m movie_pipeline.thumbnail_lab
       - name: Remove temporary YouTube cookies
@@ -115,6 +175,7 @@ jobs:
           fi
           mkdir -p "../lab/$target"
           cp lab-output/*.jpg lab-output/*.json "../lab/$target/" 2>/dev/null || true
+          mkdir -p "../lab/$target/scenes" && cp work/art/*.png "../lab/$target/scenes/" 2>/dev/null || true
           cd ../lab
           git add -A
           git commit -q -m "Thumbnail Lab ${RUN}: ${VIDEO_TITLE}"
