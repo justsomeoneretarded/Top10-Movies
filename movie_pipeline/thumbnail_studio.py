@@ -235,13 +235,13 @@ def has_burned_text(image: Image.Image) -> bool:
     """Reject frames with captions, title cards, or a channel/streaming logo (even a small corner bug)."""
     from .shots import frame_text
     text = frame_text(image)
-    if len(re.findall(r"[A-Za-z]{3,}", text)) >= 3 or LOGO_WORDS.search(text):
+    if len(re.findall(r"\b[A-Za-z]{4,}\b", text)) >= 3 or LOGO_WORDS.search(text):
         return True
     w, h = image.size
     for box in ((0, 0, w * .26, h * .2), (w * .74, 0, w, h * .2), (0, h * .8, w * .26, h), (w * .74, h * .8, w, h)):
         corner = image.crop(tuple(round(v) for v in box)).resize((round(w * .26 * 2.5), round(h * .2 * 2.5)))
         found = frame_text(corner)
-        if re.search(r"[A-Za-z]{4,}", found) or LOGO_WORDS.search(found):
+        if LOGO_WORDS.search(found) or len(re.findall(r"\b[A-Za-z]{4,}\b", found)) >= 2:
             return True
     return False
 
@@ -311,8 +311,11 @@ def face_quality(image: Image.Image) -> tuple[tuple[int, int, int, int] | None, 
         found_eyes = len(eyes.detectMultiScale(face[: h // 2 + h // 8], 1.1, 5, minSize=(max(8, w // 8), max(8, w // 8)))) if eyes is not None else 1
         exposure = 1 - min(1.0, abs(float(face.mean()) - 125) / 110)
         s_size, s_sharp = min(1.0, size / 0.22), min(1.0, crisp / 260)
-        score = 2 * s_size + 2 * s_sharp + (1.0 if found_eyes else 0.3) + 0.5 * exposure
-        good = bool(size >= 0.1 and s_sharp >= 0.35 and found_eyes > 0 and y > 2 and exposure > 0.25)
+        score = 2 * s_size + 2 * s_sharp + (1.0 if found_eyes else 0.5) + 0.5 * exposure
+        # Good = enough real pixels on the face (it is cut out and enlarged), sharp, well exposed, not cut off.
+        # Eye detection is unreliable on real photos, so it only adds to the score.
+        face_pixels = h / scale
+        good = bool(face_pixels >= 70 and size >= 0.05 and s_sharp >= 0.35 and y > 2 and exposure > 0.25)
         if score > best_score:
             best = tuple(int(v / scale) for v in (x, y, w, h))
             best_score, best_good = float(score), good
@@ -377,7 +380,8 @@ def gather(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]],
             kept.append(candidate)
             hashes.append(value)
         kept.sort(key=lambda c: -c.score)
-        clean = [c for c in kept if not has_burned_text(c.image)][:per_film]
+        # TMDB backdrops are already chosen text-free; only trailer frames are checked for captions and logos.
+        clean = [c for c in kept if c.source == "tmdb-still" or not has_burned_text(c.image)][:per_film]
         candidates.extend(clean or kept[:2])
     return candidates
 
