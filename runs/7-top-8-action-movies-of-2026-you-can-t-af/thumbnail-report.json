@@ -1,0 +1,378 @@
+{
+  "genre": "action",
+  "vision_rated": 0,
+  "candidates": 40,
+  "good_faces": 6,
+  "scenes": [
+    "ensemble",
+    "faceoff",
+    "hero",
+    "service"
+  ],
+  "actor_cutouts": 5,
+  "thumbnails": [
+    {
+      "file": "thumbnail-01.jpg",
+      "style": "composite-hero",
+      "films": [
+        "Mortal Kombat II"
+      ],
+      "sources": [
+        "tmdb-still"
+      ],
+      "faces": [
+        4.79
+      ],
+      "scene": "hero"
+    },
+    {
+      "file": "thumbnail-02.jpg",
+      "style": "composite-faceoff",
+      "films": [
+        "Mortal Kombat II",
+        "Supergirl"
+      ],
+      "sources": [
+        "tmdb-still",
+        "tmdb-still"
+      ],
+      "faces": [
+        4.79,
+        4.75
+      ],
+      "scene": "faceoff"
+    },
+    {
+      "file": "thumbnail-03.jpg",
+      "style": "composite-ensemble",
+      "films": [
+        "Mortal Kombat II",
+        "Supergirl",
+        "Mortal Kombat II"
+      ],
+      "sources": [
+        "tmdb-still",
+        "tmdb-still",
+        "tmdb-still"
+      ],
+      "faces": [
+        4.19,
+        3.11,
+        4.23
+      ],
+      "scene": "ensemble"
+    },
+    {
+      "file": "thumbnail-04.jpg",
+      "style": "composite-service",
+      "films": [
+        "Mortal Kombat II"
+      ],
+      "sources": [
+        "tmdb-still"
+      ],
+      "faces": [
+        4.79
+      ],
+      "scene": "service",
+      "service": "HBO Max",
+      "service_reason": "listed for Mortal Kombat II"
+    },
+    {
+      "file": "thumbnail-05.jpg",
+      "style": "composite-headline",
+      "films": [
+        "Mortal Kombat II"
+      ],
+      "sources": [
+        "tmdb-still"
+      ],
+      "faces": [
+        4.79
+      ],
+      "text": "2026 Action Hits"
+    }
+  ],
+  "pool": [
+    {
+      "film": "The Odyssey",
+      "source": "tmdb-still",
+      "sharpness": 414,
+      "face_quality": 4.89,
+      "good_face": true
+    },
+    {
+      "film": "Mortal Kombat II",
+      "source": "tmdb-still",
+      "sharpness": 275,
+      "face_quality": 4.79,
+      "good_face": true
+    },
+    {
+      "film": "Mortal Kombat II",
+      "source": "tmdb-still",
+      "sharpness": 1316,
+      "face_quality": 4.19,
+      "good_face": true
+    },
+    {
+      "film": "Mortal Kombat II",
+      "source": "tmdb-still",
+      "sharpness": 2521,
+      "face_quality": 4.23,
+      "good_face": true
+    },
+    {
+      "film": "Supergirl",
+      "source": "tmdb-still",
+      "sharpness": 187,
+      "face_quality": 4.75,
+      "good_face": true
+    },
+    {
+      "film": "Supergirl",
+      "source": "tmdb-still",
+      "sharpness": 2459,
+      "face_quality": 3.11,
+      "good_face": true
+    },
+    {
+      "film": "Supergirl",
+      "source": "tmdb-still",
+      "sharpness": 514,
+      "face_quality": 3.51,
+      "good_face": false
+    },
+    {
+      "film": "Supergirl",
+      "source": "tmdb-still",
+      "sharpness": 2284,
+      "face_quality": 3.21,
+      "good_face": false
+    },
+    {
+      "film": "Spider-Man: Brand New Day",
+      "source": "tmdb-still",
+      "sharpness": 219,
+      "face_quality": 3.65,
+      "good_face": false
+    },
+    {
+      "film": "Mortal Kombat II",
+      "source": "tmdb-still",
+      "sharpness": 930,
+      "face_quality": 2.8,
+      "good_face": false
+    },
+    {
+      "film": "Avengers: Doomsday",
+      "source": "trailer-frame",
+      "sharpness": 220,
+      "face_quality": 3.23,
+      "good_face": false
+    },
+    {
+      "film": "Avengers: Doomsday",
+      "source": "tmdb-still",
+      "sharpness": 938,
+      "face_quality": 2.25,
+      "good_face": false
+    },
+    {
+      "film": "Supergirl",
+      "source": "tmdb-still",
+      "sharpness": 746,
+      "face_quality": 2.38,
+      "good_face": false
+    },
+    {
+      "film": "Mortal Kombat II",
+      "source": "tmdb-still",
+      "sharpness": 1108,
+      "face_quality": 2.24,
+      "good_face": false
+    },
+    {
+      "film": "Mortal Kombat II",
+      "source": "trailer-frame",
+      "sharpness": 180,
+      "face_quality": 2.8,
+      "good_face": false
+    },
+    {
+      "film": "Avengers: Doomsday",
+      "source": "tmdb-still",
+      "sharpness": 122,
+      "face_quality": 3.18,
+      "good_face": false
+    },
+    {
+      "film": "The Odyssey",
+      "source": "tmdb-still",
+      "sharpness": 56,
+      "face_quality": 2.86,
+      "good_face": false
+    },
+    {
+      "film": "Mortal Kombat II",
+      "source": "tmdb-still",
+      "sharpness": 372,
+      "face_quality": 2.18,
+      "good_face": false
+    },
+    {
+      "film": "Spider-Man: Brand New Day",
+      "source": "tmdb-still",
+      "sharpness": 593,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Avengers: Doomsday",
+      "source": "tmdb-still",
+      "sharpness": 499,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Avengers: Doomsday",
+      "source": "tmdb-still",
+      "sharpness": 1069,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Avengers: Doomsday",
+      "source": "tmdb-still",
+      "sharpness": 713,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Avengers: Doomsday",
+      "source": "tmdb-still",
+      "sharpness": 725,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "The Odyssey",
+      "source": "tmdb-still",
+      "sharpness": 531,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Spider-Man: Brand New Day",
+      "source": "tmdb-still",
+      "sharpness": 415,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Spider-Man: Brand New Day",
+      "source": "tmdb-still",
+      "sharpness": 402,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Avengers: Doomsday",
+      "source": "tmdb-still",
+      "sharpness": 144,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Spider-Man: Brand New Day",
+      "source": "tmdb-still",
+      "sharpness": 396,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "The Odyssey",
+      "source": "tmdb-still",
+      "sharpness": 786,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Supergirl",
+      "source": "tmdb-still",
+      "sharpness": 399,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Supergirl",
+      "source": "tmdb-still",
+      "sharpness": 627,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Spider-Man: Brand New Day",
+      "source": "tmdb-still",
+      "sharpness": 354,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Spider-Man: Brand New Day",
+      "source": "tmdb-still",
+      "sharpness": 350,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Supergirl",
+      "source": "tmdb-still",
+      "sharpness": 813,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Spider-Man: Brand New Day",
+      "source": "trailer-frame",
+      "sharpness": 70,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "The Odyssey",
+      "source": "trailer-frame",
+      "sharpness": 268,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "The Odyssey",
+      "source": "tmdb-still",
+      "sharpness": 260,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Mortal Kombat II",
+      "source": "tmdb-still",
+      "sharpness": 176,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "The Odyssey",
+      "source": "tmdb-still",
+      "sharpness": 90,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "The Odyssey",
+      "source": "tmdb-still",
+      "sharpness": 37,
+      "face_quality": 0.0,
+      "good_face": false
+    }
+  ]
+}
