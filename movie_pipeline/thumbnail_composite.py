@@ -204,4 +204,8 @@ def person_cutout(cutter, image: Image.Image, face: tuple[int, int, int, int], c
     crop = image.crop((left, top, right, image.height))
     if crop.width < 200 or crop.height < 300:
         return None
-    return clean(cutter.cut(crop))
+    cut = clean(cutter.cut(crop))
+    if cut is not None:
+        # Shoulders are about three face-widths across; much wider means a group (or a pet) came along.
+        cut.info["single"] = cut.width <= w * 3.6
+    return cut

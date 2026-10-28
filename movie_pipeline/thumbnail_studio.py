@@ -885,25 +885,32 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
                        "films": [films[c.film]["title"] for c in chosen], "sources": [c.source for c in chosen],
                        "faces": [c.notes.get("face_quality") for c in chosen], **extra})
 
-    def actor(film: int | None = None, *, fresh: bool = True):
-        """The best unused actor cut-out (from ``film`` when given)."""
+    def actor(film: int | None = None, *, fresh: bool = True, single: bool = False):
+        """The best unused actor cut-out (from ``film`` when given; one person only when ``single``)."""
         for index, (candidate, cut) in enumerate(actors):
-            if (film is None or candidate.film == film) and (not fresh or index not in used_actors):
+            if ((film is None or candidate.film == film) and (not fresh or index not in used_actors)
+                    and (not single or cut.info.get("single", True))):
                 used_actors.add(index)
                 picker.take(candidate)
                 return candidate, cut
         return None
 
-    def distinct_films(count: int, fresh: bool = True):
+    def any_actor(film: int | None = None, single: bool = False):
+        """Number one's actor when possible, else the best other one; reuse only as a last resort."""
+        return (actor(film, single=single) or actor(single=single) or actor(film) or actor()
+                or actor(film, fresh=False) or actor(fresh=False))
+
+    def distinct_films(count: int, fresh: bool = True, single: bool = False):
         chosen, films_seen = [], set()
         for index, (candidate, cut) in enumerate(actors):
-            if (not fresh or index not in used_actors) and candidate.film not in films_seen:
+            if ((not fresh or index not in used_actors) and candidate.film not in films_seen
+                    and (not single or cut.info.get("single", True))):
                 chosen.append((index, candidate, cut))
                 films_seen.add(candidate.film)
             if len(chosen) == count:
                 break
         if len(chosen) < count:
-            return distinct_films(count, fresh=False) if fresh else None  # small lists: reuse a picture
+            return distinct_films(count, fresh=False, single=single) if fresh else None  # small lists: reuse a picture
         for index, candidate, _ in chosen:
             used_actors.add(index)
             picker.take(candidate)
@@ -913,7 +920,7 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
         return finish(image, grade) if grade in ("horror", "cold") else cinematic_grade(image, 0.7)
 
     # 1. Hero: number one's actor, huge, in the hero scene.
-    hero_pick = actor(0) if "hero" in scenes else None
+    hero_pick = any_actor(0, single=True) if "hero" in scenes else None
     if hero_pick:
         scene = background(scenes["hero"], grade_scene)
         image = compose(scene, [(hero_pick[1], actor_x(scene, 0.66), 1.02, 1.0)], genre, seed=1)
@@ -924,11 +931,16 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
         save_design(1, finish(image, grade), f"hero-{mode}", [hero])
 
     # 2. Face-off: two actors from different titles at the edges, the scene's light between them.
-    pair = distinct_films(2) if "faceoff" in scenes else None
+    pair = None
+    if "faceoff" in scenes:
+        pair = distinct_films(2, single=True) or distinct_films(2)
+        if pair is None and len(actors) >= 2:
+            first, second = any_actor(single=True), any_actor(single=True)
+            pair = [first, second] if first and second and first[1] is not second[1] else None
     faces = []
     if pair:
         image = compose(background(scenes["faceoff"], grade_scene),
-                        [(pair[0][1], 0.22, 1.0, 1.0), (pair[1][1], 0.78, 1.0, 1.0)], genre, seed=2)
+                        [(pair[0][1], 0.2, 0.92, 1.0), (pair[1][1], 0.8, 0.92, 1.0)], genre, seed=2)
         save_design(2, finish_composite(image), "composite-faceoff", [pair[0][0], pair[1][0]], scene="faceoff")
         faces = [pair[0][0], pair[1][0]]
     else:
@@ -948,7 +960,17 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
             save_design(2, finish(image, grade), f"face-{mode}", [single])
 
     # 3. Ensemble: three titles' actors, the centre one biggest (team-poster layout); else the spectacle frame.
-    trio = distinct_films(3) if "ensemble" in scenes else None
+    trio = None
+    if "ensemble" in scenes and actors:
+        trio = distinct_films(3)
+        if trio is None:
+            members = [m for m in (distinct_films(2) or []) ]
+            while len(members) < 3 and len(actors) > len(members):
+                extra = actor() or actor(fresh=False)
+                if extra is None or any(extra[1] is m[1] for m in members):
+                    break
+                members.append(extra)
+            trio = members if len(members) == 3 else None
     if trio:
         image = compose(background(scenes["ensemble"], grade_scene),
                         [(trio[1][1], 0.2, 0.88, 0.85), (trio[2][1], 0.8, 0.88, 0.85), (trio[0][1], 0.5, 1.02, 1.0)],
@@ -962,7 +984,7 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
 
     # 4. Streaming mark: number one again (another picture) in its scene, the service mark top-left.
     mark_service, mark_reason = choose_service(films, [c.film for c in faces], title)
-    star = (actor(0) or actor() or actor(0, fresh=False)) if "service" in scenes else None
+    star = any_actor(0) if "service" in scenes else None
     if star:
         scene = background(scenes["service"], grade_scene)
         if focal_side(scene) == "right":
@@ -979,7 +1001,7 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     # 5. Headline: two to four huge words left, an actor right, in a mirrored scene.
     phrase = short_phrase(title, phrases, profile["label"])
     words_scene = scenes.get("hero") or scenes.get("service") or scenes.get("ensemble")
-    face_pick = (actor() or actor(fresh=False)) if words_scene else None
+    face_pick = any_actor() if words_scene else None
     if face_pick:
         scene = background(words_scene, grade_scene)
         if focal_side(scene) != "right":
