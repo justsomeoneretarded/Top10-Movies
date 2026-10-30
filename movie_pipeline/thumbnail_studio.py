@@ -691,6 +691,56 @@ def headline(canvas: Image.Image, phrase: str, color, *, side: str = "left") -> 
     return canvas
 
 
+def count_parts(title: str, phrases: list[str], count: int, genre_label: str) -> tuple[str, list[str], str]:
+    """(big number, two short words, tag) for the countdown design, e.g. ('10', ['MUST', 'WATCH'], '2026').
+
+    The number is the one in the title (else the list length); the words come from a
+    one- or two-word phrase when one is offered, else MUST WATCH; the tag is the title's
+    year, else the genre.
+    """
+    found = re.search(r"\b([1-9]\d?)\b(?!\d)", re.sub(r"\b(?:19|20)\d{2}\b", "", title))
+    number = found.group(1) if found else str(count)
+    words = ["MUST", "WATCH"]
+    for phrase in phrases:
+        kept = [w for w in re.findall(r"[A-Za-z'’-]+", str(phrase).upper()) if w not in {"TOP", "THE", "OF"}]
+        if 1 <= len(kept) <= 2 and all(len(w) <= 8 for w in kept):
+            words = kept
+            break
+    year = re.search(r"\b(?:19|20)\d{2}\b", title)
+    return number, words, year.group(0) if year else genre_label.upper()
+
+
+def count_headline(canvas: Image.Image, number: str, words: list[str], tag: str,
+                   color=(255, 206, 0), tag_color=(220, 20, 30)) -> Image.Image:
+    """Countdown design: a huge yellow number, two bold stacked words and a red tag on the left;
+    the picture's subject sits on the right behind a dark fade."""
+    canvas = canvas.convert("RGBA")
+    ramp = np.clip(1.0 - np.linspace(0, 1.55, WIDTH), 0, 1) ** 1.2
+    shade = Image.new("RGBA", canvas.size, (4, 6, 12, 255))
+    shade.putalpha(Image.fromarray((np.repeat(ramp[None, :], HEIGHT, axis=0) * 240).astype(np.uint8)))
+    canvas = Image.alpha_composite(canvas, shade)
+    draw = ImageDraw.Draw(canvas)
+    size = 520 if len(number) == 1 else 400
+    number_font = brand_font("display", size)
+    draw.text((34, HEIGHT / 2 + 6), number, font=number_font, anchor="lm", fill=color, stroke_width=12, stroke_fill=(0, 0, 0))
+    x = 34 + draw.textlength(number, font=number_font) + 18
+    word_size = 112
+    while word_size > 60 and max(draw.textlength(w, font=brand_font("display", word_size)) for w in words) > WIDTH * 0.52 - x:
+        word_size -= 4
+    word_font = brand_font("display", word_size)
+    lines = words if len(words) == 2 else [words[0]]
+    top = HEIGHT / 2 - (104 if len(lines) == 2 else 50) * word_size / 112
+    for i, word in enumerate(lines):
+        draw.text((x, top + i * 110 * word_size / 112), word, font=word_font, anchor="lm", fill=(255, 255, 255),
+                  stroke_width=7, stroke_fill=(0, 0, 0))
+    tag_font = brand_font("display", 58)
+    tag_top = top + len(lines) * 110 * word_size / 112 - 32
+    width = draw.textlength(tag, font=tag_font)
+    draw.rectangle((x + 4, tag_top, x + 4 + width + 32, tag_top + 72), fill=tag_color)
+    draw.text((x + 20, tag_top + 36), tag, font=tag_font, anchor="lm", fill=(255, 255, 255))
+    return canvas
+
+
 def short_phrase(title: str, phrases: list[str], genre_label: str) -> str:
     """Two to four words for thumbnail 5, e.g. 'HORROR MOVIES YOU CAN'T MISS' -> 'CAN'T MISS HORROR'."""
     for phrase in phrases:
@@ -828,11 +878,14 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     save_design(4, service_mark(finish(face_crop(star, face_height=0.5, face_x=0.68, face_y=0.42), grade), mark_service),
                 "service", [star], service=mark_service, service_reason=mark_reason)
 
-    # 5. Headline: two to four huge words on the left, a real face on the right.
-    phrase = short_phrase(title, phrases, profile["label"])
-    lead = picker.take(picker.any(faces=True))
-    image = face_crop(lead, face_height=0.52, face_x=0.74, face_y=0.42)
-    save_design(5, headline(finish(image, grade), phrase, profile["rim"]), "headline", [lead], text=phrase)
+    # 5. Countdown: a huge yellow number, two bold words and a red year tag on the left,
+    #    the biggest action moment or face on the right ("10 MUST WATCH 2026").
+    number, words, tag = count_parts(title, phrases, len(films), profile["label"])
+    pool = picker.free() or picker.candidates
+    lead = picker.take(max(pool, key=lambda c: c.action * 2 + c.genre_fit + (1.5 if good_face(c) else 0) + c.score * 0.1))
+    image = face_crop(lead, face_height=0.48, face_x=0.72, face_y=0.40)
+    save_design(5, count_headline(finish(image, grade), number, words, tag), "countdown", [lead],
+                text=f"{number} {' '.join(words)} {tag}")
 
     save_json(work / "thumbnail-report.json", {"genre": genre, "vision_rated": rated, "candidates": len(candidates),
               "good_faces": sum(good_face(c) for c in candidates),

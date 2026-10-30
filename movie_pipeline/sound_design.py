@@ -24,6 +24,7 @@ MUSIC_LEVELS = {
     "review-preview": 3.5,          # muted preview: music carries the reveal
     "review-preview-dialogue": 1.0,  # preview keeps a complete trailer line
     "title-card": 3.0,
+    "teaser": 2.5,                   # the number one flash in the intro
     "subscribe": 1.8,
     "narration": 1.0,
     "narration-top": 1.25,           # number one gets a slightly bigger bed
@@ -224,8 +225,16 @@ def effect_events(timeline: list[dict], speed: float, genre: str | None = None) 
             # The rank label slides in over about half a second; the hit lands with it.
             hit = start + 0.5
             name, gain = pack["pre"]
+            style = entry.get("reveal_style", "punch")
+            if style == "whip":  # the sound follows the picture: a whip-pan gets a whoosh
+                name, gain = "whoosh", max(gain, 0.45)
+            elif style == "pull" and name != "riser":
+                name, gain = "riser", 0.4
             events.append((max(0.0, hit - LEADS.get(name, 0.8) - (0.0 if name == "riser" else 0.5)), name, gain))
             events += [(hit, name, gain) for name, gain in pack["hits"]]
+        elif kind == "teaser":
+            events.append((max(0.0, start - 0.3), "whoosh", 0.35))
+            events.append((start + 0.05, *pack["open"]))
         elif kind == "subscribe":
             events.append((max(0.0, start - 0.25), "whoosh", 0.3))
         elif kind == "narration" and entry.get("section_kind") == "outro" and \

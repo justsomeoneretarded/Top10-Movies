@@ -520,8 +520,15 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     previews = [event for event in events if event['type'] == 'review-preview']
     assert len(previews) == count
     assert all(event['duration'] == pytest.approx(5.0) for event in previews)
-    labelled = [event for event in records['trailer_renders'] if event.get('label') is not None]
+    labelled = [event for event in records['trailer_renders'] if event.get('label') is not None
+                and Path(event['label']).name != 'number-one-tease.png']
     assert len(labelled) == count
+    teasers = [event for event in events if event['type'] == 'teaser']
+    assert len(teasers) == (1 if count >= 3 else 0)  # short lists have no countdown to tease
+    if teasers:
+        assert teasers[0]['duration'] == pytest.approx(3.0)
+        intro_end = max(e['start'] + e['duration'] for e in events if e.get('section_kind') == 'intro')
+        assert teasers[0]['start'] == pytest.approx(intro_end)  # right after the intro, before the countdown
     assert all(event['label_seconds'] == 5.0 for event in labelled)
     ctas = [(i, event) for i, event in enumerate(events) if event.get('type') == 'subscribe']
     assert len(ctas) == 1

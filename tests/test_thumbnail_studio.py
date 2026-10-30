@@ -41,7 +41,7 @@ def test_letterbox_bars_are_removed():
 def test_three_distinct_text_free_thumbnails(offline, tmp_path, monkeypatch):
     monkeypatch.delenv("THUMBNAIL_TEXT", raising=False)
     report = studio.build(films(), [], [], ["Watch these"], tmp_path, tmp_path / "work")
-    assert [r["style"].split("-")[0] for r in report] == ["hero", "face", "spectacle", "service", "headline"]
+    assert [r["style"].split("-")[0] for r in report] == ["hero", "face", "spectacle", "service", "countdown"]
     pixels = [np.asarray(Image.open(tmp_path / f"thumbnail-0{i}.jpg"), dtype=float) for i in (1, 2, 3, 4, 5)]
     assert all(p.shape == (720, 1280, 3) for p in pixels)
     assert report[3]["service"] in studio.RANDOM_SERVICES and report[3]["service_reason"].startswith("random")
@@ -152,3 +152,13 @@ def test_no_design_repeats_an_image(offline, tmp_path):
     assert len(report) == 5
     hashes = [studio._dhash(Image.open(tmp_path / f"thumbnail-0{i}.jpg")) for i in range(1, 6)]
     assert len(set(hashes)) == 5
+
+
+def test_countdown_design_parts():
+    assert studio.count_parts("10 New Shows of 2026 That Are So Freaking Good", ["Freaking Good"], 10, "drama") == \
+        ("10", ["FREAKING", "GOOD"], "2026")
+    assert studio.count_parts("8 Action Movies of 2026 You Can't Afford to Miss!", ["2026 Action Hits Now"], 8, "action") == \
+        ("8", ["MUST", "WATCH"], "2026")
+    assert studio.count_parts("Best Horror Movies Ever", [], 7, "horror") == ("7", ["MUST", "WATCH"], "HORROR")
+    image = studio.count_headline(Image.new("RGB", (1280, 720), (90, 90, 90)), "10", ["MUST", "WATCH"], "2026")
+    assert image.size == (1280, 720)

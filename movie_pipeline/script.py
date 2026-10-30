@@ -352,6 +352,17 @@ def _section_issue(paragraphs: list[str], facts: dict, *, opening: bool, closing
     return None
 
 
+def versus_question(films: list[dict], title: str = "") -> str:
+    """A targeted either/or question about the two top picks, e.g.
+    'Which 2026 show are you watching first: A Knight of the Seven Kingdoms or Wonder Man?'"""
+    if len(films) < 2:
+        return "Which one would you add to this list?"
+    year = re.search(r"\b(?:19|20)\d{2}\b", str(title))
+    kind = "show" if all(f.get("kind") == "tv" for f in films) else "movie"
+    first, second = films[0]["title"], films[1]["title"]
+    return f"Which {year.group(0) + ' ' if year else ''}{kind} are you watching first: {first} or {second}?"
+
+
 class Writer:
     def __init__(self, cache_dir: Path | None = None):
         self.cache_dir = cache_dir
@@ -849,16 +860,14 @@ class Writer:
             sections.append({"kind": "film", "film": index, "paragraphs": paragraphs, "availability_text": available, "delivery": delivery})
         if only is not None:
             if "outro" in only:
-                outro_facts = {"topic": title, "titles": [film["title"] for film in films]}
-                if plan.get("comment_question"):
-                    outro_facts["comment_question"] = plan["comment_question"]
+                outro_facts = {"topic": title, "titles": [film["title"] for film in films],
+                               "comment_question": versus_question(films, title)}
                 outro = self.narration(title, brief, CLOSING, outro_facts, closing_words)
                 outro, outro_delivery = self.edit(title, brief, "the closing goodbye", outro_facts, outro, closing=True, kind="outro")
                 sections.append({"kind": "outro", "film": 0, "paragraphs": outro, "delivery": outro_delivery})
             return {"sections": sections, "package": {}, "partial": sorted(only)}
-        outro_facts = {"topic": title, "titles": [film["title"] for film in films]}
-        if plan.get("comment_question"):
-            outro_facts["comment_question"] = plan["comment_question"]
+        outro_facts = {"topic": title, "titles": [film["title"] for film in films],
+                       "comment_question": versus_question(films, title)}
         outro = self.narration(title, brief, CLOSING, outro_facts, closing_words)
         outro, outro_delivery = self.edit(title, brief, "the closing goodbye", outro_facts, outro, closing=True, kind="outro")
         sections.append({"kind": "outro", "film": 0, "paragraphs": outro, "delivery": outro_delivery})
@@ -904,8 +913,11 @@ class Writer:
             package["title"] = ranked[0]
             package["title_options"] = ranked[:3]
         package["tags"] = youtube_tags(package.get("tags", []), title, films)
+        # A pinned either/or question gets far more replies than an open one; the plan's own
+        # question follows it as a second prompt.
+        package["pinned_comment"] = versus_question(films, title)
         if plan.get("comment_question"):
-            package["pinned_comment"] = plan["comment_question"]
+            package["comment_followup"] = plan["comment_question"]
         if len(package.get("thumbnail_texts", [])) != 3 or any(not isinstance(t, str) or not 1 <= len(t.split()) <= 6 for t in package["thumbnail_texts"]):
             raise PipelineError("Invalid generated thumbnail text.")
         package["thumbnail_concepts"] = self.thumbnail_concepts(title, brief, films, sections)

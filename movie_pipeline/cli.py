@@ -38,6 +38,31 @@ from .video_settings import (
 COLD_OPEN_SECONDS = 5.0
 REVIEW_PREVIEW_SECONDS = 5.0
 IMPACT_SECONDS = 3.2
+TEASE_SECONDS = 3.0  # a flash of number one at the end of the intro: a reason to stay to the end
+
+
+def number_one_tease_shot(shots: list[dict], is_card, taken: list[tuple[float, float]],
+                          seconds: float = TEASE_SECONDS) -> dict | None:
+    """The loudest, most striking moment of number one's trailer that the review itself won't show.
+
+    ``is_card(index)`` marks text cards; ``taken`` holds (start, end) windows already used for
+    number one (its preview, dialogue beats and impact moment), with a small margin.
+    """
+    options = []
+    for index, shot in enumerate(shots):
+        if is_card(index) or float(shot["end"]) - float(shot["start"]) < 1.2:
+            continue
+        centre = float(shot.get("punch_at", (float(shot["start"]) + float(shot["end"])) / 2))
+        start = max(0.0, min(centre - seconds * 0.4, float(shot["end"]) - seconds))
+        end = start + seconds
+        if any(start < b + 1.0 and end > a - 1.0 for a, b in taken):
+            continue
+        score = float(shot.get("peak", 0)) * 2 + float(shot.get("motion", 0))
+        options.append((score, start, end))
+    if not options:
+        return None
+    _, start, end = max(options)
+    return {"start": start, "end": end}
 END_SCREEN_SECONDS = 17.0  # plus the final three-second hold: about 20 seconds for YouTube end-screen elements
 INTRO_TARGET_SECONDS = 8.0
 
@@ -156,8 +181,10 @@ def write_upload_extras(output: Path, package: dict, films: list[dict]):
     (output / "tags.txt").write_text(", ".join(tags) + "\n")
     question = package.get("pinned_comment") or "Which one would you add to this list?"
     shows = bool(films) and all(f.get("kind") == "tv" for f in films)
+    followup = str(package.get("comment_followup", "")).strip()
     (output / "pinned-comment.txt").write_text(
-        f"{question.strip()}\n\nDrop your pick below; the best {'show' if shows else 'movie'} suggestions might make a future list.\n")
+        f"{question.strip()}\n\n" + (f"{followup}\n\n" if followup and followup != question.strip() else "")
+        + f"Drop your pick below; the best {'show' if shows else 'movie'} suggestions might make a future list.\n")
 
 
 def export_comparison(output: Path, work: Path, timeline: list[dict], speed: float, reference: Path):
@@ -258,10 +285,13 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         finish,
         j_cut,
         label_image,
+        number_one_tease_image,
+        reveal_style_for,
         speech_video,
         thumbnails,
         tracker_image,
         trailer_video,
+        up_next_image,
     )
     from .research import Research
     from .script import Writer, aligned_delivery
@@ -574,11 +604,20 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                  films[section["film"]].get("overview", "")+". "+title+". "+brief,
                  REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
                 for i, section in enumerate(script["sections"]) if section["kind"] == "film"}
+    tease = None
+    top_index = next((i for i, section in enumerate(script["sections"]) if section["kind"] == "film" and section["film"] == 0), None)
+    if top_index is not None and len(films) >= 3 and os.getenv("TEASE_NUMBER_ONE", "true").strip().lower() != "false":
+        taken = [(previews[top_index]["start"], previews[top_index]["start"] + previews[top_index]["duration"])] \
+            if Path(previews[top_index]["source"]) == trailers[0] else []
+        taken += [(b["start"], b["end"]) for b in (beats.get(top_index), extra_beats.get(top_index), impacts.get(top_index)) if b]
+        tease = number_one_tease_shot(shot_sets[0], lambda index: callable(card_kind) and card_kind(trailers[0], index) is not None, taken)
+        if tease and callable(reserve):
+            reserve(trailers[0], tease["start"], TEASE_SECONDS, "number-one-tease")
     lengths = {coordinates: duration(audio) for coordinates, audio in speech.items()}
     planned_seconds = (sum(lengths.values())+sum(preview["duration"] for preview in previews.values())
                        +sum(card["duration"] for card in ending_cards.values() if card)
                        +sum(beat["end"]-beat["start"] for beat in [*beats.values(), *extra_beats.values(), *impacts.values()] if beat)
-                       +COLD_OPEN_SECONDS+duration(cta_audio))
+                       +COLD_OPEN_SECONDS+duration(cta_audio)+(TEASE_SECONDS if tease else 0))
     selector.playback_speed = final_tempo(planned_seconds, spec)
     boundary, fraction = subscription_boundary(script["sections"], lengths,
         {i: preview["duration"] + (beats[i]["end"]-beats[i]["start"] if beats.get(i) else 0)
@@ -613,6 +652,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     cta_rendered = {}
     portraits_used = set()
     offset = 0.0
+    film_position = 0  # entries shown so far, for rotating the rank reveal
     for shot in opening:
         film_index = shot["film_index"]
         source = Path(shot["source"])
@@ -648,13 +688,15 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             label = work / f"label-{section_index}.png"
             label_image(label, film["title"], film_index+1, film["year"])
             preview = previews[section_index]
+            style = reveal_style_for(film_position, film_index+1)
+            film_position += 1
             source = Path(preview["source"])
             path = work / f"part-{len(parts):03}.mp4"
             try:
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
                               still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
-                              reveal=True, audio=None if preview["muted"] or preview.get("still") else
+                              reveal=True, reveal_style=style, audio=None if preview["muted"] or preview.get("still") else
                               isolate_dialogue(source, preview["start"], preview["duration"], work / "dialogue"))
             except (PipelineError, OSError, RuntimeError, ValueError):
                 if source == trailer:
@@ -665,11 +707,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
                               still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
-                              reveal=True, audio=None if preview["muted"] or preview.get("still") else
+                              reveal=True, reveal_style=style, audio=None if preview["muted"] or preview.get("still") else
                               isolate_dialogue(source, preview["start"], preview["duration"], work / "dialogue"))
             seconds = duration(path)
             timeline.append({"start": offset, "duration": seconds, "type": "review-preview", "film": film["title"],
-                             "source_start": preview["start"], "shots": [preview], "narration": False})
+                             "source_start": preview["start"], "shots": [preview], "narration": False, "reveal_style": style})
             parts.append(path)
             used_video_sources.add(str(source))
             offset += seconds
@@ -793,6 +835,32 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 used_video_sources.add(str(source))
                 offset += seconds
                 note_visual_beat(selector, seconds, still=True)
+        if is_film and os.getenv("UP_NEXT", "true").strip().lower() != "false":
+            # 'Up next' in the last seconds of each entry: viewers who don't care about the next pick
+            # can see what's coming and skip ahead with the chapters instead of leaving.
+            upcoming = next((s["film"] for s in script["sections"][section_index+1:] if s["kind"] == "film"), None)
+            if upcoming is not None and offset - section_start > 10:
+                pill = work / f"up-next-{film_index+1}.png"
+                up_next_image(pill, upcoming+1, None if upcoming == 0 else films[upcoming]["title"])
+                overlays.append((pill, max(section_start + 6.0, offset - 4.5), offset, "below-tracker"))
+        if section["kind"] == "intro" and tease:
+            # A three-second flash of number one, unnamed: the reason to stay until the end.
+            plate = work / "number-one-tease.png"
+            number_one_tease_image(plate)
+            path = work / f"part-{len(parts):03}.mp4"
+            try:
+                trailer_video(trailers[0], tease["start"], TEASE_SECONDS, path, label=plate,
+                              label_seconds=TEASE_SECONDS, reveal=True, reveal_style="flash")
+            except (PipelineError, OSError, RuntimeError, ValueError):
+                print("Number one teaser skipped.", flush=True)
+            else:
+                seconds = duration(path)
+                timeline.append({"start": offset, "duration": seconds, "type": "teaser", "film": films[0]["title"],
+                                 "source_start": tease["start"], "narration": False})
+                parts.append(path)
+                used_video_sources.add(str(trailers[0]))
+                offset += seconds
+                note_visual_beat(selector, seconds)
     # A calm end-screen plate gives YouTube's end-screen elements room (plus the final hold, about 20 seconds).
     try:
         top_section = next(i for i, section in enumerate(script["sections"]) if section["kind"] == "film" and section["film"] == 0)
@@ -871,7 +939,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 except (OSError, ValueError):
                     pass
             montage = [(entry["start"] / speed, (entry["start"] + entry["duration"]) / speed) for entry in timeline
-                       if entry.get("type") == "cold-open" or entry.get("section_kind") in ("intro", "outro")]
+                       if entry.get("type") in ("cold-open", "teaser") or entry.get("section_kind") in ("intro", "outro")]
             review = build_review(output, all_cues, chapters, genre, stills_films=stills_films, montage=montage)
             notice("Review report", f"review.html: {review['black_frames']} black-frame runs, {review['repeated_shots']} repeated shots, "
                    f"{review['loudness_spikes']} loudness spikes, {review['captions_on_silence']} captions over silence.")

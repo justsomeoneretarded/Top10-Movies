@@ -284,7 +284,7 @@ def speech_video(source: Path, audio: Path, chosen: list[dict], output: Path, la
 def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
                   label: Path | None = None, label_seconds: float = 3.5, muted: bool = False,
                   still: bool = False, still_motion: str | None = None, reveal: bool = False,
-                  audio: Path | None = None):
+                  audio: Path | None = None, reveal_style: str = "punch"):
     """A narration-free preview, optionally carrying the animated rank introduction."""
     frames = max(FPS, round(seconds * FPS))
     actual = frames / FPS
@@ -307,7 +307,7 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
     graph = (
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
         f"crop={width}:{height},setsar=1,{footage_grade()},setpts=PTS-STARTPTS,fps={FPS},"
-        f"{hold}tpad=stop_mode=clone:stop={frames},{motion}{_reveal_filter(width, height) if reveal else ''}setpts=N/({FPS}*TB)[v];"
+        f"{hold}tpad=stop_mode=clone:stop={frames},{motion}{_reveal_filter(width, height, reveal_style) if reveal else ''}setpts=N/({FPS}*TB)[v];"
         f"[{audio_index}:a]asetpts=PTS-STARTPTS,afade=t=in:d=0.08,"
         f"afade=t=out:st={max(0,actual-0.15)}:d=0.15,loudnorm=I=-18:TP=-2:LRA=9,apad[a]"
     )
@@ -321,8 +321,44 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
            *LOSSLESS_AUDIO, output)
 
 
-def _reveal_filter(width: int, height: int) -> str:
-    """Rank reveal: a white flash, a 12% punch-in that settles in 0.6 s, and a brief camera shake."""
+REVEAL_STYLES = ("punch", "whip", "pull", "flash")
+
+
+def reveal_style_for(position: int, rank: int) -> str:
+    """Rotate the rank reveal so consecutive entries never open the same way.
+
+    ``position`` counts entries in playing order (0 for the first one shown). Number one
+    always gets the punch-in, so number two never does.
+    """
+    if rank == 1:
+        return "punch"
+    style = ("whip", "pull", "flash", "punch")[position % 4]
+    return "whip" if rank == 2 and style == "punch" else style
+
+
+def _reveal_filter(width: int, height: int, style: str = "punch") -> str:
+    """Rank reveal transitions (each ends on the plain frame within a second).
+
+    punch: white flash, 12% punch-in that settles in 0.6 s, brief camera shake.
+    whip:  a fast sideways whip-pan that lands with motion blur.
+    pull:  starts 30% zoomed in out of black and pulls back to the full frame.
+    flash: an accent-coloured flash with a gentle 6% punch-in.
+    """
+    if style == "whip":
+        scale = 1.24
+        travel = f"({width}*0.2*pow(max(0,1-t/0.32),3))"
+        return (f"scale={round(width*scale/2)*2}:{round(height*scale/2)*2}:flags=bicubic,"
+                f"crop={width}:{height}:x='(iw-{width})/2+{travel}':y='(ih-{height})/2',"
+                f"boxblur=luma_radius=14:luma_power=1:chroma_radius=10:enable='lt(t,0.24)',")
+    if style == "pull":
+        zoom = "(1+0.30*pow(max(0,1-t/0.75),2))"
+        return (f"scale=w='trunc({width}*{zoom}/2)*2':h='trunc({height}*{zoom}/2)*2':eval=frame:flags=bicubic,"
+                f"crop={width}:{height},fade=t=in:st=0:d=0.28:color=black,")
+    if style == "flash":
+        zoom = "(1+0.06*pow(max(0,1-t/0.5),2))"
+        color = "0x%02X%02X%02X" % ACCENT
+        return (f"scale=w='trunc({width}*{zoom}/2)*2':h='trunc({height}*{zoom}/2)*2':eval=frame:flags=bicubic,"
+                f"crop={width}:{height},fade=t=in:st=0:d=0.24:color={color},")
     zoom = "(1+0.12*pow(max(0,1-t/0.6),2))"
     shake = "(10*sin(t*70)*max(0,1-t/0.35))"
     return (f"scale=w='trunc({width}*{zoom}/2)*2':h='trunc({height}*{zoom}/2)*2':eval=frame:flags=bicubic,"
@@ -376,6 +412,47 @@ def tracker_image(path: Path, total: int, current: int):
                       fill=(255, 255, 255, 90 if done else 230))
     canvas.save(path)
     return canvas.size
+def up_next_image(path: Path, rank: int, title: str | None):
+    """Pill under the countdown tracker in the last seconds of an entry: 'UP NEXT  #4 TITLE'.
+
+    Number one keeps its secret: its pill reads 'UP NEXT  #1' with no title.
+    """
+    label_face, rank_face, title_face = brand_font("body-medium", 24), brand_font("display", 40), brand_font("title", 34)
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    text = (title or "").upper()
+    while probe.textlength(text, font=title_face) > 560:
+        text = text.rstrip("…")[:-1].rstrip() + "…"
+    width = round(28 + probe.textlength("UP NEXT", font=label_face) + 22 + probe.textlength(f"#{rank}", font=rank_face)
+                  + (18 + probe.textlength(text, font=title_face) if text else 0) + 30)
+    height = 68
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=18, fill=(0, 0, 0, 165))
+    x = 28
+    draw.text((x, height / 2), "UP NEXT", font=label_face, anchor="lm", fill=(255, 255, 255, 200))
+    x += probe.textlength("UP NEXT", font=label_face) + 22
+    draw.text((x, height / 2 + 1), f"#{rank}", font=rank_face, anchor="lm", fill=ACCENT + (255,))
+    x += probe.textlength(f"#{rank}", font=rank_face) + 18
+    if text:
+        draw.text((x, height / 2 + 1), text, font=title_face, anchor="lm", fill=(255, 255, 255))
+    canvas.save(path)
+    return canvas.size
+
+
+def number_one_tease_image(path: Path, line: str = "STAY FOR NUMBER ONE"):
+    """Full-frame overlay for the 3-second #1 teaser in the intro: a huge '#1' and a short line."""
+    image = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    import numpy as np
+    ramp = np.clip(1 - np.linspace(0, 1, WIDTH) / 0.62, 0, 1) ** 1.3 * 190  # dark on the left, clear by 62%
+    image.putalpha(Image.fromarray(np.repeat(ramp[None, :], HEIGHT, axis=0).astype(np.uint8)))
+    draw = ImageDraw.Draw(image)
+    face = brand_font("display", 300)
+    draw.text((70, HEIGHT / 2 - 40), "#1", font=face, anchor="lm", fill=ACCENT + (255,), stroke_width=8, stroke_fill=(0, 0, 0))
+    small = brand_font("title", 54)
+    draw.text((78, HEIGHT / 2 + 150), line.upper(), font=small, anchor="lm", fill=(255, 255, 255), stroke_width=4, stroke_fill=(0, 0, 0))
+    image.save(path)
+
+
 def end_screen_image(path: Path, background: Image.Image | None, headline: str = "THANKS FOR WATCHING"):
     """Calm, uncluttered end-screen plate: blurred dark film frame and a small headline.
 
@@ -638,10 +715,12 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
             mix_inputs = "[voice][duck][fx]amix=inputs=3" if effects else "[voice][duck]amix=inputs=2"
             overlay_inputs, overlay_graph, last = [], "", "base"
             first_overlay = 4 if effects else 3
-            for number, (image, begin, end) in enumerate(overlays or []):
-                # Small images (the countdown tracker) placed top-right during each review, on the final clock.
+            for number, (image, begin, end, *corner) in enumerate(overlays or []):
+                # Small images placed on the final clock: the countdown tracker (top right) and the
+                # "up next" pill just below it.
                 overlay_inputs += ["-loop", "1", "-framerate", FPS, "-i", image]
-                overlay_graph += (f"[{last}][{first_overlay + number}:v]overlay=x=W-w-36:y=30:eof_action=pass:"
+                y = "112" if corner and corner[0] == "below-tracker" else "30"
+                overlay_graph += (f"[{last}][{first_overlay + number}:v]overlay=x=W-w-36:y={y}:eof_action=pass:"
                                   f"enable='between(t,{begin/speed:.3f},{end/speed:.3f})'[o{number}];")
                 last = f"o{number}"
             graph = (
