@@ -463,10 +463,21 @@ class Writer:
             "and standout_scene (one spoiler-light moment from the premise a viewer can picture).\n"
             "- comment_question: one specific question viewers can answer in the comments.\n"
             f"Use only facts in the data; spoiler-light; casual spoken English; no markdown. Never use: {BANNED_LIST}.")
-        try:
-            plan = self.ask(prompt, schema, temperature=0.6, num_ctx=8192, num_predict=min(2600, 200 * len(films) + 400))
-        except (requests.RequestException, ValueError, TypeError) as exc:
-            print(f"Episode planning unavailable ({type(exc).__name__}); writing sections without a shared plan.", flush=True)
+        # Ten entries with seven fields each need about 3,000 tokens; a cut-off answer is invalid JSON,
+        # so the budget scales with the list and a failed answer is retried once with more room.
+        plan, error = None, None
+        for attempt, budget in enumerate((min(4600, 330 * len(films) + 700), 5200)):
+            try:
+                plan = self.ask(prompt, schema, temperature=0.6 if attempt == 0 else 0.4,
+                                num_ctx=12288, num_predict=budget)
+                break
+            except (requests.RequestException, ValueError, TypeError) as exc:
+                error = exc
+                print(f"Episode plan attempt {attempt + 1} failed ({type(exc).__name__}: {str(exc)[:160]}).", flush=True)
+        if plan is None:
+            from .core import notice
+            notice("Episode plan unavailable", f"{type(error).__name__}: {str(error)[:300]}. "
+                   "The script is written without a shared plan.", "warning")
             return {}
         titles = [film["title"] for film in films]
         entries = {}

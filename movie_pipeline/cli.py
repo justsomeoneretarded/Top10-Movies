@@ -1000,10 +1000,11 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
     ctx = setup_run(title, brief, movies, work, output, started)
     films = ctx.films
     if stage == "plan":
+        (ctx.work / "script-sections").mkdir(parents=True, exist_ok=True)  # packaged even without a plan
         writer = Writer(cache_dir=ctx.work / "script-sections")
-        writer.plan(title, brief, films)
+        planned = bool(writer.plan(title, brief, films))
         writer.unload()
-        return {"planned": True}
+        return {"planned": planned}
     if stage == "prepare":
         # Research only: footage and music jobs start from this; the plan job follows.
         from .thumbnail_studio import detect_genre

@@ -192,7 +192,12 @@ jobs:
       - name: Plan the episode
         run: bash scripts/run_logged.sh "Episode plan" python -m movie_pipeline.cli --stage plan
       - name: Package the plan
-        run: tar -czf warm-plan.tgz work/jobs/*/script-sections
+        # Never fails: without a plan the script job still writes every section on its own.
+        run: |
+          shopt -s nullglob
+          dirs=(work/jobs/*/script-sections)
+          if [ ${#dirs[@]} -eq 0 ]; then mkdir -p work/jobs/no-plan/script-sections; dirs=(work/jobs/no-plan/script-sections); fi
+          tar -czf warm-plan.tgz "${dirs[@]}"
       - uses: actions/upload-artifact@v4
         with:
           name: warm-plan

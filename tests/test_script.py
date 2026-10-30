@@ -283,3 +283,21 @@ def test_saved_fallback_opening_is_replaced_on_the_next_run():
     script = {"sections": [{"kind": "intro", "film": 0, "paragraphs": fallback}], "package": {"script_policy_version": __import__("movie_pipeline.script", fromlist=["x"]).SCRIPT_POLICY_VERSION}}
     refreshed = writer.refresh_editorial("2 Adventure Movies", "", films, script)
     assert refreshed["sections"][0]["paragraphs"][0].startswith("Some movies feel like a plane ticket.")
+
+
+def test_plan_retries_a_cut_off_answer_with_more_room(tmp_path, monkeypatch):
+    from movie_pipeline import script as module
+    writer = module.Writer(cache_dir=tmp_path)
+    budgets = []
+
+    def ask(prompt, schema, **options):
+        budgets.append(options["num_predict"])
+        if len(budgets) == 1:
+            raise ValueError("Unterminated string")  # a truncated JSON answer
+        return {"promise": "p", "angle": "a", "opening_hook": "h", "open_loop": "o", "comment_question": "q", "entries": []}
+
+    monkeypatch.setattr(writer, "ask", ask)
+    films = [{"title": f"Show {i}", "year": 2026} for i in range(10)]
+    plan = writer.plan("10 New Shows of 2026", "brief", films)
+    assert plan["angle"] == "a" and len(budgets) == 2 and budgets[0] >= 3300 and budgets[1] > budgets[0]
+    assert list(tmp_path.glob("*.json"))
