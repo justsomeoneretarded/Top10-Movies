@@ -664,6 +664,11 @@ class ShotSelector:
                     virgin = self.freshness(path,raw_start,raw_end-raw_start) >= .999
                     visual_fresh = self.visual_freshness(path,start,available) >= .999
                     tier = 2 if virgin and visual_fresh else (1 if unseen and not virgin else 0)
+                    if not unseen:
+                        # Once exhausted, rotate the least recently used window
+                        # before considering semantic preference again.
+                        tier = -max((entry["order"] for entry in self._interval_history().get(str(path), [])
+                                     if start < entry["end"] and end > entry["start"]), default=0)
                     score = float(relevance[index]) - used*.04
                     score += min(available,maximum_shot)*.035-min(shot["motion"],60)/600
                     if about_person and hold_ready and flags[index]:
@@ -707,7 +712,7 @@ class ShotSelector:
                    "visual_reason":"portrait-hold" if portrait else ("detail-hold" if detail else
                         ("spaced-source-reuse" if reused else "fresh-script-match"))}
             if still or freeze:
-                cut["still_motion"] = ("zoom_in", "zoom_out", "zoom_in", "pan_left", "zoom_out")[hold_count % 5]
+                cut["still_motion"] = ("zoom_in", "zoom_out")[hold_count % 2]
                 hold_count += 1
                 moving_beats = moving_seconds = 0
             else:

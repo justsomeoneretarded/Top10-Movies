@@ -133,3 +133,42 @@ def test_render_fallback_keeps_one_held_frame_for_optional_still(tmp_path):
     assert result[0]['freeze'] == 0
     assert result[0]['source'] == str(primary)
     assert result[0]['film_index'] == 0
+
+
+def test_fresh_second_trailer_is_used_within_a_long_paragraph(tmp_path):
+    import numpy as np
+
+    from movie_pipeline.shots import ShotSelector
+
+    primary, secondary, _, _ = setup(tmp_path)
+    selected = object.__new__(ShotSelector)
+    selected.uses, selected.last_shots, selected.cut_count = {}, {}, 0
+    selected.features = {str(primary): object(), str(secondary): object()}
+    selected.relevance = lambda *_: np.array([1.0, .8, .7])
+    selected.card_kind = lambda *_: None
+    shots = {str(p): [{"start": i*20, "end": i*20+8, "motion": 25} for i in range(3)]
+             for p in (primary, secondary)}
+    plan = choose_from_sources(selected, [primary, secondary], shots, "A chase through the city.", 36, False)
+    assert sum(s["duration"] for s in plan) == pytest.approx(36)
+    assert {s["source"] for s in plan} == {str(primary), str(secondary)}
+    for i, a in enumerate(plan):
+        for b in plan[i+1:]:
+            if a["source"] == b["source"] and not a.get("still") and not b.get("still"):
+                assert min(a["start"]+a["duration"]-a.get("freeze",0), b["start"]+b["duration"]-b.get("freeze",0)) <= max(a["start"], b["start"])+.01
+
+
+def test_exhausted_trailer_rotates_oldest_scene_despite_strong_hero_match():
+    import numpy as np
+
+    from movie_pipeline.shots import ShotSelector
+
+    path = Path("short.mp4")
+    selected = object.__new__(ShotSelector)
+    selected.uses, selected.last_shots, selected.cut_count = {}, {}, 0
+    selected.relevance = lambda *_: np.array([.1, .1, 100.0])
+    selected.card_kind = lambda *_: None
+    shots = [{"start": i*20, "end": i*20+8, "motion": 25} for i in range(3)]
+    for shot in shots:
+        selected.reserve(path, shot["start"], 8)
+    plan = selected.choose(path, shots, "The story continues.", 16, False)
+    assert [cut["start"] for cut in plan] == [0, 20]

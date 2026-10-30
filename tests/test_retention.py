@@ -8,12 +8,12 @@ from movie_pipeline.render import REVEAL_STYLES, _reveal_filter, number_one_teas
 from movie_pipeline.script import versus_question
 
 
-def test_reveals_rotate_and_number_one_always_punches():
+def test_reveals_alternate_only_gentle_zooms():
     for count in range(3, 12):
         styles = [reveal_style_for(position, rank) for position, rank in enumerate(range(count, 0, -1))]
-        assert styles[-1] == "punch"
+        assert set(styles) == {"zoom_in", "zoom_out"}
         assert all(a != b for a, b in zip(styles, styles[1:])), styles
-        assert len(set(styles)) >= min(3, count)
+        assert len(set(styles)) == 2
 
 
 def test_every_reveal_style_renders(tmp_path):

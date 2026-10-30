@@ -46,7 +46,7 @@ def test_hype_lines_cut_faster_than_dramatic_lines():
 
 
 @needs_ffmpeg
-def test_rank_reveal_flashes_and_punches_in_then_settles(monkeypatch, tmp_path):
+def test_rank_reveal_has_no_brightness_flash(monkeypatch, tmp_path):
     monkeypatch.setenv("VIDEO_RESOLUTION", "640x360")
     source = tmp_path / "source.mp4"
     ffmpeg("-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", source)
@@ -56,10 +56,10 @@ def test_rank_reveal_flashes_and_punches_in_then_settles(monkeypatch, tmp_path):
     assert duration(revealed) == pytest.approx(2, abs=.05)
     first_plain = np.asarray(get_frame(plain, 0.02), dtype=float)
     first_revealed = np.asarray(get_frame(revealed, 0.02), dtype=float)
-    assert first_revealed.mean() > first_plain.mean() + 40  # white flash
+    assert abs(first_revealed.mean()-first_plain.mean()) < 3
     settled_plain = np.asarray(get_frame(plain, 1.5), dtype=float)
     settled_revealed = np.asarray(get_frame(revealed, 1.5), dtype=float)
-    assert np.abs(settled_plain - settled_revealed).mean() < 4  # back to normal framing
+    assert abs(settled_plain.mean()-settled_revealed.mean()) < 3
 
 
 @needs_ffmpeg

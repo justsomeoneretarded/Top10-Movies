@@ -26,7 +26,8 @@ def _available(selector, sources: list[Path], shot_sets: dict[str, list[dict]]) 
 
 
 def _rank_sources(selector, sources: list[Path], shot_sets: dict[str, list[dict]], text: str,
-                  action: bool, *, uses: dict | None = None, last: str | None = None) -> list[Path]:
+                  action: bool, *, uses: dict | None = None, last: str | None = None,
+                  minimum_fresh: float = 1.5) -> list[Path]:
     ranked = []
     for index, path in enumerate(_available(selector, sources, shot_sets)):
         try:
@@ -44,7 +45,7 @@ def _rank_sources(selector, sources: list[Path], shot_sets: dict[str, list[dict]
                 score -= .03
         try:
             fresh = float(selector.fresh_seconds(path,shot_sets[str(path)]))
-            fresh_tier = int(math.isfinite(fresh) and fresh >= 1.5)
+            fresh_tier = int(math.isfinite(fresh) and fresh >= minimum_fresh)
         except OPTIONAL_ERRORS:
             fresh_tier = 1
         ranked.append((fresh_tier,score,index,path))
@@ -64,9 +65,9 @@ def _valid_plan(plan, seconds: float) -> bool:
         return False
 
 
-def choose_from_sources(selector, sources: list[Path], shot_sets: dict[str, list[dict]],
+def _choose_source_chunk(selector, sources: list[Path], shot_sets: dict[str, list[dict]],
                         text: str, seconds: float, action: bool) -> list[dict]:
-    """Select one source for a complete paragraph, then keep the existing steady edit.
+    """Select one source for a readable chunk, keeping its existing steady edit.
 
     Small source reuse penalties encourage variety when visual relevance is close.
     Missing or failing optional footage always falls back to the primary source.
@@ -81,7 +82,7 @@ def choose_from_sources(selector, sources: list[Path], shot_sets: dict[str, list
     last_sources = getattr(selector, "_source_pool_last", {})
     uses = all_uses.setdefault(pool_key, {})
     ranked = _rank_sources(selector, sources, shot_sets, text, False,
-                           uses=uses, last=last_sources.get(pool_key))
+                           uses=uses, last=last_sources.get(pool_key), minimum_fresh=min(12, seconds))
     if primary not in ranked:
         ranked.append(primary)
     for path in ranked:
@@ -99,6 +100,43 @@ def choose_from_sources(selector, sources: list[Path], shot_sets: dict[str, list
         selector._source_pool_last = last_sources
         return [{**shot, "source": str(path)} for shot in plan]
     raise PipelineError("No usable primary shot plan was available.")
+
+
+def choose_from_sources(selector, sources: list[Path], shot_sets: dict[str, list[dict]],
+                        text: str, seconds: float, action: bool) -> list[dict]:
+    """Reconsider the source between readable beats, not just between paragraphs.
+
+    A second trailer's unused scenes remain eligible before the first loops.
+    Keep the single-source and optional-analysis failure paths unchanged.
+    """
+    if (not callable(getattr(selector, "fresh_seconds", None))
+            or len(_available(selector, sources, shot_sets)) < 2):
+        return _choose_source_chunk(selector, sources, shot_sets, text, seconds, action)
+    remaining, result = seconds, []
+    while remaining > .01:
+        beat = min(12.0, remaining)
+        # Do not ask one source for twelve seconds when its largest fresh
+        # scene is eight: that would reuse four seconds before re-ranking.
+        windows = getattr(selector, "unused_windows", None)
+        if callable(windows):
+            fresh_spans = []
+            for path in _available(selector, sources, shot_sets):
+                try:
+                    for index, shot in enumerate(shot_sets[str(path)]):
+                        if selector.card_kind(path, index) is not None:
+                            continue
+                        fresh_spans.extend(high-low for low, high in windows(path, shot["start"], shot["end"])
+                                           if high-low >= min(5, remaining)
+                                           and selector.visual_freshness(path, low, high-low) >= .999)
+                except OPTIONAL_ERRORS:
+                    continue  # Optional scene analysis must not reject a video.
+            if fresh_spans:
+                beat = min(beat, max(fresh_spans))
+        if 0 < remaining-beat < 5 and remaining/2 >= 5:
+            beat = remaining/2
+        result.extend(_choose_source_chunk(selector, sources, shot_sets, text, beat, action))
+        remaining -= beat
+    return result
 
 
 def best_intro_sources(selector, pools: list[list[Path]], shot_sets: dict[str, list[dict]],

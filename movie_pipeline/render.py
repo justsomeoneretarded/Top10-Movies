@@ -22,8 +22,8 @@ AUDIO_ALIGNMENT_TOLERANCE = .12
 FOOTAGE_GRADE = "eq=contrast=1.015:saturation=1.015"
 # Genre looks for all footage (VIDEO_GENRE is set by the pipeline from the title, brief and TMDB genres).
 GENRE_GRADES = {
-    "horror": "eq=contrast=1.09:saturation=0.76:brightness=-0.025:gamma=0.96,colorbalance=bs=0.05:bm=0.02:rs=-0.02:rh=0.02,noise=alls=7:allf=t",
-    "thriller": "eq=contrast=1.06:saturation=0.86:brightness=-0.01,colorbalance=bs=0.04:bm=0.01,noise=alls=4:allf=t",
+    "horror": "eq=contrast=1.09:saturation=0.76:brightness=-0.025:gamma=0.96,colorbalance=bs=0.05:bm=0.02:rs=-0.02:rh=0.02",
+    "thriller": "eq=contrast=1.06:saturation=0.86:brightness=-0.01,colorbalance=bs=0.04:bm=0.01",
     "action": "eq=contrast=1.06:saturation=1.08,colorbalance=bs=0.03:rh=0.03:gh=0.01",
     "scifi": "eq=contrast=1.05:saturation=1.02,colorbalance=bs=0.05:gs=0.01:bh=0.02",
     "comedy": "eq=contrast=1.02:saturation=1.1:brightness=0.01",
@@ -51,13 +51,10 @@ def _hold_motion(frames: int, live_frames: int, width: int, height: int, style: 
     progress = f"min(1,max(0,(on-{live_frames})/{max(1, frames-live_frames-1)}))"
     zoom = f"{1+amount}-{amount}*{progress}" if style == "zoom_out" else f"1+{amount}*{progress}"
     x, y = "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"
-    if style == "pan_left":
-        zoom = str(1+amount)
-        x = f"(iw-iw/zoom)*(0.7-0.4*{progress})"
     # With a trailing hold the moving footage stays at its original framing.
     if live_frames:
         zoom = f"if(lt(on,{live_frames}),1,{zoom})"
-    return f"zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s={width}x{height}:fps={FPS}"
+    return f"format=yuv444p,scale={width*2}:{height*2}:flags=lanczos,zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s={width}x{height}:fps={FPS}"
 
 
 FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
@@ -321,49 +318,17 @@ def trailer_video(source: Path, start: float, seconds: float, output: Path, *,
            *LOSSLESS_AUDIO, output)
 
 
-REVEAL_STYLES = ("punch", "whip", "pull", "flash")
+REVEAL_STYLES = ("zoom_in", "zoom_out")
 
 
 def reveal_style_for(position: int, rank: int) -> str:
-    """Rotate the rank reveal so consecutive entries never open the same way.
-
-    ``position`` counts entries in playing order (0 for the first one shown). Number one
-    always gets the punch-in, so number two never does.
-    """
-    if rank == 1:
-        return "punch"
-    style = ("whip", "pull", "flash", "punch")[position % 4]
-    return "whip" if rank == 2 and style == "punch" else style
+    """Alternate restrained, centered zooms without flashes or camera shake."""
+    return REVEAL_STYLES[position % len(REVEAL_STYLES)]
 
 
-def _reveal_filter(width: int, height: int, style: str = "punch") -> str:
-    """Rank reveal transitions (each ends on the plain frame within a second).
-
-    punch: white flash, 12% punch-in that settles in 0.6 s, brief camera shake.
-    whip:  a fast sideways whip-pan that lands with motion blur.
-    pull:  starts 30% zoomed in out of black and pulls back to the full frame.
-    flash: an accent-coloured flash with a gentle 6% punch-in.
-    """
-    if style == "whip":
-        scale = 1.24
-        travel = f"({width}*0.2*pow(max(0,1-t/0.32),3))"
-        return (f"scale={round(width*scale/2)*2}:{round(height*scale/2)*2}:flags=bicubic,"
-                f"crop={width}:{height}:x='(iw-{width})/2+{travel}':y='(ih-{height})/2',"
-                f"boxblur=luma_radius=14:luma_power=1:chroma_radius=10:enable='lt(t,0.24)',")
-    if style == "pull":
-        zoom = "(1+0.30*pow(max(0,1-t/0.75),2))"
-        return (f"scale=w='trunc({width}*{zoom}/2)*2':h='trunc({height}*{zoom}/2)*2':eval=frame:flags=bicubic,"
-                f"crop={width}:{height},fade=t=in:st=0:d=0.28:color=black,")
-    if style == "flash":
-        zoom = "(1+0.06*pow(max(0,1-t/0.5),2))"
-        color = "0x%02X%02X%02X" % ACCENT
-        return (f"scale=w='trunc({width}*{zoom}/2)*2':h='trunc({height}*{zoom}/2)*2':eval=frame:flags=bicubic,"
-                f"crop={width}:{height},fade=t=in:st=0:d=0.24:color={color},")
-    zoom = "(1+0.12*pow(max(0,1-t/0.6),2))"
-    shake = "(10*sin(t*70)*max(0,1-t/0.35))"
-    return (f"scale=w='trunc({width}*{zoom}/2)*2':h='trunc({height}*{zoom}/2)*2':eval=frame:flags=bicubic,"
-            f"crop={width}:{height}:x='(iw-{width})/2+{shake}':y='(ih-{height})/2+{shake}*0.6',"
-            f"fade=t=in:st=0:d=0.2:color=white,")
+def _reveal_filter(width: int, height: int, style: str = "zoom_in") -> str:
+    """Gently zoom across the preview; legacy style names also become a zoom."""
+    return _hold_motion(5*FPS, 0, width, height, style)+","
 
 
 def j_cut(part: Path, source: Path, source_start: float, *, lead: float = 0.6, gain: float = 0.55):
@@ -490,8 +455,8 @@ def end_screen_video(image: Path, seconds: float, output: Path):
     width, height = export_size()
     graph = (f"[0:v]scale={width}:{height}:flags=lanczos,setsar=1,fps={FPS},trim=end_frame=1,setpts=PTS-STARTPTS,"
              f"tpad=stop_mode=clone:stop={frames},"
-             f"zoompan=z='1+0.03*on/{frames}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s={width}x{height}:fps={FPS},"
-             f"setpts=N/({FPS}*TB)[v];[1:a]apad[a]")
+             +_hold_motion(frames, 0, width, height, "zoom_in")+","
+             +f"setpts=N/({FPS}*TB)[v];[1:a]apad[a]")
     ffmpeg("-loop", "1", "-framerate", FPS, "-i", image, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
            "-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-frames:v", frames, "-t", frames/FPS,
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", FPS, "-threads", "2",

@@ -101,9 +101,6 @@ def test_gentle_still_motion_renders_without_audio_or_timing_changes(monkeypatch
     early, late = subject(.15), subject(3.05)
     if style == "zoom_out":
         assert late[0] < early[0]-1
-    elif style == "pan_left":
-        assert abs(late[1]-early[1]) > 1.5
-        assert abs(late[0]-early[0]) <= 1
     else:
         assert late[0] > early[0]+1
         assert abs(late[1]-early[1]) <= 2  # Chroma/crop rounding at this small test resolution.

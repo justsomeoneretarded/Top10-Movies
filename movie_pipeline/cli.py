@@ -236,7 +236,7 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v11-planned-story", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v12-steady-zoom-fresh-pool", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
