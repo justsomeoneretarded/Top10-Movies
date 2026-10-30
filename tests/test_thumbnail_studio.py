@@ -45,7 +45,7 @@ def test_three_distinct_text_free_thumbnails(offline, tmp_path, monkeypatch):
     pixels = [np.asarray(Image.open(tmp_path / f"thumbnail-0{i}.jpg"), dtype=float) for i in (1, 2, 3, 4, 5)]
     assert all(p.shape == (720, 1280, 3) for p in pixels)
     assert report[3]["service"] in studio.RANDOM_SERVICES and report[3]["service_reason"].startswith("random")
-    assert report[4]["text"] == "Watch these"
+    assert report[4]["text"] == "3 WATCH THESE DRAMA"  # number, the two-word phrase, the genre tag
     # With only four source images some reuse is unavoidable; uniqueness is tested with a larger pool below.
     assert "service" not in report[2]  # only design 4 carries a service mark
 
