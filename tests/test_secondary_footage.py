@@ -141,3 +141,30 @@ def test_visual_fingerprints_compare_real_pixel_arrays_and_skip_duplicates(monke
     monkeypatch.setattr('movie_pipeline.secondary_footage.duration',lambda path:120)
     assert not scene_novelty(Path('primary.mp4'),Path('copy.mp4'))['distinct']
     assert scene_novelty(Path('primary.mp4'),Path('novel.mp4'))['distinct']
+
+
+def test_third_trailer_excludes_accepted_ids_and_caches_separately(monkeypatch, tmp_path):
+    primary, downloaded, inspected = fake_downloads(monkeypatch, tmp_path, catalog={key:info() for key in IDS[1:]})
+    second = download_secondary(FILM, tmp_path, primary, (1920,1080))
+    assert second and downloaded == [IDS[1]]
+    monkeypatch.setattr('movie_pipeline.secondary_footage._hashes', lambda path: [1,2,3,4])
+    monkeypatch.setattr('movie_pipeline.secondary_footage.novelty_from_hashes',
+                        lambda old, new: {'distinct':True,'novel_fraction':.5})
+    inspected.clear()
+    third = download_secondary(FILM, tmp_path, primary, (1920,1080), existing=[second], slot=3)
+    assert third and third != second and third.name.endswith('-extra-3.mp4')
+    assert downloaded == [IDS[1], IDS[2]]
+    assert IDS[0] not in inspected and IDS[1] not in inspected
+    assert download_secondary(FILM, tmp_path, primary, (1920,1080), existing=[second], slot=3) == third
+    assert downloaded == [IDS[1], IDS[2]]
+    assert primary.exists() and second.exists()
+
+
+def test_third_rejects_footage_already_in_the_union(monkeypatch, tmp_path):
+    primary, downloaded, _ = fake_downloads(monkeypatch, tmp_path, catalog={key:info() for key in IDS[1:]})
+    second = download_secondary(FILM, tmp_path, primary, (1920,1080))
+    monkeypatch.setattr('movie_pipeline.secondary_footage._hashes',
+                        lambda path: [0x1111111111111111,0x3333333333333333,0x5555555555555555,0x7777777777777777])
+    assert download_secondary(FILM, tmp_path, primary, (1920,1080), existing=[second], slot=3) is None
+    assert primary.exists() and second.exists()
+    assert not list(tmp_path.glob('*candidate*'))

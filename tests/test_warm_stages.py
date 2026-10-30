@@ -58,6 +58,8 @@ def test_footage_stage_downloads_analyses_and_describes_one_title(monkeypatch, t
     seen = {}
     monkeypatch.setattr(cli, "setup_run", lambda *a: context(tmp_path))
     monkeypatch.setattr("movie_pipeline.footage.download", lambda film, root: seen.setdefault("film", film) and Path("t.mp4"))
+    monkeypatch.setattr("movie_pipeline.secondary_footage.download_secondary",
+                        lambda *args, **kwargs: seen.setdefault("extra_called", True))
     monkeypatch.setattr("movie_pipeline.shots.analyse", lambda path, cache: [{"start": 0, "end": 5}])
     monkeypatch.setattr("movie_pipeline.scenes.describe_trailer", lambda path, shots: seen.setdefault("described", len(shots)))
     monkeypatch.setattr("movie_pipeline.scenes.unload", lambda: None)

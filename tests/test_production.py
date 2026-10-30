@@ -169,11 +169,16 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/trailer/{film['id']}"})
         return path
 
-    def secondary(film, root, primary, minimum_size):
+    def secondary(film, root, primary, minimum_size, *, existing=None, slot=2):
         assert len([event for event in records["footage_order"] if event[0]=="primary"]) == count
-        records["footage_order"].append(("secondary", film["id"]))
+        if slot == 3:
+            assert len([event for event in records["footage_order"] if event[0]=="secondary"]) == count
+            assert existing is not None
+        records["footage_order"].append(("secondary" if slot == 2 else "tertiary", film["id"]))
         records['extra_attempts'] = records.get('extra_attempts', 0)+1
         assert minimum_size == expected_size
+        if extra_mode == 'render-fails' and slot == 3:
+            return None  # exercise failed second decoding with a missing third
         if extra_mode == 'raises':
             raise RuntimeError('Optional source unavailable')
         if extra_mode in {'missing', 'rewrite-fails', 'shared-audio-retry', 'cta-vad-retry',
@@ -181,7 +186,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                           'final-audio-rejected', 'final-audio-error', 'title-cards',
                           'title-card-fails'}:
             return None
-        path = make(root / f"movie-{film['id']}-extra.mp4", 150)
+        suffix = "extra" if slot == 2 else "extra-3"
+        path = make(root / f"movie-{film['id']}-{suffix}.mp4", 150)
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/extra/{film['id']}"})
         return path
 
@@ -227,7 +233,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 for i, seconds in enumerate(lengths)]
 
     def speech_video(source, audio, selected, target, label, work, **kwargs):
-        if extra_mode == 'render-fails' and any('-extra.mp4' in cut.get('source', '') for cut in selected):
+        if extra_mode == 'render-fails' and any('-extra' in cut.get('source', '') for cut in selected):
             records['render_fallbacks'] = records.get('render_fallbacks', 0)+1
             raise PipelineError('Optional decoder failed')
         render_sizes.append(export_size())
@@ -490,11 +496,11 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert opening_checks[0]['accepted'] is True
         assert opening_checks[0]['heard'] == first
         assert sum(part['text'] == first for part in records['spoken_renders']) == 1
-    assert records['extra_attempts'] == count
-    assert records["footage_order"] == [("primary",film["id"]) for film in films]+[("secondary",film["id"]) for film in films]
+    assert records['extra_attempts'] == count*2
+    assert records["footage_order"] == [("primary",film["id"]) for film in films]+[("secondary",film["id"]) for film in films]+[("tertiary",film["id"]) for film in films]
     if extra_mode == "render-fails":
         assert records['render_fallbacks'] == count
-    assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(2 if extra_mode == 'found' else 1)
+    assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(3 if extra_mode == 'found' else 1)
     assert render_sizes and set(render_sizes) == {expected_size}
     quality_report = json.loads(next((tmp_path / "jobs").glob("*/quality-report.json")).read_text())
     assert quality_report["try_4k"] == (try_4k == "true")

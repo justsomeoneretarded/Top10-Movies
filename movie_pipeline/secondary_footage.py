@@ -1,4 +1,4 @@
-"""Best-effort second trailer: different imagery, same title, and no quality downgrade."""
+"""Best-effort extra trailers: different imagery, same title, and no quality downgrade."""
 from __future__ import annotations
 
 import json
@@ -126,20 +126,26 @@ def _valid_cache(path: Path, primary_source: str, minimum_size: tuple[int,int]) 
         return False
 
 
-def download_secondary(film: dict, root: Path, primary: Path, minimum_size: tuple[int,int]) -> Path | None:
-    """Keep at most one optional extra; every discovery or media failure returns None."""
+def download_secondary(film: dict, root: Path, primary: Path, minimum_size: tuple[int,int],
+                       *, existing: list[Path] | None = None, slot: int = 2) -> Path | None:
+    """Fetch optional slot two or three, excluding all already accepted sources."""
     try:
-        return _download_secondary(film, root, primary, minimum_size)
+        return _download_secondary(film, root, primary, minimum_size, existing=existing, slot=slot)
     except Exception:  # noqa: BLE001 -- optional enrichment must never discard the primary/video.
-        print(f"No additional usable trailer for {film.get('title', 'this title')}; continuing with one.", flush=True)
+        print(f"No additional usable trailer for {film.get('title', 'this title')}; keeping the accepted trailers.", flush=True)
         return None
 
 
 from .footage import search_query  # noqa: E402
 
 
-def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tuple[int,int]) -> Path | None:
+def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tuple[int,int],
+                        *, existing: list[Path] | None = None, slot: int = 2) -> Path | None:
     import yt_dlp
+    if slot not in (2, 3):
+        return None
+    existing = [Path(p) for p in (existing or []) if Path(p) != primary]
+    accepted_sources = [json.loads(p.with_suffix(".json").read_text()).get("source", "") for p in existing]
     record = json.loads(primary.with_suffix('.json').read_text())
     if record.get('stills_fallback'):
         return None  # no trailer was reachable for this film; do not search again
@@ -147,23 +153,27 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
     if not isinstance(source,str) or not source:
         return None
     root.mkdir(parents=True,exist_ok=True)
-    target = root / f'{primary.stem}-extra.mp4'
+    suffix = "extra" if slot == 2 else "extra-3"
+    target = root / f'{primary.stem}-{suffix}.mp4'
     if _valid_cache(target,source,minimum_size):
-        return target
+        cached = json.loads(target.with_suffix(".json").read_text())
+        if cached.get("existing_sources", []) == accepted_sources and cached.get("source") not in accepted_sources:
+            return target
     _clean_candidate(target)
     require_disk(root)
     cap = export_size()[1]
     # Optional extra footage uses whichever route already worked for primary trailers.
     common = download_access.options({'quiet':True,'no_warnings':True,'noplaylist':True,'socket_timeout':12,'retries':1,
                                       'fragment_retries':1,'js_runtimes':{'node':{}}}, download_access.routes()[0])
-    seen = {_primary_id(source)}
+    seen = {_primary_id(source), *(_primary_id(url) for url in accepted_sources)}
+    excluded_count = len(seen)
     ranked = []
     blocked = False
 
     def inspect(entries):
         nonlocal blocked
         for identifier,curated in entries:
-            if identifier in seen or len(seen)-1 >= MAX_METADATA or not re.fullmatch(r'[\w-]{11}', identifier):
+            if identifier in seen or len(seen)-excluded_count >= MAX_METADATA or not re.fullmatch(r'[\w-]{11}', identifier):
                 continue
             seen.add(identifier)
             url = f'https://www.youtube.com/watch?v={identifier}'
@@ -183,7 +193,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
 
     inspect([(trailer.get('key',''),True) for trailer in film.get('trailers',[])[:MAX_METADATA] if trailer.get('site','YouTube') == 'YouTube'])
     # Reserve actual metadata capacity for fan edits when curated discovery has few options.
-    if not blocked and len(seen)-1 < MAX_METADATA:
+    if not blocked and len(seen)-excluded_count < MAX_METADATA:
         try:
             with yt_dlp.YoutubeDL({**common,'extract_flat':True}) as ydl:
                 result = ydl.extract_info(f"ytsearch6:{search_query(film, 'trailer')}",download=False)
@@ -192,7 +202,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
             blocked = True
     ranked.sort(key=lambda row:(-row[0],row[1]))
     for _quality_value,order,url,curated,info in ranked[:MAX_DOWNLOADS]:
-        attempt = root / f'{primary.stem}-extra-candidate-{order:02}.mp4'
+        attempt = root / f'{primary.stem}-{suffix}-candidate-{order:02}.mp4'
         _clean_candidate(attempt)
         try:
             options = {**common,'format':f'bv[height<={cap}]+ba/b[height<={cap}]',
@@ -208,15 +218,21 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
             width,height = video.get('width',0),video.get('height',0)
             if width < minimum_size[0] or height < minimum_size[1]:
                 continue
-            novelty = scene_novelty(primary,attempt)
+            if existing:
+                # The third trailer must add scenes beyond the union of both
+                # accepted trailers, not merely differ from each one separately.
+                hashes = [value for path in [primary, *existing] for value in _hashes(path)]
+                novelty = novelty_from_hashes(hashes, _hashes(attempt))
+            else:
+                novelty = scene_novelty(primary,attempt)
             if not novelty or not novelty['distinct']:
                 continue
             save_json(attempt.with_suffix('.json'), {'source':url,'primary_source':source,'title':info.get('title'),
                       'channel':info.get('channel'),'curated':curated,'fan_edit':bool(FAN.search(info.get('title',''))),
-                      'source_width':width,'source_height':height,'secondary_version':1,'novelty':novelty})
+                      'source_width':width,'source_height':height,'secondary_version':1,'novelty':novelty,'existing_sources':accepted_sources,'slot':slot})
             attempt.replace(target)
             attempt.with_suffix('.json').replace(target.with_suffix('.json'))
-            print(f"Added a second trailer for {film['title']} with different sampled imagery.",flush=True)
+            print(f"Added trailer {slot} for {film['title']} with different sampled imagery.",flush=True)
             return target
         except (yt_dlp.utils.DownloadError,PipelineError,OSError,ValueError) as exc:
             if _bot_check(exc):
@@ -224,5 +240,5 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
         finally:
             _clean_candidate(attempt)
     if blocked or ranked:
-        print(f"No distinct second trailer accepted for {film['title']}; continuing with one.",flush=True)
+        print(f"No distinct trailer {slot} accepted for {film['title']}; keeping the accepted trailers.",flush=True)
     return None

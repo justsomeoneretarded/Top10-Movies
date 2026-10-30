@@ -236,7 +236,7 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v12-steady-zoom-fresh-pool", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v13-three-trailer-rounds", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -331,32 +331,35 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     shot_lookup = {str(trailer): shots for trailer, shots in zip(trailers, shot_sets)}
     for i, source in enumerate(sources):
         source.update(film=films[i]["title"], role="primary")
-    print("Footage round 2: optional second trailers, after all primary trailers are ready.", flush=True)
-    for i, (film, primary) in enumerate(zip(films, trailers)):
-        extra = None
-        try:
-            # The extra source is optional and must leave space for the final render.
-            require_disk(work, spec.target)
-            extra = download_secondary(film, Path("work/footage"), primary, (width, height))
-            if extra is None:
-                print(f"Using one trailer for {film['title']}; no suitable second trailer was accepted.", flush=True)
-                continue
-            details = inspect_sources([extra])[0]
-            if min(details["height"], details["width"]*9/16) * MAX_UPSCALE < height:
-                raise PipelineError("Optional trailer is too far below the selected export resolution.")
-            extra_shots = analyse(extra, extra.with_suffix(".shots.json"))
-            require_disk(work, spec.target)
-            pools[i].append(extra)
-            shot_lookup[str(extra)] = extra_shots
-            details.update(film=film["title"], role="secondary")
-            sources.append(details)
-            print(f"Using two trailers for {film['title']} to provide more scene variety.", flush=True)
-        except Exception:  # noqa: BLE001 -- an optional second trailer must never discard a usable first one.
-            if extra is not None and extra != primary:
-                for path in extra.parent.glob(extra.stem+".*"):
-                    if path.is_file():
-                        path.unlink(missing_ok=True)
-            print(f"Second trailer skipped for {film['title']}; continuing with the primary trailer.", flush=True)
+    for round_number in (2, 3):
+        print(f"Footage round {round_number}: optional extra trailers, after the previous round finishes for all titles.", flush=True)
+        for i, (film, primary) in enumerate(zip(films, trailers)):
+            extra = None
+            try:
+                # The extra source is optional and must leave space for the final render.
+                require_disk(work, spec.target)
+                extra = (download_secondary(film, Path("work/footage"), primary, (width, height)) if round_number == 2 else
+                             download_secondary(film, Path("work/footage"), primary, (width, height),
+                                                existing=pools[i][1:], slot=3))
+                if extra is None:
+                    print(f"Keeping {len(pools[i])} trailer(s) for {film['title']}; optional trailer {round_number} was not accepted.", flush=True)
+                    continue
+                details = inspect_sources([extra])[0]
+                if min(details["height"], details["width"]*9/16) * MAX_UPSCALE < height:
+                    raise PipelineError("Optional trailer is too far below the selected export resolution.")
+                extra_shots = analyse(extra, extra.with_suffix(".shots.json"))
+                require_disk(work, spec.target)
+                pools[i].append(extra)
+                shot_lookup[str(extra)] = extra_shots
+                details.update(film=film["title"], role="secondary" if round_number == 2 else "tertiary")
+                sources.append(details)
+                print(f"Using {len(pools[i])} trailers for {film['title']} to provide more scene variety.", flush=True)
+            except Exception:  # noqa: BLE001 -- an optional extra trailer must never discard a usable first one.
+                if extra is not None and extra != primary:
+                    for path in extra.parent.glob(extra.stem+".*"):
+                        if path.is_file():
+                            path.unlink(missing_ok=True)
+                print(f"Trailer {round_number} skipped for {film['title']}; keeping the accepted trailers.", flush=True)
     quality_report = {"try_4k": ceiling == 2160, "ceiling_height": ceiling,
                       "sources": sources, "export_width": width, "export_height": height}
     save_json(work / "quality-report.json", quality_report)
@@ -1041,20 +1044,12 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
         trailer = download(film, Path("work/footage"))
         shots = analyse(trailer, trailer.with_suffix(".shots.json"))
         scenes.describe_trailer(trailer, shots)
+        # Extra trailers are fetched in global rounds by the final job, after
+        # every title's primary has been fetched. Parallel warm-ups stay primary-only.
         extra = None
-        try:
-            # The optional second trailer too: the final job reuses it when it meets the export size.
-            from .secondary_footage import download_secondary
-            details = inspect_sources([trailer])[0]
-            floor = max(720, round(min(details["height"], details["width"]*9/16) / MAX_UPSCALE))
-            extra = download_secondary(film, Path("work/footage"), trailer, (round(floor*16/9), floor))
-            if extra is not None:
-                scenes.describe_trailer(extra, analyse(extra, extra.with_suffix(".shots.json")))
-        except Exception as exc:  # noqa: BLE001 -- optional; the final job can still try
-            print(f"Second trailer warm-up skipped for {film['title']} ({type(exc).__name__}).", flush=True)
         scenes.unload()
         print(f"Warmed footage for {film['title']}: {trailer.name}, {len(shots)} shots; "
-              f"second trailer: {extra.name if extra else 'none'}.", flush=True)
+              f"optional extras deferred to the global download rounds.", flush=True)
         return {"trailer": str(trailer), "extra": str(extra) if extra else ""}
     raise PipelineError(f"Unknown stage {stage!r}.")
 
