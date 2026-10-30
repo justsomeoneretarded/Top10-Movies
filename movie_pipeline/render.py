@@ -391,50 +391,54 @@ def j_cut(part: Path, source: Path, source_start: float, *, lead: float = 0.6, g
     return True
 
 
-def tracker_image(path: Path, total: int, current: int):
-    """Small countdown tracker (e.g. 8 7 6 [5] 4 3 2 1): done ranks dim, current in the accent colour."""
-    size = 44
-    gap = 14
-    width = total * size + (total - 1) * gap + 40
-    canvas = Image.new("RGBA", (width, size + 28), (0, 0, 0, 0))
+OVERLAY_HEIGHT = 50  # tracker and up-next pill share one compact plate (in 1280x720 units)
+
+
+def _overlay_plate(width: int) -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    """Dark glass plate with the accent bar, the same look as the rank/title box."""
+    canvas = Image.new("RGBA", (width, OVERLAY_HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle((0, 0, width - 1, size + 27), radius=18, fill=(0, 0, 0, 120))
-    face = brand_font("display", 34)
+    draw.rounded_rectangle((0, 0, width - 1, OVERLAY_HEIGHT - 1), radius=12, fill=(9, 11, 16, 210),
+                           outline=(255, 255, 255, 38), width=1)
+    draw.rounded_rectangle((0, 0, 7, OVERLAY_HEIGHT - 1), radius=4, fill=ACCENT + (255,))
+    return canvas, draw
+
+
+def tracker_image(path: Path, total: int, current: int):
+    """Compact countdown tracker (10 9 8 [7] 6 ... 1): done ranks dim, the current one in an accent circle."""
+    size, gap = 30, 6
+    width = 22 + total * size + (total - 1) * gap + 14
+    canvas, draw = _overlay_plate(width)
+    face = brand_font("display", 23)
     for slot, rank in enumerate(range(total, 0, -1)):
-        x = 20 + slot * (size + gap) + size / 2
-        y = 14 + size / 2
+        x = 22 + slot * (size + gap) + size / 2
+        y = OVERLAY_HEIGHT / 2
         if rank == current:
-            draw.ellipse((x - size / 2 - 2, y - size / 2 - 2, x + size / 2 + 2, y + size / 2 + 2), fill=ACCENT + (255,))
+            draw.ellipse((x - size / 2, y - size / 2, x + size / 2, y + size / 2), fill=ACCENT + (255,))
             draw.text((x, y + 1), str(rank), font=face, anchor="mm", fill=(0, 0, 0))
         else:
-            done = rank > current
-            draw.text((x, y + 1), str(rank), font=face, anchor="mm",
-                      fill=(255, 255, 255, 90 if done else 230))
+            draw.text((x, y + 1), str(rank), font=face, anchor="mm", fill=(255, 255, 255, 85 if rank > current else 225))
     canvas.save(path)
     return canvas.size
-def up_next_image(path: Path, rank: int, title: str | None):
-    """Pill under the countdown tracker in the last seconds of an entry: 'UP NEXT  #4 TITLE'.
 
-    Number one keeps its secret: its pill reads 'UP NEXT  #1' with no title.
-    """
-    label_face, rank_face, title_face = brand_font("body-medium", 24), brand_font("display", 40), brand_font("title", 34)
+
+def up_next_image(path: Path, rank: int, title: str | None):
+    """'UP NEXT  #4  TITLE' on the tracker's plate; number one's reads 'UP NEXT  #1' with no title."""
+    label_face, rank_face, title_face = brand_font("body-medium", 17), brand_font("display", 28), brand_font("title", 25)
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     text = (title or "").upper()
-    while probe.textlength(text, font=title_face) > 560:
+    while probe.textlength(text, font=title_face) > 420:
         text = text.rstrip("…")[:-1].rstrip() + "…"
-    width = round(28 + probe.textlength("UP NEXT", font=label_face) + 22 + probe.textlength(f"#{rank}", font=rank_face)
-                  + (18 + probe.textlength(text, font=title_face) if text else 0) + 30)
-    height = 68
-    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=18, fill=(0, 0, 0, 165))
-    x = 28
-    draw.text((x, height / 2), "UP NEXT", font=label_face, anchor="lm", fill=(255, 255, 255, 200))
-    x += probe.textlength("UP NEXT", font=label_face) + 22
-    draw.text((x, height / 2 + 1), f"#{rank}", font=rank_face, anchor="lm", fill=ACCENT + (255,))
-    x += probe.textlength(f"#{rank}", font=rank_face) + 18
+    width = round(22 + probe.textlength("UP NEXT", font=label_face) + 14 + probe.textlength(f"#{rank}", font=rank_face)
+                  + (12 + probe.textlength(text, font=title_face) if text else 0) + 20)
+    canvas, draw = _overlay_plate(width)
+    middle, x = OVERLAY_HEIGHT / 2, 22
+    draw.text((x, middle), "UP NEXT", font=label_face, anchor="lm", fill=(255, 255, 255, 190))
+    x += probe.textlength("UP NEXT", font=label_face) + 14
+    draw.text((x, middle + 1), f"#{rank}", font=rank_face, anchor="lm", fill=ACCENT + (255,))
+    x += probe.textlength(f"#{rank}", font=rank_face) + 12
     if text:
-        draw.text((x, height / 2 + 1), text, font=title_face, anchor="lm", fill=(255, 255, 255))
+        draw.text((x, middle + 1), text, font=title_face, anchor="lm", fill=(250, 250, 252))
     canvas.save(path)
     return canvas.size
 
@@ -715,13 +719,23 @@ def finish(parts: list[Path], output: Path, work: Path, action: bool, spec: Dura
             mix_inputs = "[voice][duck][fx]amix=inputs=3" if effects else "[voice][duck]amix=inputs=2"
             overlay_inputs, overlay_graph, last = [], "", "base"
             first_overlay = 4 if effects else 3
+            out_width, out_height = export_size()
+            factor = out_width / WIDTH  # overlay images are drawn in 1280x720 units
             for number, (image, begin, end, *corner) in enumerate(overlays or []):
-                # Small images placed on the final clock: the countdown tracker (top right) and the
-                # "up next" pill just below it.
+                # Small plates on the final clock, fading in and out: the countdown tracker and the
+                # 'up next' pill sit lower left, where the rank/title box appears (default: top right).
                 overlay_inputs += ["-loop", "1", "-framerate", FPS, "-i", image]
-                y = "112" if corner and corner[0] == "below-tracker" else "30"
-                overlay_graph += (f"[{last}][{first_overlay + number}:v]overlay=x=W-w-36:y={y}:eof_action=pass:"
-                                  f"enable='between(t,{begin/speed:.3f},{end/speed:.3f})'[o{number}];")
+                start, stop = begin / speed, end / speed
+                fade = min(0.25, max(0.05, (stop - start) / 4))
+                if corner and corner[0] == "lower-left":
+                    x, y = f"{round(56 * factor)}", f"H-h-{round(52 * factor)}"
+                else:
+                    x, y = f"W-w-{round(36 * factor)}", f"{round(30 * factor)}"
+                overlay_graph += (f"[{first_overlay + number}:v]format=rgba,scale=trunc(iw*{factor:.4f}/2)*2:-2,"
+                                  f"fade=t=in:st={start:.3f}:d={fade:.3f}:alpha=1,"
+                                  f"fade=t=out:st={max(start, stop - fade):.3f}:d={fade:.3f}:alpha=1[p{number}];"
+                                  f"[{last}][p{number}]overlay=x={x}:y={y}:eof_action=pass:"
+                                  f"enable='between(t,{start:.3f},{stop:.3f})'[o{number}];")
                 last = f"o{number}"
             graph = (
                 # Honor legitimate display gaps first, then rebuild the clock.

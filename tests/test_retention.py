@@ -35,7 +35,7 @@ def test_tease_avoids_number_ones_own_review_moments_and_cards():
 
 def test_up_next_and_tease_images(tmp_path):
     width, height = up_next_image(tmp_path / "next.png", 4, "A Very Long Title That Must Be Shortened To Fit The Pill")
-    assert width <= 900 and height == 68
+    assert width <= 700 and height == 50
     secret, _ = up_next_image(tmp_path / "one.png", 1, None)
     assert secret < width
     number_one_tease_image(tmp_path / "tease.png")

@@ -710,6 +710,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                               reveal=True, reveal_style=style, audio=None if preview["muted"] or preview.get("still") else
                               isolate_dialogue(source, preview["start"], preview["duration"], work / "dialogue"))
             seconds = duration(path)
+            preview_seconds = seconds
             timeline.append({"start": offset, "duration": seconds, "type": "review-preview", "film": film["title"],
                              "source_start": preview["start"], "shots": [preview], "narration": False, "reveal_style": style})
             parts.append(path)
@@ -815,10 +816,24 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 parts.append(path)
                 offset += seconds
         card = ending_cards.get(film_index) if is_film else None
-        if is_film and len(films) >= 3 and os.getenv("COUNTDOWN_TRACKER", "true") != "false":
-            tracker = work / f"tracker-{film_index+1}.png"
-            tracker_image(tracker, len(films), film_index+1)
-            overlays.append((tracker, section_start + 1.0, offset))
+        if is_film:
+            # Lower left, where the rank/title box sat: the small countdown tracker appears once that
+            # box has gone and stays until the entry ends; in the entry's last seconds it gives way
+            # to 'UP NEXT #4 Title' (number one stays secret), so viewers who don't care about the
+            # next pick skip ahead with the chapters instead of leaving. Both vanish before the next
+            # entry's rank/title box comes in.
+            label_end = section_start + preview_seconds + 0.3
+            switch = offset
+            upcoming = next((s["film"] for s in script["sections"][section_index+1:] if s["kind"] == "film"), None)
+            if upcoming is not None and offset - label_end > 9 and os.getenv("UP_NEXT", "true").strip().lower() != "false":
+                switch = max(label_end + 5.0, offset - 4.5)
+                pill = work / f"up-next-{film_index+1}.png"
+                up_next_image(pill, upcoming+1, None if upcoming == 0 else films[upcoming]["title"])
+                overlays.append((pill, switch, offset, "lower-left"))
+            if len(films) >= 3 and switch - label_end > 2 and os.getenv("COUNTDOWN_TRACKER", "true") != "false":
+                tracker = work / f"tracker-{film_index+1}.png"
+                tracker_image(tracker, len(films), film_index+1)
+                overlays.append((tracker, label_end, switch, "lower-left"))
         if card:
             source = Path(card["source"])
             path = work / f"part-{len(parts):03}.mp4"
@@ -835,14 +850,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 used_video_sources.add(str(source))
                 offset += seconds
                 note_visual_beat(selector, seconds, still=True)
-        if is_film and os.getenv("UP_NEXT", "true").strip().lower() != "false":
-            # 'Up next' in the last seconds of each entry: viewers who don't care about the next pick
-            # can see what's coming and skip ahead with the chapters instead of leaving.
-            upcoming = next((s["film"] for s in script["sections"][section_index+1:] if s["kind"] == "film"), None)
-            if upcoming is not None and offset - section_start > 10:
-                pill = work / f"up-next-{film_index+1}.png"
-                up_next_image(pill, upcoming+1, None if upcoming == 0 else films[upcoming]["title"])
-                overlays.append((pill, max(section_start + 6.0, offset - 4.5), offset, "below-tracker"))
         if section["kind"] == "intro" and tease:
             # A three-second flash of number one, unnamed: the reason to stay until the end.
             plate = work / "number-one-tease.png"
