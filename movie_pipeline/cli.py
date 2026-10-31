@@ -332,16 +332,31 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     shot_lookup = {str(trailer): shots for trailer, shots in zip(trailers, shot_sets)}
     for i, source in enumerate(sources):
         source.update(film=films[i]["title"], role="primary")
+    workers = max(1, min(3, int(os.getenv("FOOTAGE_WORKERS", "2") or 2)))
     for round_number in (2, 3):
-        print(f"Footage round {round_number}: optional extra trailers, after the previous round finishes for all titles.", flush=True)
-        for i, (film, primary) in enumerate(zip(films, trailers)):
-            extra = None
+        print(f"Footage round {round_number}: optional extra trailers and clips, {workers} titles at a time, "
+              "after the previous round finishes for all titles.", flush=True)
+
+        def fetch_extra(i: int, round_number: int = round_number):
+            """Download only (network-bound, safe to run for two titles at once); never raises."""
+            film, primary = films[i], trailers[i]
             try:
-                # The extra source is optional and must leave space for the final render.
-                require_disk(work, spec.target)
-                extra = (download_secondary(film, Path("work/footage"), primary, (width, height)) if round_number == 2 else
-                             download_secondary(film, Path("work/footage"), primary, (width, height),
-                                                existing=pools[i][1:], slot=3))
+                require_disk(work, spec.target)  # stop adding extras gracefully when storage is tight
+                return (download_secondary(film, Path("work/footage"), primary, (width, height)) if round_number == 2 else
+                        download_secondary(film, Path("work/footage"), primary, (width, height),
+                                           existing=pools[i][1:], slot=3))
+            except Exception as exc:  # noqa: BLE001 -- an optional extra must never discard a usable first trailer
+                print(f"Trailer {round_number} download skipped for {film['title']} ({type(exc).__name__}).", flush=True)
+                return None
+
+        # One download per title at a time (never all three for one title), several titles in parallel.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as pool_runner:
+            extras = list(pool_runner.map(fetch_extra, range(len(films))))
+        # Checks and shot analysis (CPU and memory heavy) stay one at a time, in title order.
+        for i, (film, primary) in enumerate(zip(films, trailers)):
+            extra = extras[i]
+            try:
                 if extra is None:
                     print(f"Keeping {len(pools[i])} trailer(s) for {film['title']}; optional trailer {round_number} was not accepted.", flush=True)
                     continue

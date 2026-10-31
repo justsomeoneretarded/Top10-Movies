@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -15,9 +16,17 @@ from . import download_access
 from .footage import MAX_TRAILER_BYTES, _bot_check, _clean_candidate
 from .video_settings import export_size, require_disk
 
-REJECT = re.compile(r"\b(concept|ai[ -]?generated|reaction|review|explained|deepfake)\b", re.IGNORECASE)
+REJECT = re.compile(r"\b(concept|ai[ -]?generated|reaction|review|explained|deepfake|full (?:movie|episode|film)|"
+                    r"behind the scenes|making of|interview|breakdown|recap|ending|easter eggs?|ranked|ranking|top \d+|"
+                    r"compilation|parody|fan theory|edit audio|slowed|reverb)\b", re.IGNORECASE)
+# Words that mark official footage: trailers and teasers, and single scenes or clips.
+FOOTAGE_WORDS = {"trailer", "teaser", "clip", "clips", "scene", "scenes", "preview", "sneak", "peek", "promo"}
+# What a scene search asks for, per genre (an action list wants chases and fights, a comedy funny scenes).
+SCENE_SEARCH = {"action": "action scene", "adventure": "action scene", "thriller": "scene", "scifi": "scene",
+                "fantasy": "battle scene", "horror": "scary scene", "comedy": "funny scene", "romance": "scene",
+                "family": "scene", "drama": "scene", "documentary": "clip"}
 FAN = re.compile(r"\b(?:fan[ -]?(?:made|edit)|unofficial)\b", re.IGNORECASE)
-MAX_METADATA = 8
+MAX_METADATA = 12
 MAX_DOWNLOADS = 3
 
 
@@ -26,7 +35,8 @@ def secondary_candidate_ok(info: dict, film: dict, curated: bool = False) -> boo
     if not isinstance(title, str) or REJECT.search(title) or info.get("is_live"):
         return False
     length = info.get("duration") or 0
-    if not isinstance(length, (int, float)) or not 25 <= length <= 360:
+    # Clips are often 20-60 s; anything shorter is a logo, promo or fragment. Over 6 minutes is not a clip.
+    if not isinstance(length, (int, float)) or not 20 <= length <= 360:
         return False
     years = set(re.findall(r"\b(?:18|19|20)\d{2}\b", title))
     years -= set(re.findall(r"\b(?:18|19|20)\d{2}\b", film["title"]))
@@ -37,7 +47,7 @@ def secondary_candidate_ok(info: dict, film: dict, curated: bool = False) -> boo
     expected = set(normalized(film["title"]).split())
     found = set(normalized(title).split())
     overlap = len(expected & found)/max(1, len(expected))
-    if overlap < .85 or "trailer" not in found:
+    if overlap < .85 or not found & FOOTAGE_WORDS:  # a scene clip need not say 'trailer'
         return False
     from .footage import identity_ok
     if not identity_ok(info, film):
@@ -73,13 +83,14 @@ def _hashes(path: Path) -> list[int]:
 
 
 def novelty_from_hashes(primary: list[int], candidate: list[int]) -> dict | None:
-    if len(primary) < 4 or len(candidate) < 4:
+    if len(primary) < 4 or len(candidate) < 3:
         return None
     novel = sum(not any((value ^ old).bit_count() <= 8 for old in primary)
                 for value in candidate)
     fraction = novel/len(candidate)
-    return {"novel_frames": novel, "sampled_frames": len(candidate), "novel_fraction": fraction,
-            "distinct": novel >= 3 and fraction >= .25}
+    # A single-scene clip has few distinct frames (3 is enough); it counts as new only if every one is new.
+    distinct = (novel >= 3 and fraction >= .25) if len(candidate) >= 4 else novel == len(candidate)
+    return {"novel_frames": novel, "sampled_frames": len(candidate), "novel_fraction": fraction, "distinct": distinct}
 
 
 def scene_novelty(primary: Path, candidate: Path) -> dict | None:
@@ -121,7 +132,7 @@ def _valid_cache(path: Path, primary_source: str, minimum_size: tuple[int,int]) 
         return (record.get('secondary_version') == 1 and record.get('primary_source') == primary_source
                 and record.get('novelty',{}).get('distinct') is True
                 and record.get('source_width',0) >= minimum_size[0] and record.get('source_height',0) >= minimum_size[1]
-                and path.exists() and 0 < path.stat().st_size <= MAX_TRAILER_BYTES and 25 <= duration(path) <= 360)
+                and path.exists() and 0 < path.stat().st_size <= MAX_TRAILER_BYTES and 20 <= duration(path) <= 360)
     except (OSError, ValueError, TypeError, AttributeError, PipelineError):
         return False
 
@@ -196,14 +207,22 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
     curated = [*film.get('clips', []), *film.get('trailers', [])]
     inspect([(video.get('key',''),True) for video in curated[:MAX_METADATA] if video.get('site','YouTube') == 'YouTube'])
     # Reserve actual metadata capacity for fan edits when curated discovery has few options.
-    if not blocked and len(seen)-excluded_count < MAX_METADATA:
+    # Then searches: scenes that fit the list's genre (chases and fights for action, funny scenes for
+    # comedy), then other trailers. Searched results must come from a verified channel and name the
+    # right title, year and cast (secondary_candidate_ok).
+    genre = os.getenv("VIDEO_GENRE", "drama").strip().lower()
+    for words in (SCENE_SEARCH.get(genre, "scene"), "trailer"):
+        if blocked or len(seen)-excluded_count >= MAX_METADATA:
+            break
         try:
             with yt_dlp.YoutubeDL({**common,'extract_flat':True}) as ydl:
-                result = ydl.extract_info(f"ytsearch6:{search_query(film, 'trailer')}",download=False)
+                result = ydl.extract_info(f"ytsearch6:{search_query(film, words)}",download=False)
             inspect([(entry.get('id',''),False) for entry in (result or {}).get('entries',[]) if entry])
         except (yt_dlp.utils.DownloadError,PipelineError,OSError,ValueError):
             blocked = True
-    ranked.sort(key=lambda row:(-row[0],row[1]))
+    # Official studio footage first, then single scenes (most likely to add new footage), then quality.
+    ranked.sort(key=lambda row:(not row[3], not (set(normalized(str(row[4].get('title',''))).split()) & {"clip","clips","scene","scenes"}),
+                                -row[0], row[1]))
     for _quality_value,order,url,curated,info in ranked[:MAX_DOWNLOADS]:
         attempt = root / f'{primary.stem}-{suffix}-candidate-{order:02}.mp4'
         _clean_candidate(attempt)
@@ -214,7 +233,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
                        'outtmpl':str(attempt.with_suffix('.%(ext)s')),'overwrites':True,'max_filesize':MAX_TRAILER_BYTES}
             with yt_dlp.YoutubeDL(options) as ydl:
                 ydl.download([url])
-            if not attempt.exists() or not 25 <= duration(attempt) <= 360 or attempt.stat().st_size > MAX_TRAILER_BYTES:
+            if not attempt.exists() or not 20 <= duration(attempt) <= 360 or attempt.stat().st_size > MAX_TRAILER_BYTES:
                 continue
             metadata = probe(attempt)
             video = next((stream for stream in metadata.get('streams',[]) if stream.get('codec_type') == 'video'),{})

@@ -497,7 +497,11 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert opening_checks[0]['heard'] == first
         assert sum(part['text'] == first for part in records['spoken_renders']) == 1
     assert records['extra_attempts'] == count*2
-    assert records["footage_order"] == [("primary",film["id"]) for film in films]+[("secondary",film["id"]) for film in films]+[("tertiary",film["id"]) for film in films]
+    # Rounds stay strictly ordered; within a round, titles download in parallel (any order).
+    order, n = records["footage_order"], len(films)
+    assert order[:n] == [("primary",film["id"]) for film in films]
+    assert sorted(order[n:2*n]) == sorted(("secondary",film["id"]) for film in films)
+    assert sorted(order[2*n:]) == sorted(("tertiary",film["id"]) for film in films)
     if extra_mode == "render-fails":
         assert records['render_fallbacks'] == count
     assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(3 if extra_mode == 'found' else 1)

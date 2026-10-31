@@ -168,3 +168,20 @@ def test_third_rejects_footage_already_in_the_union(monkeypatch, tmp_path):
     assert download_secondary(FILM, tmp_path, primary, (1920,1080), existing=[second], slot=3) is None
     assert primary.exists() and second.exists()
     assert not list(tmp_path.glob('*candidate*'))
+
+
+def test_official_scene_clips_are_accepted_without_the_word_trailer():
+    from movie_pipeline.secondary_footage import novelty_from_hashes, secondary_candidate_ok
+    film = {"title": "Fast X", "year": 2023, "cast": ["Vin Diesel"], "kind": "movie"}
+    clip = {"title": "Fast X (2023) - Rome Bomb Chase Scene | Movieclips", "duration": 150, "channel_is_verified": True,
+            "description": "Vin Diesel in Fast X", "channel": "Movieclips"}
+    assert secondary_candidate_ok(clip, film) or secondary_candidate_ok({**clip, "description": "Fast X Vin Diesel"}, film)
+    for bad in ("Fast X (2023) Full Movie Scene", "Fast X Ending Explained Scene", "Fast X Trailer Reaction",
+                "Fast X Behind the Scenes Clip"):
+        assert not secondary_candidate_ok({**clip, "title": bad}, film)
+    assert not secondary_candidate_ok({**clip, "duration": 12}, film)  # a logo or promo, not a scene
+    # A single-scene clip with only three distinct frames counts as new when all three are new.
+    primary = [0x1111111111111111, 0x3333333333333333, 0x5555555555555555, 0x7777777777777777]
+    novel = [0xEEEEEEEEEEEEEEEE, 0xCCCCCCCCCCCCCCCC, 0xAAAAAAAAAAAAAAAA]
+    assert novelty_from_hashes(primary, novel)["distinct"] is True
+    assert novelty_from_hashes(primary, [primary[0], *novel[:2]])["distinct"] is False
