@@ -62,6 +62,26 @@ def plan_facts(film: dict) -> dict:
     return facts
 
 
+NAME_CUES = re.compile(r"\b(?i:directed by|director|from director|created by|creator|written by|starring|stars|played by|"
+                       r"alongside)\s+((?:[A-Z][\w'’.-]+\s?){1,4})")
+
+
+def _names_issue(paragraphs: list[str], facts: dict) -> str | None:
+    """Flag a director, creator or actor named in the script who is not in the verified facts."""
+    known = json.dumps(facts, ensure_ascii=False).casefold()
+    wrong = []
+    for match in NAME_CUES.finditer(" ".join(paragraphs)):
+        words = [w.strip(".,'’") for w in match.group(1).split()]
+        name = " ".join(w for w in words if w and w[0].isupper() and w not in ("The", "A", "An"))
+        if len(name.split()) >= 2 and name.casefold() not in known and not any(
+                part.casefold() in known for part in [name.split()[-1]] if len(part) > 3):
+            wrong.append(name)
+    if wrong:
+        return ("These names are not in the verified facts (director, creators, cast): " + ", ".join(sorted(set(wrong)))
+                + ". Name only people listed in the facts, with the characters they play.")
+    return None
+
+
 def _numbers_issue(paragraphs: list[str], facts: dict) -> str | None:
     """Flag figures (years, counts, money, runtimes) that do not appear anywhere in the facts."""
     allowed = set(re.findall(r"\d+", json.dumps(facts, ensure_ascii=False)))
@@ -226,6 +246,11 @@ GENRE_SIGNALS = {
 
 # Stock AI-writer phrasing viewers recognise instantly; replaced with plain words wherever it appears.
 BANNED_PHRASES = {
+    # Countdown clichés that made every entry sound the same.
+    r"\bkeeps? you on the edge of your seats?\b": "keeps you hooked", r"\bedge[- ]of[- ](?:your|their)[- ]seats?\b": "tense",
+    r"\bhigh[- ]octane\b": "fast", r"\badrenaline[- ](?:fu?eled|pumping)\b": "hard-hitting", r"\bthrill(?:ing)? ride\b": "ride",
+    r"\bredefin(?:e|es|ed|ing) (?:the|its) genre\b": "stands out in its genre", r"\bgame[- ]changer\b": "standout",
+    r"\bpromises to deliver\b": "delivers", r"\bthe stakes have never been higher\b": "the stakes are high",
     r"\bcurated\b": "hand-picked", r"\bunsettling\b": "creepy", r",?\s*\bhigh-concept\b": "", r"\bdelves? into\b": "digs into",
     r"\bexplores? how\b": "shows how", r"\ba testament to\b": "proof of", r"\btapestry\b": "mix", r"\bcaptivating\b": "gripping",
     r"\bthought-provoking\b": "smart", r"\bmasterclass in\b": "a great example of", r"\bnuanced\b": "layered",
@@ -361,6 +386,15 @@ def versus_question(films: list[dict], title: str = "") -> str:
     kind = "show" if all(f.get("kind") == "tv" for f in films) else "movie"
     first, second = films[0]["title"], films[1]["title"]
     return f"Which {year.group(0) + ' ' if year else ''}{kind} are you watching first: {first} or {second}?"
+
+
+# Entries open differently so ten reviews don't all start "It's a [genre] film directed by...".
+OPENING_STYLES = (
+    "(2) one identifying sentence: what it is (genre, film or series), who made it (director or creator when in the facts) and who leads it, ",
+    "(2) open on the main character by name and their situation, then in the same or next sentence say what it is and who plays them, ",
+    "(2) open with the premise in one vivid sentence (the 'what if'), then say what it is and who leads it, ",
+    "(2) open with the tagline or a striking fact from the facts when there is one (else the premise), then say what it is and who leads it, ",
+)
 
 
 class Writer:
@@ -548,6 +582,7 @@ class Writer:
                  or _section_issue(edited, facts, opening=opening, closing=closing)
                  or _editorial_issue(edited, opening=opening, theme=_theme(topic, brief, facts))
                  or _numbers_issue(edited, facts)
+                 or (rank is not None and _names_issue(edited, facts))
                  or (closing and not all(w in " ".join(edited).casefold() for w in ("like", "subscribe")))
                  or (rank is not None and facts.get("title") and facts["title"].casefold() not in edited[0].casefold()))
         if issue:
@@ -610,7 +645,9 @@ class Writer:
                      f"in the spirit of: {hook!r}. " + planned +
                      "Then make the video's promise clear (what kind of list this is and why it is worth watching), "
                      "and end by teasing number one WITHOUT naming it, for example: 'and number one is the one you really shouldn't watch alone.' "
-                     f"Two or three short complete sentences, about twelve seconds: at most {maximum} words in total. Do not name any selected title or list the ranks. "
+                     f"Two or three short complete sentences, about twelve seconds: at most {maximum} words in total: what this list is and how many picks, "
+                     "why these are worth it in one concrete line, then the number one tease. No 'carefully curated', 'without further ado', "
+                     "'welcome to', or channel housekeeping. Do not name any selected title or list the ranks. "
                      "Do not explain how the countdown works. Do not invent statistics or a personal viewing history. ")
         elif closing:
             style = ("SECTION ROLE: OUTRO ONLY. Every review is finished and number one has ALREADY been revealed. "
@@ -628,8 +665,8 @@ class Writer:
                      "Do not invent streaming services; availability is appended separately from checked data. "
                      "Structure, in this order, like the clearest countdown channels: "
                      "(1) 'Number [rank]: [title].' "
-                     "(2) one identifying sentence: what it is (genre, film or series), who made it (director or creator when in the facts) "
-                     "and who leads it, naming the actors WITH their characters from the cast facts ('starring Dev Patel as Kid'); "
+                     + OPENING_STYLES[int(facts.get("rank") or 0) % len(OPENING_STYLES)] +
+                     "naming actors only WITH their characters from the cast facts ('Dev Patel as Kid'); "
                      "(3) the setup, the heart of the review, in three or four concrete sentences: the main character by name, their situation, "
                      "what goes wrong or what they must do, who or what stands against them, and what is at stake. Use names, places and specifics "
                      "from the overview and wiki notes; no spoilers past the setup; "
@@ -704,7 +741,8 @@ class Writer:
                 if chunk:
                     cleaned.append(chunk)
             issue = (_section_issue(cleaned, facts, opening=opening, closing=closing) or _editorial_issue(cleaned, opening=opening, theme=_theme(topic, brief, facts))
-                     or _numbers_issue(cleaned, facts))
+                     or _numbers_issue(cleaned, facts)
+                     or (not opening and not closing and _names_issue(cleaned, facts)))
             if issue:
                 correction = "Previous output used the wrong section role. "+issue
                 continue
@@ -907,7 +945,9 @@ class Writer:
             "thumbnail_texts": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
             "tags": {"type": "array", "items": {"type": "string"}, "minItems": 5, "maxItems": 20},
         }, "required": ["titles", "hook", "description", "thumbnail_texts", "tags"], "additionalProperties": False}
+        opening_text = " ".join(next((x["paragraphs"] for x in sections if x.get("kind") == "intro"), []))[:500]
         package = self.ask(f"Create YouTube packaging for topic {title!r}. Brief: {brief}. Films: {json.dumps([{'title':f['title'],'year':f['year'],'status':f.get('status')} for f in films])}. "
+                           f"The finished narration opens: {opening_text!r}. Make the hook and titles promise what this video actually says. "
                            "Recommend 6 to 8 distinct, accurate, compelling video titles (each under 70 characters, ideally 45 to 60; lead with the "
                            "searchable topic and the number of picks; curiosity without clickbait or false promises), "
                            "a hook: the description's first one or two sentences (under 200 characters) that YouTube shows in search: start with the main search phrase (for example '8 horror movies from 2025'), name the two or three biggest titles, and say what viewers get; "

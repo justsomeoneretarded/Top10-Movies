@@ -331,9 +331,16 @@ def reveal_style_for(position: int, rank: int) -> str:
     return REVEAL_STYLES[position % len(REVEAL_STYLES)]
 
 
+GENRE_ENTRY = {"horror": ("black", 0.45), "thriller": ("black", 0.3), "drama": ("black", 0.35),
+               "romance": ("black", 0.35), "documentary": ("black", 0.3)}
+
+
 def _reveal_filter(width: int, height: int, style: str = "zoom_in") -> str:
-    """Gently zoom across the preview; legacy style names also become a zoom."""
-    return _hold_motion(5*FPS, 0, width, height, style)+","
+    """Gently zoom across the preview. Slower genres also rise out of black (a short dip between
+    entries); action and comedy keep a straight cut for pace."""
+    entry = GENRE_ENTRY.get(os.getenv("VIDEO_GENRE", "").strip().lower())
+    dip = f"fade=t=in:st=0:d={entry[1]}:color={entry[0]}," if entry else ""
+    return _hold_motion(5*FPS, 0, width, height, style)+","+dip
 
 
 def j_cut(part: Path, source: Path, source_start: float, *, lead: float = 0.6, gain: float = 0.55):

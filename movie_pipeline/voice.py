@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import os
 import re
+import json
 from pathlib import Path
 
 from .core import PipelineError, duration, ffmpeg, key
@@ -36,9 +37,20 @@ VOICE_CHAIN = ("asetpts=PTS-STARTPTS,highpass=f=70,"
                "adelay={lead}:all=1,apad=pad_dur=0.26,loudnorm=I=-18:TP=-2:LRA=9")
 
 
+def custom_pronunciations() -> dict[str, str]:
+    """Your own respellings from pronunciations.json at the repository root, e.g.
+    {"Villeneuve": "Vil-nuv", "Chalamet": "Shala-may"}; whole words, case-sensitive."""
+    path = Path(__file__).resolve().parents[1] / "pronunciations.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {rf"\b{re.escape(str(word))}\b": str(spoken) for word, spoken in data.items() if str(word).strip()}
+
+
 def spoken_form(text: str) -> str:
     """The text as the narrator should say it (respellings for known trouble titles and abbreviations)."""
-    for pattern, replacement in PRONUNCIATIONS.items():
+    for pattern, replacement in {**PRONUNCIATIONS, **custom_pronunciations()}.items():
         text = re.sub(pattern, replacement, text)
     return " ".join(text.split())
 
@@ -156,7 +168,7 @@ class Narrator:
             self.deliveries[text] = delivery
         delivery = delivery or self.deliveries.get(text, "normal")
         emotional = self.emotion_enabled and delivery in EMOTION
-        baseline = key("voice-v5-phrases", text, self.reference_hash, self.model_name, delivery if emotional else "turbo", self.takes)
+        baseline = key("voice-v5-phrases", spoken_form(text), self.reference_hash, self.model_name, delivery if emotional else "turbo", self.takes)
         token = key("voice-retry-v1", baseline, attempt_offset) if force else baseline
         output = self.cache / f"{token}.wav"
         suffix = 0

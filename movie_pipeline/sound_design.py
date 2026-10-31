@@ -22,13 +22,13 @@ RAMP_SECONDS = 0.45
 MUSIC_LEVELS = {
     "cold-open": 4.0,
     "review-preview": 3.5,          # muted preview: music carries the reveal
-    "review-preview-dialogue": 1.0,  # preview keeps a complete trailer line
+    "review-preview-dialogue": 0.6,  # preview keeps a complete trailer line: music steps back for it
     "title-card": 3.0,
     "teaser": 2.5,                   # the number one flash in the intro
     "subscribe": 1.8,
     "narration": 0.75,               # about 2.5 dB quieter under the narrator
     "narration-top": 0.95,           # number one gets a slightly bigger bed
-    "trailer-audio": 0.35,
+    "trailer-audio": 0.25,           # trailer dialogue moments: the line must be heard
     "trailer-audio-separated": 0.7,  # trailer score removed: our bed carries the moment
     "end-screen": 3.5,
     "ending": 3.5,

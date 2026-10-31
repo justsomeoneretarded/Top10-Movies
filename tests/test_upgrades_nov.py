@@ -25,10 +25,11 @@ def test_sizzle_opens_on_the_best_moment_and_rotates_titles():
               str(b): [{"start": 0, "end": 5, "peak": 0.1}, {"start": 30, "end": 34, "peak": 0.9}, {"start": 40, "end": 44, "peak": 0.5}]}
     selector = Selector()
     plan = sizzle_plan(selector, [[a], [b]], lookup, seconds=10.4, shot_seconds=2.6)
-    assert len(plan) == 4
-    assert [cut["film_index"] for cut in plan] == [1, 0, 1, 0]  # b's 0.9 beats a's best usable 0.4 (a's 1.0 is a title card)
+    assert [cut["film_index"] for cut in plan][:4] == [1, 0, 1, 0]  # b's 0.9 beats a's best usable 0.4 (a's 1.0 is a title card)
     assert plan[0]["start"] >= 30 and not any(cut["source"] == "a.mp4" and cut["start"] < 5 for cut in plan)
-    assert len(selector.reserved) == 4 and {"action", "adventure"} <= SIZZLE_GENRES and "comedy" not in SIZZLE_GENRES
+    assert len(selector.reserved) == len(plan) and {"action", "adventure"} <= SIZZLE_GENRES and "comedy" not in SIZZLE_GENRES
+    lengths = [cut["duration"] for cut in plan]
+    assert lengths[0] > lengths[1] >= 1.4 and sum(lengths) <= 10.4 + 1e-6  # the reel speeds up
 
 
 def test_watermark_is_small_and_translucent(tmp_path):

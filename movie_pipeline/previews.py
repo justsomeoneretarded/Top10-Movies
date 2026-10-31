@@ -301,8 +301,20 @@ def sizzle_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, list],
     best, in about 2.6-second hits with the trailers' own sound under the music. Text cards
     are skipped and every window is reserved so the reviews don't replay it.
     """
-    frames_each = max(FPS, round(shot_seconds * FPS))
-    count = max(1, round(seconds * FPS / frames_each))
+    # Rhythm: the reel accelerates, from about 3 s per hit down to about 1.5 s, then lands on
+    # one longer final hit, so it builds like a trailer instead of ticking at one speed.
+    total_frames = round(seconds * FPS)
+    lengths, used = [], 0
+    while used < total_frames:
+        progress = used / max(1, total_frames)
+        frames = round(FPS * (shot_seconds + 0.4 - 1.5 * progress))
+        frames = max(round(1.4 * FPS), frames)
+        if total_frames - used - frames < round(1.4 * FPS):
+            frames = total_frames - used  # the final hit absorbs the remainder
+        lengths.append(frames)
+        used += frames
+    frames_each = max(lengths)
+    count = len(lengths)
     ranked = []
     for film_index, pool in enumerate(pools):
         if not pool:
@@ -330,9 +342,10 @@ def sizzle_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, list],
         for _, film_index, path, options in ranked:
             if depth < len(options) and len(plan) < count:
                 begin = options[depth][1]
-                plan.append({"source": str(path), "start": begin, "duration": frames_each / FPS, "muted": False,
+                length = lengths[len(plan)] / FPS
+                plan.append({"source": str(path), "start": begin, "duration": length, "muted": False,
                              "still": False, "film_index": film_index})
-                _reserve(selector, str(path), begin, frames_each / FPS, "cold-open")
+                _reserve(selector, str(path), begin, length, "cold-open")
         depth += 1
     return plan
 
