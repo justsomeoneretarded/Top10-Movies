@@ -282,6 +282,49 @@ def _detector(name: str):
     return _DETECTORS[name]
 
 
+_YUNET = {}
+
+
+def _yunet():
+    """OpenCV's YuNet face detector (MIT licence, about 230 KB), downloaded once; None if unavailable.
+
+    It finds turned, tilted and partly lit faces that the old Haar cascade missed, so more titles
+    yield usable thumbnail faces."""
+    if "model" not in _YUNET:
+        _YUNET["model"] = None
+        try:
+            from huggingface_hub import hf_hub_download
+            path = hf_hub_download("opencv/face_detection_yunet", "face_detection_yunet_2023mar.onnx")
+            _YUNET["model"] = cv2.FaceDetectorYN.create(path, "", (320, 320), 0.8, 0.3, 5000)
+        except Exception as exc:  # noqa: BLE001 -- the Haar cascade remains the fallback
+            print(f"YuNet face detector unavailable ({type(exc).__name__}); using the Haar cascade.", flush=True)
+    return _YUNET["model"]
+
+
+def detect_faces(gray_or_rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Face boxes (x, y, w, h) at the given image's scale: YuNet when available, else Haar."""
+    model = _yunet()
+    if model is not None:
+        image = gray_or_rgb if gray_or_rgb.ndim == 3 else cv2.cvtColor(gray_or_rgb, cv2.COLOR_GRAY2BGR)
+        model.setInputSize((image.shape[1], image.shape[0]))
+        _, found = model.detect(image)
+        if found is None:
+            return []
+        height, width = image.shape[:2]
+        boxes = []
+        for row in found:
+            x, y, w, h = (int(v) for v in row[:4])
+            x0, y0, x1, y1 = max(0, x), max(0, y), min(width, x + w), min(height, y + h)  # faces past the edge
+            if x1 - x0 >= 24 and y1 - y0 >= 24:
+                boxes.append((x0, y0, x1 - x0, y1 - y0))
+        return boxes
+    detector = _detector("haarcascade_frontalface_default.xml")
+    if detector is None:
+        return []
+    gray = gray_or_rgb if gray_or_rgb.ndim == 2 else cv2.cvtColor(gray_or_rgb, cv2.COLOR_BGR2GRAY)
+    return [tuple(int(v) for v in box) for box in detector.detectMultiScale(gray, 1.1, 6, minSize=(36, 36))]
+
+
 def frame_sharpness(image: Image.Image) -> float:
     """Detail at a fixed 960-pixel width; below about 25 the frame is soft, blurred or bokeh."""
     gray = np.asarray(image.convert("L").resize((960, max(1, round(960 * image.height / image.width)))), dtype=np.uint8)
@@ -294,12 +337,10 @@ def face_quality(image: Image.Image) -> tuple[tuple[int, int, int, int] | None, 
     Good means: big enough to read on a phone (about a tenth of the frame height or more),
     sharp, eyes visible, sensibly exposed and not cut off at the top.
     """
-    detector = _detector("haarcascade_frontalface_default.xml")
-    if detector is None:
-        return None, 0.0, False
     scale = 640 / image.width
-    small = np.asarray(image.convert("L").resize((640, max(1, round(image.height * scale)))), dtype=np.uint8)
-    boxes = detector.detectMultiScale(small, 1.1, 6, minSize=(36, 36))
+    resized = image.convert("RGB").resize((640, max(1, round(image.height * scale))))
+    small = np.asarray(resized.convert("L"), dtype=np.uint8)
+    boxes = detect_faces(cv2.cvtColor(np.asarray(resized), cv2.COLOR_RGB2BGR))
     if not len(boxes):
         return None, 0.0, False
     eyes = _detector("haarcascade_eye.xml")
