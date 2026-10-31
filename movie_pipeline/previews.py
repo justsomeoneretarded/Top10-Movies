@@ -290,6 +290,53 @@ def cold_open_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, lis
     return result
 
 
+SIZZLE_GENRES = {"action", "adventure", "scifi", "fantasy", "thriller"}
+
+
+def sizzle_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, list], seconds: float = 25.0,
+                shot_seconds: float = 2.6) -> list[dict]:
+    """An opening reel of the list's biggest moments (about 25 seconds) before any voiceover.
+
+    For action-type lists: the strongest moment of every title first, then each title's next
+    best, in about 2.6-second hits with the trailers' own sound under the music. Text cards
+    are skipped and every window is reserved so the reviews don't replay it.
+    """
+    frames_each = max(FPS, round(shot_seconds * FPS))
+    count = max(1, round(seconds * FPS / frames_each))
+    ranked = []
+    for film_index, pool in enumerate(pools):
+        if not pool:
+            continue
+        path = pool[0]
+        options = []
+        for index, shot in enumerate(shot_lookup.get(str(path), [])):
+            kind = getattr(selector, "card_kind", None)
+            if callable(kind) and kind(path, index) is not None:
+                continue
+            start, end = float(shot["start"]), float(shot["end"])
+            if end - start < shot_seconds * 0.8:
+                continue
+            centre = float(shot.get("punch_at", (start + end) / 2))
+            begin = max(start, min(centre - shot_seconds * 0.4, end - shot_seconds))
+            options.append((float(shot.get("peak", 0)) * 2 + min(float(shot.get("motion", 0)), 60) / 60, begin))
+        options.sort(reverse=True)
+        if options:
+            ranked.append((options[0][0], film_index, path, options))
+    if not ranked:
+        return []
+    ranked.sort(key=lambda row: -row[0])  # the title with the single best moment opens the reel
+    plan, depth = [], 0
+    while len(plan) < count and any(depth < len(row[3]) for row in ranked):
+        for _, film_index, path, options in ranked:
+            if depth < len(options) and len(plan) < count:
+                begin = options[depth][1]
+                plan.append({"source": str(path), "start": begin, "duration": frames_each / FPS, "muted": False,
+                             "still": False, "film_index": film_index})
+                _reserve(selector, str(path), begin, frames_each / FPS, "cold-open")
+        depth += 1
+    return plan
+
+
 def outro_recap_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, list],
                      paragraph_seconds: list[float], text: str, action: bool = False) -> list[list[dict]]:
     """Revisit at most two titles in calm beats no longer than twelve seconds.

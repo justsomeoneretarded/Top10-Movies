@@ -374,6 +374,20 @@ def _overlay_plate(width: int) -> tuple[Image.Image, ImageDraw.ImageDraw]:
     return canvas, draw
 
 
+def watermark_image(path: Path, text: str = "MOVIE RANKS"):
+    """Small channel stamp for the top right corner of every video: white, slightly translucent."""
+    face = brand_font("display", 26)
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    spaced = " ".join(text.upper())  # light letter spacing
+    width = round(probe.textlength(spaced, font=face)) + 16
+    canvas = Image.new("RGBA", (width, 44), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    draw.text((9, 24), spaced, font=face, anchor="lm", fill=(0, 0, 0, 90))  # soft shadow
+    draw.text((8, 22), spaced, font=face, anchor="lm", fill=(255, 255, 255, 175))
+    canvas.save(path)
+    return canvas.size
+
+
 def tracker_image(path: Path, total: int, current: int):
     """Compact countdown tracker (10 9 8 [7] 6 ... 1): done ranks dim, the current one in an accent circle."""
     size, gap = 30, 6

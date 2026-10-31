@@ -682,6 +682,9 @@ class ShotSelector:
                     previous_end = getattr(self, "last_end", {}).get(str(path))
                     if previous_end is not None and previous_end - .5 <= start <= previous_end + 8:
                         score += .3
+                    elif previous_end is None:
+                        # A title's first excerpt opens on its strongest footage: the best comes first.
+                        score += .35 * min(1.0, float(shot.get("peak", 0)))
                     candidates.append((tier,score,-index,index,start,end,not unseen))
             # When no hold is due, prefer readable source windows over tiny
             # fresh fragments, rather than padding every short shot with a freeze.

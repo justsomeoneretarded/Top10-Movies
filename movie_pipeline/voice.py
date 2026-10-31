@@ -26,14 +26,13 @@ REVEAL_LEAD, REVEAL_BEAT = 0.55, 0.45
 # 'normal' and 'calm' lines use the faster Turbo model.
 EMOTION = {"hype": (0.75, 0.35, 0.8), "dramatic": (0.62, 0.3, 0.75)}
 
-# Broadcast narrator chain: low cut, de-esser, gentle compression, warmth and presence,
-# light saturation, then loudness.
+# Broadcast narrator chain, kept light so the voice stays natural: low cut, de-esser, gentle
+# compression, a little warmth and presence, then loudness. (No gate: it clipped breaths and
+# word tails; no soft clipper: it added a processed edge.)
 VOICE_CHAIN = ("asetpts=PTS-STARTPTS,highpass=f=70,"
-               "agate=threshold=0.001:ratio=1.5:range=0.25:attack=5:release=180:knee=4,"
-               "deesser=i=0.35:m=0.5:f=0.5:s=o,"
-               "acompressor=threshold=-21dB:ratio=3:attack=8:release=140:makeup=3:knee=4,"
-               "equalizer=f=160:t=q:w=0.9:g=2,equalizer=f=3200:t=q:w=0.8:g=2,highshelf=f=10000:g=1.5,"
-               "asoftclip=type=tanh:threshold=0.95,"
+               "deesser=i=0.3:m=0.5:f=0.5:s=o,"
+               "acompressor=threshold=-20dB:ratio=2.2:attack=12:release=180:makeup=2:knee=6,"
+               "equalizer=f=160:t=q:w=0.9:g=1.5,equalizer=f=3200:t=q:w=0.8:g=1.5,highshelf=f=10000:g=1,"
                "adelay={lead}:all=1,apad=pad_dur=0.26,loudnorm=I=-18:TP=-2:LRA=9")
 
 
@@ -54,6 +53,22 @@ def sentences(text: str) -> list[str]:
         else:
             merged.append(part)
     return merged or [text]
+
+
+def phrases(parts: list[str], reveal: bool = False, limit: int = 30) -> list[str]:
+    """Join consecutive sentences into phrases of at most two sentences and ``limit`` words.
+
+    A rank reveal ('Number 3: Title.') always stays on its own so its beat lands.
+    """
+    grouped: list[str] = []
+    for index, part in enumerate(parts):
+        last = grouped[-1] if grouped else None
+        if (last is not None and not (reveal and len(grouped) == 1) and not (reveal and index == 0)
+                and len(re.findall(r"[.!?]", last)) < 2 and len(last.split()) + len(part.split()) <= limit):
+            grouped[-1] = f"{last} {part}"
+        else:
+            grouped.append(part)
+    return grouped
 
 
 def take_score(samples, rate: int, words: int) -> float:
@@ -92,7 +107,9 @@ class Narrator:
         self.cache = cache
         self.cache.mkdir(parents=True, exist_ok=True)
         self.emotional = None  # original Chatterbox, loaded on first emotional line
-        self.emotion_enabled = os.getenv("VOICE_EMOTION", "true").strip().lower() != "false"
+        # One model for every line keeps the narrator's timbre identical through the video; the
+        # expressive model sounded like a different speaker on hype/dramatic lines (VOICE_EMOTION=true).
+        self.emotion_enabled = os.getenv("VOICE_EMOTION", "false").strip().lower() == "true"
         self.takes = max(1, min(3, int(os.getenv("VOICE_TAKES", "2"))))
         self.deliveries: dict[str, str] = {}
 
@@ -139,7 +156,7 @@ class Narrator:
             self.deliveries[text] = delivery
         delivery = delivery or self.deliveries.get(text, "normal")
         emotional = self.emotion_enabled and delivery in EMOTION
-        baseline = key("voice-v4-designed", text, self.reference_hash, self.model_name, delivery if emotional else "turbo", self.takes)
+        baseline = key("voice-v5-phrases", text, self.reference_hash, self.model_name, delivery if emotional else "turbo", self.takes)
         token = key("voice-retry-v1", baseline, attempt_offset) if force else baseline
         output = self.cache / f"{token}.wav"
         suffix = 0
@@ -156,7 +173,9 @@ class Narrator:
             pieces, rate = [], None
             seed_base = int(baseline[:8], 16) + attempt * 7919 + attempt_offset + suffix * 1009
             try:
-                for index, sentence in enumerate(sentences(spoken_form(text))):
+                # Sentences are voiced in natural phrases of up to two sentences, so intonation flows
+                # across a full stop instead of resetting on every sentence.
+                for index, sentence in enumerate(phrases(sentences(spoken_form(text)), reveal)):
                     best, best_score = None, float("-inf")
                     # Best of N takes for each sentence (one take for the slower expressive model).
                     for take in range(1 if emotional else self.takes):

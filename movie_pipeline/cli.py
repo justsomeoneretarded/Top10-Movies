@@ -286,6 +286,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         j_cut,
         label_image,
         number_one_tease_image,
+        watermark_image,
         reveal_style_for,
         speech_video,
         thumbnails,
@@ -603,8 +604,19 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 if callable(reserve):
                     reserve(trailers[film_index], start, end - start, "trailer-audio")
     dialogue = {str(trailer): cues for trailer, cues in zip(trailers, trailer_cues)}
-    opening = cold_open_plan(selector, pools, shot_lookup, title+". "+brief, action,
-                             dialogue=dialogue, seconds=COLD_OPEN_SECONDS)
+    # Action-type lists open on a ~25-second reel of the list's best moments under the music
+    # (no voice); other genres keep the short five-second cold open.
+    opening = []
+    import sys
+    preview_module = sys.modules.get(__package__ + ".previews")
+    sizzle_plan = getattr(preview_module, "sizzle_plan", None)
+    if (genre in getattr(preview_module, "SIZZLE_GENRES", ()) and callable(sizzle_plan)
+            and os.getenv("SIZZLE_INTRO", "true").strip().lower() != "false"):
+        opening = sizzle_plan(selector, pools, shot_lookup, float(os.getenv("SIZZLE_SECONDS", "25")))
+    if not opening:
+        opening = cold_open_plan(selector, pools, shot_lookup, title+". "+brief, action,
+                                 dialogue=dialogue, seconds=COLD_OPEN_SECONDS)
+    opening_seconds = sum(shot["duration"] for shot in opening)
     previews = {i: choose_preview(selector, pools[section["film"]], shot_lookup,
                  films[section["film"]].get("overview", "")+". "+title+". "+brief,
                  REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
@@ -622,14 +634,14 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     planned_seconds = (sum(lengths.values())+sum(preview["duration"] for preview in previews.values())
                        +sum(card["duration"] for card in ending_cards.values() if card)
                        +sum(beat["end"]-beat["start"] for beat in [*beats.values(), *extra_beats.values(), *impacts.values()] if beat)
-                       +COLD_OPEN_SECONDS+duration(cta_audio)+(TEASE_SECONDS if tease else 0))
+                       +opening_seconds+duration(cta_audio)+(TEASE_SECONDS if tease else 0))
     selector.playback_speed = final_tempo(planned_seconds, spec)
     boundary, fraction = subscription_boundary(script["sections"], lengths,
         {i: preview["duration"] + (beats[i]["end"]-beats[i]["start"] if beats.get(i) else 0)
             + (extra_beats[i]["end"]-extra_beats[i]["start"] if extra_beats.get(i) else 0)
             + (impacts[i]["end"]-impacts[i]["start"] if impacts.get(i) else 0)
             + (ending_cards[script["sections"][i]["film"]]["duration"] if ending_cards.get(script["sections"][i]["film"]) else 0)
-         for i, preview in previews.items()}, duration(cta_audio), opening_seconds=COLD_OPEN_SECONDS)
+         for i, preview in previews.items()}, duration(cta_audio), opening_seconds=opening_seconds)
     print(f"Like/subscribe break before a review at {fraction:.0%} of the measured video.", flush=True)
     shifted = {}
     shifted_cues = {}
@@ -645,6 +657,50 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     extra_beats = {i+(i >= boundary): beat for i, beat in extra_beats.items()}
     impacts = {i+(i >= boundary): beat for i, beat in impacts.items()}
     overlays = []  # countdown tracker images with their (pre-tempo) start and end
+    edit_stills: dict[int, list[Path]] = {}
+
+    def stills_instead_of_repeats(cuts: list[dict], film_index: int) -> list[dict]:
+        """When a title's fresh footage has run out, show its official stills with a slow zoom
+        instead of replaying a scene the viewer has already seen (each still is used once)."""
+        if os.getenv("STILLS_FOR_REPEATS", "true").strip().lower() == "false" or \
+                not any(cut.get("visual_reason") == "spaced-source-reuse" for cut in cuts):
+            return cuts
+        if film_index not in edit_stills:
+            from .stills_trailer import fetch_original
+            folder = work / "edit-stills"
+            folder.mkdir(parents=True, exist_ok=True)
+            found = []
+            for number, image_path in enumerate(films[film_index].get("backdrops", [])[:12]):
+                try:
+                    image = fetch_original(image_path, folder / "cache")
+                except Exception:  # noqa: BLE001 -- stills are optional; repeats stay the fallback
+                    image = None
+                if image is not None and image.width >= 1280:
+                    target = folder / f"{film_index}-{number:02}.jpg"
+                    image.convert("RGB").save(target, quality=94)
+                    found.append(target)
+            edit_stills[film_index] = found
+        result = []
+        for cut in cuts:
+            if cut.get("visual_reason") != "spaced-source-reuse" or not edit_stills[film_index]:
+                result.append(cut)
+                continue
+            left = float(cut["duration"])
+            while left > 0.01 and edit_stills[film_index]:
+                piece = min(left, 6.0) if left - 6.0 >= 2.0 or left <= 6.0 else left / 2
+                image = edit_stills[film_index].pop(0)
+                result.append({"source": str(image), "image": True, "start": 0.0, "duration": piece, "still": True,
+                               "freeze": 0.0, "still_motion": ("zoom_in", "zoom_out")[len(result) % 2],
+                               "visual_reason": "still-instead-of-repeat", "film_index": film_index})
+                left -= piece
+            if left > 0.01:  # stills ran out: the remaining time keeps the original (repeated) footage
+                result.append({**cut, "duration": left, "freeze": min(float(cut.get("freeze", 0)), max(0.0, left - 0.1))})
+        return result
+
+    stamp = os.getenv("CHANNEL_WATERMARK", "MOVIE RANKS").strip()
+    if stamp:  # the channel stamp, top right, for the whole video
+        watermark_image(work / "watermark.png", stamp)
+        overlays.append((work / "watermark.png", 0.0, 1e6, "top-right"))
     require_disk(work, spec.target)
     intro_text = " ".join(script["sections"][0]["paragraphs"])
     meme = prepare_intro_meme(intro_text, title+brief+movies, work / "memes")
@@ -739,6 +795,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             audio = speech[(section_index, paragraph_index)]
             selector.pace_limit = pace_limit(aligned_delivery(section)[paragraph_index], action)
             chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), action)
+            if montage is None and is_film:
+                chosen = stills_instead_of_repeats(chosen, film_index)
             if is_film and duration(audio) >= 4:
                 portrait = trailer_still_for(text, film, selector, pools[film_index], shot_lookup)
                 if portrait and (film_index, portrait["person"]) not in portraits_used:
