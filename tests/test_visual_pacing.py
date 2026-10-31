@@ -51,9 +51,9 @@ def test_title_card_or_frozen_preview_delays_the_next_narrated_hold():
     selected = selector([path], faces=True)
     selected.note_visual_beat(1.5, still=True)
     selected.note_visual_beat(3.5)
-    cuts = selected.choose(path, scenes(), "The actor gives a great performance.", 40, False)
+    cuts = selected.choose(path, scenes(), "The actor gives a great performance.", 70, False)
     first_hold = next(i for i, cut in enumerate(cuts) if cut["still"])
-    assert sum(cut["duration"] for cut in cuts[:first_hold])+3.5 >= 14
+    assert sum(cut["duration"] for cut in cuts[:first_hold])+3.5 >= 30  # holds are rare: 30 s of running footage first
     assert first_hold+1 >= 2
 
 

@@ -26,8 +26,8 @@ MUSIC_LEVELS = {
     "title-card": 3.0,
     "teaser": 2.5,                   # the number one flash in the intro
     "subscribe": 1.8,
-    "narration": 1.0,
-    "narration-top": 1.25,           # number one gets a slightly bigger bed
+    "narration": 0.75,               # about 2.5 dB quieter under the narrator
+    "narration-top": 0.95,           # number one gets a slightly bigger bed
     "trailer-audio": 0.35,
     "trailer-audio-separated": 0.7,  # trailer score removed: our bed carries the moment
     "end-screen": 3.5,

@@ -114,7 +114,7 @@ def choose_from_sources(selector, sources: list[Path], shot_sets: dict[str, list
         return _choose_source_chunk(selector, sources, shot_sets, text, seconds, action)
     remaining, result = seconds, []
     while remaining > .01:
-        beat = min(12.0, remaining)
+        beat = min(18.0, remaining)  # long readable stretches; a source switch is a scene change
         # Do not ask one source for twelve seconds when its largest fresh
         # scene is eight: that would reuse four seconds before re-ranking.
         windows = getattr(selector, "unused_windows", None)

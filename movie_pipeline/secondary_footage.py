@@ -18,7 +18,7 @@ from .video_settings import export_size, require_disk
 REJECT = re.compile(r"\b(concept|ai[ -]?generated|reaction|review|explained|deepfake)\b", re.IGNORECASE)
 FAN = re.compile(r"\b(?:fan[ -]?(?:made|edit)|unofficial)\b", re.IGNORECASE)
 MAX_METADATA = 8
-MAX_DOWNLOADS = 2
+MAX_DOWNLOADS = 3
 
 
 def secondary_candidate_ok(info: dict, film: dict, curated: bool = False) -> bool:
@@ -191,7 +191,10 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
                     break
                 continue
 
-    inspect([(trailer.get('key',''),True) for trailer in film.get('trailers',[])[:MAX_METADATA] if trailer.get('site','YouTube') == 'YouTube'])
+    # Official TMDB trailers, teasers and clips (trusted: the studio's own uploads) come before any search.
+    # Clips first: a single studio scene is far more likely to add new footage than another trailer cut.
+    curated = [*film.get('clips', []), *film.get('trailers', [])]
+    inspect([(video.get('key',''),True) for video in curated[:MAX_METADATA] if video.get('site','YouTube') == 'YouTube'])
     # Reserve actual metadata capacity for fan edits when curated discovery has few options.
     if not blocked and len(seen)-excluded_count < MAX_METADATA:
         try:

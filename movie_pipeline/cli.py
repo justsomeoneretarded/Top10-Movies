@@ -567,7 +567,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     extra_beats = {}
     for i, section in enumerate(script["sections"]):
         first = beats.get(i)
-        if section["kind"] == "film" and first and len(section["paragraphs"]) >= 3:
+        if section["kind"] == "film" and first and len(section["paragraphs"]) >= 3 and os.getenv("EXTRA_BEATS", "false") == "true":
             film_index = section["film"]
             extra_beats[i] = choose_beat(trailer_cues[film_index], shot_sets[film_index],
                 duration(trailers[film_index]), action, maximum=max_beat,
@@ -580,7 +580,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     # Impact moment: right after each review's hook, the trailer's own scare/impact beat plays with its sound.
     impacts = {}
     for i, section in enumerate(script["sections"]):
-        if section["kind"] != "film" or len(section["paragraphs"]) < 3 or os.getenv("IMPACT_BEATS", "true") == "false":
+        # Off by default: each review plays as one uninterrupted segment (preview, narration over
+        # running footage, one trailer dialogue moment). IMPACT_BEATS=true brings the extra stops back.
+        if section["kind"] != "film" or len(section["paragraphs"]) < 3 or os.getenv("IMPACT_BEATS", "false") != "true":
             continue
         film_index = section["film"]
         taken = [beat for beat in (beats.get(i), extra_beats.get(i)) if beat]

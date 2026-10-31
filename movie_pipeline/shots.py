@@ -17,16 +17,16 @@ from PIL import Image
 
 from .core import PipelineError, duration, save_json
 
-MAX_MOVING_SECONDS = 12.0
+MAX_MOVING_SECONDS = 18.0  # long, uninterrupted stretches of a trailer read as one coherent scene
 # Longest moving shot per delivery: hype lines cut quickly, tense or warm lines breathe.
-PACE_LIMITS = {"hype": 4.5, "normal": 7.0, "dramatic": 10.0, "calm": 9.0}
-ACTION_PACE_LIMITS = {"hype": 3.8, "normal": 6.0, "dramatic": 9.0, "calm": 8.0}
+PACE_LIMITS = {"hype": 7.0, "normal": 12.0, "dramatic": 16.0, "calm": 14.0}
+ACTION_PACE_LIMITS = {"hype": 6.0, "normal": 10.0, "dramatic": 14.0, "calm": 12.0}
 
 
 def pace_limit(delivery: str, action: bool = False) -> float:
     return (ACTION_PACE_LIMITS if action else PACE_LIMITS).get(delivery, PACE_LIMITS["normal"])
-HOLD_COOLDOWN_SECONDS = 14.0
-HOLD_COOLDOWN_BEATS = 2
+HOLD_COOLDOWN_SECONDS = 30.0  # freeze-frame holds are rare: running footage reads better
+HOLD_COOLDOWN_BEATS = 3
 
 
 def _zscore(values) -> np.ndarray:
@@ -677,6 +677,11 @@ class ShotSelector:
                     score -= self.visual_reuse_penalty(path,start,min(remaining,available,maximum_shot))
                     if index == last_index:
                         score -= .35
+                    # Story order: picking up right where the previous excerpt of this trailer ended
+                    # plays the trailer's own sequence of scenes, which reads as one coherent segment.
+                    previous_end = getattr(self, "last_end", {}).get(str(path))
+                    if previous_end is not None and previous_end - .5 <= start <= previous_end + 8:
+                        score += .3
                     candidates.append((tier,score,-index,index,start,end,not unseen))
             # When no hold is due, prefer readable source windows over tiny
             # fresh fragments, rather than padding every short shot with a freeze.
@@ -689,7 +694,8 @@ class ShotSelector:
             shot = shots[index]
             available = max(.1,end-start)
             portrait = about_person and hold_ready and flags[index] and remaining >= 3
-            detail = (hold_ready and not portrait and moving_beats >= 3 and moving_seconds >= 18
+            detail = (hold_ready and not portrait and moving_beats > HOLD_COOLDOWN_BEATS
+                      and moving_seconds >= HOLD_COOLDOWN_SECONDS + 4
                       and shot["motion"] <= 18 and remaining >= 3)
             still = portrait or detail
             if still and 7 < remaining < 8.5:
@@ -725,6 +731,10 @@ class ShotSelector:
                          available if still else max(.1,min(available,length-freeze)),
                          "portrait" if portrait else ("detail-hold" if detail else "narration"))
             self.cut_count += 1
+            if not still:
+                if not hasattr(self, "last_end"):
+                    self.last_end = {}
+                self.last_end[str(path)] = chosen_start + max(.1, length - freeze)
             self.uses[(str(path), index)] = self.uses.get((str(path), index), 0)+1
             remaining -= length
             last_index = index

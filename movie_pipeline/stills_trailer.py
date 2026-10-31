@@ -21,12 +21,27 @@ TMDB_ORIGINAL = "https://image.tmdb.org/t/p/original"
 SECONDS_PER_IMAGE = 6.0
 MIN_IMAGES = 5
 MAX_IMAGES = 14
+# (zoom, horizontal offset as a share of the free margin) as functions of t in 0..1. Applied
+# with the perspective filter, which samples between pixels, so moves are smooth with no shimmer.
 MOTIONS = (
-    "z='min(zoom+0.0008,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'",            # slow push in
-    "z='1.12-on*0.0007':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'",                    # slow pull out
-    "z='1.1':x='(iw-iw/zoom)*on/{frames}':y='ih/2-(ih/zoom/2)'",                        # pan left to right
-    "z='1.1':x='(iw-iw/zoom)*(1-on/{frames})':y='ih/2-(ih/zoom/2)'",                    # pan right to left
+    ("(1+0.10*T)", "0"),            # slow push in
+    ("(1.10-0.10*T)", "0"),         # slow pull out
+    ("1.10", "(2*T-1)"),            # pan left to right
+    ("1.10", "(1-2*T)"),            # pan right to left
 )
+
+
+def ken_burns(frames: int, index: int) -> str:
+    """Perspective-filter motion for one still: eased zoom or pan over ``frames`` frames."""
+    zoom, offset = MOTIONS[index % len(MOTIONS)]
+    t = f"min(1,in/{max(1, frames - 1)})"
+    eased = f"(({t})*({t})*(3-2*({t})))"
+    zoom, offset = zoom.replace("T", eased), offset.replace("T", eased)
+    half_w, half_h = f"(W/(2*{zoom}))", f"(H/(2*{zoom}))"
+    cx = f"(W/2+{offset}*(W/2-{half_w}))"
+    left, right, top, bottom = f"({cx}-{half_w})", f"({cx}+{half_w})", f"(H/2-{half_h})", f"(H/2+{half_h})"
+    return (f"perspective=x0='{left}':y0='{top}':x1='{right}':y1='{top}':x2='{left}':y2='{bottom}':"
+            f"x3='{right}':y3='{bottom}':interpolation=cubic:eval=frame")
 
 
 def fetch_original(path: str, cache: Path) -> Image.Image | None:
@@ -64,11 +79,10 @@ def build(film: dict, path: Path, work: Path) -> Path:
     for index, image in enumerate(images):
         frame = folder / f"{index:02}.jpg"
         image.save(frame, quality=95)
-        inputs += ["-i", frame]  # one picture in; zoompan makes all of its frames
-        motion = MOTIONS[index % len(MOTIONS)].format(frames=frames)
-        filters.append(f"[{index}:v]scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
-                       f"crop={width * 2}:{height * 2},zoompan={motion}:d={frames}:s={width}x{height}:fps={fps},"
-                       f"trim=end_frame={frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[s{index}]")
+        inputs += ["-loop", "1", "-framerate", fps, "-i", frame]
+        filters.append(f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
+                       f"crop={width}:{height},trim=end_frame={frames},setpts=PTS-STARTPTS,format=yuv444p,"
+                       f"{ken_burns(frames, index)},setsar=1,format=yuv420p[s{index}]")
     graph = ";".join(filters) + ";" + "".join(f"[s{i}]" for i in range(len(images))) + f"concat=n={len(images)}:v=1:a=0[v]"
     total = len(images) * SECONDS_PER_IMAGE
     ffmpeg(*inputs, "-f", "lavfi", "-t", total, "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", graph,

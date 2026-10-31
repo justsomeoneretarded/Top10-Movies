@@ -40,7 +40,12 @@ def footage_grade() -> str:
 
 
 def _hold_motion(frames: int, live_frames: int, width: int, height: int, style: str) -> str:
-    """Move only the frozen portion, by at most 3.5%, without altering time."""
+    """Slow zoom over the frozen portion (at most 3.5%), without altering time.
+
+    Uses the perspective filter, which samples between pixels (bicubic), so the frame scales
+    continuously. zoompan snaps its crop to whole pixels, which made held stills shimmer and
+    flicker by up to a pixel from frame to frame.
+    """
     seconds = (frames-live_frames)/FPS
     if seconds < 1.5:
         return "null"  # A tiny timing hold should not turn into a quick zoom.
@@ -48,13 +53,13 @@ def _hold_motion(frames: int, live_frames: int, width: int, height: int, style: 
     if live_frames:
         # A trailing freeze must start at the moving footage's existing framing.
         style = "zoom_in"
-    progress = f"min(1,max(0,(on-{live_frames})/{max(1, frames-live_frames-1)}))"
-    zoom = f"{1+amount}-{amount}*{progress}" if style == "zoom_out" else f"1+{amount}*{progress}"
-    x, y = "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"
-    # With a trailing hold the moving footage stays at its original framing.
-    if live_frames:
-        zoom = f"if(lt(on,{live_frames}),1,{zoom})"
-    return f"format=yuv444p,scale={width*2}:{height*2}:flags=lanczos,zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s={width}x{height}:fps={FPS}"
+    progress = f"min(1,max(0,(in-{live_frames})/{max(1, frames-live_frames-1)}))"
+    # Ease in and out (smoothstep) so the move starts and settles without a jolt.
+    eased = f"({progress})*({progress})*(3-2*({progress}))"
+    zoom = f"({1+amount}-{amount}*{eased})" if style == "zoom_out" else f"(1+{amount}*{eased})"
+    mx, my = f"(W*(1-1/{zoom})/2)", f"(H*(1-1/{zoom})/2)"
+    return (f"format=yuv444p,perspective=x0='{mx}':y0='{my}':x1='W-{mx}':y1='{my}':"
+            f"x2='{mx}':y2='H-{my}':x3='W-{mx}':y3='H-{my}':interpolation=cubic:eval=frame,format=yuv420p")
 
 
 FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"

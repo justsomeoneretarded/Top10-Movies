@@ -98,3 +98,14 @@ def test_meme_replaces_one_existing_beat_near_its_spoken_joke():
     assert result[2]['image']
     assert result[0] == plan[0]
     assert sum(s['duration'] for s in result) == 9
+
+
+def test_next_paragraph_continues_the_trailer_in_story_order():
+    # After playing 0-12 s, the next paragraph picks up just after it (the trailer's own next
+    # scenes) instead of jumping to a slightly better-matching but unrelated moment.
+    selector = bare_selector([0.6, 0.5, 0.4])
+    shots = [{"start": 0, "end": 12, "motion": 5}, {"start": 12, "end": 24, "motion": 5}, {"start": 60, "end": 72, "motion": 5}]
+    first = selector.choose(Path("film.mp4"), shots, "action", 12, False)
+    selector.relevance = Mock(return_value=np.array([0.5, 0.5, 0.6]))
+    second = selector.choose(Path("film.mp4"), shots, "action", 12, False)
+    assert first[0]["start"] == 0 and 12 <= second[0]["start"] <= 20

@@ -309,7 +309,8 @@ def outro_recap_plan(selector, pools: list[list[Path]], shot_lookup: dict[str, l
     if not available:
         raise PipelineError("No footage is available for the closing recap.")
     count = 2 if len(available) >= 2 and total_frames >= 14 * FPS else 1
-    beat_count = max(1, math.ceil(total_frames / (moving_limit(selector) * FPS)))
+    # The recap is a montage across titles: it keeps shorter (12 s) excerpts than the reviews.
+    beat_count = max(1, math.ceil(total_frames / (min(12.0, moving_limit(selector)) * FPS)))
     first_frames = math.ceil(total_frames / beat_count)
     sample_seconds = first_frames / FPS
     choices = []

@@ -21,7 +21,21 @@ def download_ceiling() -> int:
     return 2160 if value == "true" else 1080
 
 
+MIN_EXPORT_HEIGHT = 1080  # never below Full HD: one low-quality trailer must not blur the whole video
+
+
 def choose_output_size(sources: list[dict], ceiling: int) -> tuple[int, int]:
+    """The highest standard canvas most sources fill natively, and never below 1080p.
+
+    A weak trailer (a 480x260 upload, say) is enlarged for its own title only; it no
+    longer lowers the whole video (a comedy list once came out at 640x360 this way).
+    """
+    width, height = _shared_size(sources, ceiling)
+    floor = min(MIN_EXPORT_HEIGHT, ceiling)
+    return (width, height) if height >= floor else SIZES[floor]
+
+
+def _shared_size(sources: list[dict], ceiling: int) -> tuple[int, int]:
     """Choose a standard canvas that no source needs enlarging to fill."""
     if not sources:
         raise PipelineError("No trailer sources were provided for quality selection.")

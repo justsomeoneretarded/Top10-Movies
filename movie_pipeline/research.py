@@ -119,6 +119,9 @@ class Research:
         if not videos:
             videos = self.get(f"{kind}/{match['id']}/videos").get("results", [])
         # Vimeo copies are kept as a fallback for runners that YouTube refuses.
+        # Official clips (single scenes the studio posted) give extra, different footage for the
+        # second and third sources; trailers and teasers stay the primary choice.
+        clips = [v for v in videos if v.get("site") == "YouTube" and v.get("type") == "Clip" and v.get("official", True)][:6]
         videos = [v for v in videos if v.get("site") in ("YouTube", "Vimeo") and v.get("type") in ("Trailer", "Teaser")]
         videos.sort(key=lambda v: (v.get("official", False), v.get("type") == "Trailer", v.get("site") == "YouTube"), reverse=True)
         overview = details.get("overview", "").strip()
@@ -134,7 +137,7 @@ class Research:
             "cast": [c["name"] for c in details.get("credits", {}).get("cast", [])[:5]],
             "cast_profiles": [{"name": c["name"], "profile_path": c.get("profile_path", ""),
                                "character": c.get("character", "")} for c in details.get("credits", {}).get("cast", [])[:5]],
-            "status": details.get("status"), "trailers": videos,
+            "status": details.get("status"), "trailers": videos, "clips": clips,
             "year_evidence": match.get("_year_evidence", "TMDB search release date"),
             "imdb_id": match.get("_imdb_id") or details.get("imdb_id") or details.get("external_ids", {}).get("imdb_id"),
             "identity_source": match.get("_identity_source"),
