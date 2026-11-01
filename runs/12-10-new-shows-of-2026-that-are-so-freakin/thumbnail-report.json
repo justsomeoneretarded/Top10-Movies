@@ -1,0 +1,364 @@
+{
+  "genre": "drama",
+  "vision_rated": 0,
+  "candidates": 40,
+  "good_faces": 22,
+  "thumbnails": [
+    {
+      "file": "thumbnail-01.jpg",
+      "style": "hero",
+      "films": [
+        "The Pitt"
+      ],
+      "sources": [
+        "tmdb-still"
+      ],
+      "faces": [
+        5.31
+      ]
+    },
+    {
+      "file": "thumbnail-02.jpg",
+      "style": "split-3",
+      "films": [
+        "The Pitt",
+        "A Knight of the Seven Kingdoms",
+        "Slow Horses"
+      ],
+      "sources": [
+        "tmdb-still",
+        "tmdb-still",
+        "tmdb-still"
+      ],
+      "faces": [
+        5.27,
+        4.96,
+        4.61
+      ]
+    },
+    {
+      "file": "thumbnail-03.jpg",
+      "style": "spectacle",
+      "films": [
+        "Daredevil: Born Again"
+      ],
+      "sources": [
+        "trailer-frame"
+      ],
+      "faces": [
+        2.01
+      ]
+    },
+    {
+      "file": "thumbnail-04.jpg",
+      "style": "service",
+      "films": [
+        "The Pitt"
+      ],
+      "sources": [
+        "tmdb-still"
+      ],
+      "faces": [
+        5.27
+      ],
+      "service": "HBO Max",
+      "service_reason": "listed for The Pitt"
+    },
+    {
+      "file": "thumbnail-05.jpg",
+      "style": "countdown",
+      "films": [
+        "Silo"
+      ],
+      "sources": [
+        "tmdb-still"
+      ],
+      "faces": [
+        5.47
+      ],
+      "text": "10 FREAKING GOOD 2026"
+    }
+  ],
+  "pool": [
+    {
+      "film": "Silo",
+      "source": "tmdb-still",
+      "sharpness": 487,
+      "face_quality": 5.47,
+      "good_face": true
+    },
+    {
+      "film": "Silo",
+      "source": "tmdb-still",
+      "sharpness": 347,
+      "face_quality": 5.47,
+      "good_face": true
+    },
+    {
+      "film": "The Pitt",
+      "source": "tmdb-still",
+      "sharpness": 354,
+      "face_quality": 5.31,
+      "good_face": true
+    },
+    {
+      "film": "The Pitt",
+      "source": "tmdb-still",
+      "sharpness": 280,
+      "face_quality": 5.27,
+      "good_face": true
+    },
+    {
+      "film": "Slow Horses",
+      "source": "tmdb-still",
+      "sharpness": 606,
+      "face_quality": 4.61,
+      "good_face": true
+    },
+    {
+      "film": "The Pitt",
+      "source": "tmdb-still",
+      "sharpness": 175,
+      "face_quality": 5.27,
+      "good_face": true
+    },
+    {
+      "film": "A Knight of the Seven Kingdoms",
+      "source": "tmdb-still",
+      "sharpness": 146,
+      "face_quality": 4.96,
+      "good_face": true
+    },
+    {
+      "film": "Silo",
+      "source": "tmdb-still",
+      "sharpness": 385,
+      "face_quality": 5.1,
+      "good_face": true
+    },
+    {
+      "film": "Slow Horses",
+      "source": "tmdb-still",
+      "sharpness": 981,
+      "face_quality": 4.1,
+      "good_face": true
+    },
+    {
+      "film": "The Pitt",
+      "source": "tmdb-still",
+      "sharpness": 194,
+      "face_quality": 5.46,
+      "good_face": true
+    },
+    {
+      "film": "The Pitt",
+      "source": "tmdb-still",
+      "sharpness": 128,
+      "face_quality": 4.81,
+      "good_face": true
+    },
+    {
+      "film": "A Knight of the Seven Kingdoms",
+      "source": "tmdb-still",
+      "sharpness": 1666,
+      "face_quality": 4.57,
+      "good_face": true
+    },
+    {
+      "film": "The Pitt",
+      "source": "tmdb-still",
+      "sharpness": 121,
+      "face_quality": 5.35,
+      "good_face": true
+    },
+    {
+      "film": "Slow Horses",
+      "source": "tmdb-still",
+      "sharpness": 1090,
+      "face_quality": 4.07,
+      "good_face": true
+    },
+    {
+      "film": "Slow Horses",
+      "source": "tmdb-still",
+      "sharpness": 962,
+      "face_quality": 4.12,
+      "good_face": true
+    },
+    {
+      "film": "Silo",
+      "source": "tmdb-still",
+      "sharpness": 149,
+      "face_quality": 5.29,
+      "good_face": true
+    },
+    {
+      "film": "The Pitt",
+      "source": "tmdb-still",
+      "sharpness": 152,
+      "face_quality": 5.25,
+      "good_face": true
+    },
+    {
+      "film": "Slow Horses",
+      "source": "tmdb-still",
+      "sharpness": 575,
+      "face_quality": 4.25,
+      "good_face": true
+    },
+    {
+      "film": "Silo",
+      "source": "tmdb-still",
+      "sharpness": 169,
+      "face_quality": 4.02,
+      "good_face": true
+    },
+    {
+      "film": "Slow Horses",
+      "source": "tmdb-still",
+      "sharpness": 200,
+      "face_quality": 3.8,
+      "good_face": true
+    },
+    {
+      "film": "A Knight of the Seven Kingdoms",
+      "source": "tmdb-still",
+      "sharpness": 253,
+      "face_quality": 3.77,
+      "good_face": true
+    },
+    {
+      "film": "The Pitt",
+      "source": "tmdb-still",
+      "sharpness": 162,
+      "face_quality": 4.33,
+      "good_face": true
+    },
+    {
+      "film": "Silo",
+      "source": "tmdb-still",
+      "sharpness": 805,
+      "face_quality": 4.05,
+      "good_face": false
+    },
+    {
+      "film": "Silo",
+      "source": "tmdb-still",
+      "sharpness": 693,
+      "face_quality": 3.84,
+      "good_face": false
+    },
+    {
+      "film": "Daredevil: Born Again",
+      "source": "tmdb-still",
+      "sharpness": 389,
+      "face_quality": 4.03,
+      "good_face": false
+    },
+    {
+      "film": "Slow Horses",
+      "source": "tmdb-still",
+      "sharpness": 527,
+      "face_quality": 3.41,
+      "good_face": false
+    },
+    {
+      "film": "Slow Horses",
+      "source": "tmdb-still",
+      "sharpness": 477,
+      "face_quality": 3.38,
+      "good_face": false
+    },
+    {
+      "film": "A Knight of the Seven Kingdoms",
+      "source": "tmdb-still",
+      "sharpness": 247,
+      "face_quality": 3.54,
+      "good_face": false
+    },
+    {
+      "film": "Silo",
+      "source": "tmdb-still",
+      "sharpness": 187,
+      "face_quality": 3.78,
+      "good_face": false
+    },
+    {
+      "film": "A Knight of the Seven Kingdoms",
+      "source": "tmdb-still",
+      "sharpness": 522,
+      "face_quality": 3.01,
+      "good_face": false
+    },
+    {
+      "film": "A Knight of the Seven Kingdoms",
+      "source": "tmdb-still",
+      "sharpness": 282,
+      "face_quality": 3.03,
+      "good_face": false
+    },
+    {
+      "film": "Daredevil: Born Again",
+      "source": "trailer-frame",
+      "sharpness": 231,
+      "face_quality": 2.95,
+      "good_face": false
+    },
+    {
+      "film": "A Knight of the Seven Kingdoms",
+      "source": "trailer-frame",
+      "sharpness": 141,
+      "face_quality": 2.8,
+      "good_face": false
+    },
+    {
+      "film": "A Knight of the Seven Kingdoms",
+      "source": "tmdb-still",
+      "sharpness": 357,
+      "face_quality": 2.26,
+      "good_face": false
+    },
+    {
+      "film": "Daredevil: Born Again",
+      "source": "tmdb-still",
+      "sharpness": 1098,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Daredevil: Born Again",
+      "source": "tmdb-still",
+      "sharpness": 4257,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Daredevil: Born Again",
+      "source": "tmdb-still",
+      "sharpness": 1569,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Daredevil: Born Again",
+      "source": "trailer-frame",
+      "sharpness": 76,
+      "face_quality": 2.01,
+      "good_face": false
+    },
+    {
+      "film": "Daredevil: Born Again",
+      "source": "tmdb-still",
+      "sharpness": 263,
+      "face_quality": 0.0,
+      "good_face": false
+    },
+    {
+      "film": "Daredevil: Born Again",
+      "source": "tmdb-still",
+      "sharpness": 1397,
+      "face_quality": 0.0,
+      "good_face": false
+    }
+  ]
+}
