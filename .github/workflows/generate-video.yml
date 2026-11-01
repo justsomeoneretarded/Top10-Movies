@@ -392,6 +392,13 @@ jobs:
         with:
           name: warm-prepare
       - run: tar -xzf warm-prepare.tgz && rm warm-prepare.tgz
+      - name: Restore shot analyses from earlier runs
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: work/analysis-cache
+          key: shot-analysis-v1-${{ github.run_id }}
+          restore-keys: shot-analysis-v1-
       - name: Configure optional YouTube authentication
         env:
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
@@ -489,6 +496,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
           python -m scripts.preflight
+      - name: Restore shot analyses from earlier runs
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: work/analysis-cache
+          key: shot-analysis-v1-${{ github.run_id }}
+          restore-keys: shot-analysis-v1-
       - name: Configure optional YouTube authentication
         env:
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
@@ -611,6 +625,13 @@ jobs:
       - name: Remove temporary YouTube cookies
         if: always()
         run: rm -f "$RUNNER_TEMP/youtube-cookies.txt"
+      - name: Save shot analyses for later runs
+        if: always() && !cancelled() && hashFiles('work/analysis-cache/*.json') != ''
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: work/analysis-cache
+          key: shot-analysis-v1-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Save optional speech recognizer when downloaded
         if: always() && !cancelled() && steps.speech-verifier-cache.outputs.cache-hit != 'true' && hashFiles('work/speech-verifier-model/**/config.json') != ''
         continue-on-error: true

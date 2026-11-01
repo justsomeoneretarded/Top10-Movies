@@ -68,10 +68,11 @@ def _hashes(path: Path) -> list[int]:
             ok, image = capture.read()
             if not ok:
                 continue
-            gray = cv2.cvtColor(cv2.resize(image, (160,90)), cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(cv2.resize(image, (320,180)), cv2.COLOR_BGR2GRAY)
             if float(gray.std()) < 8 or float(gray.mean()) < 12:
                 continue
-            small = cv2.resize(gray, (9,8), interpolation=cv2.INTER_AREA)
+            from .shots import content_core  # letterboxed and full-frame copies of a shot must match
+            small = cv2.resize(content_core(gray), (9,8), interpolation=cv2.INTER_AREA)
             bits = (small[:,1:] > small[:,:-1]).reshape(-1)
             value = sum(int(bit) << index for index, bit in enumerate(bits))
             # Count a held/repeated scene once, rather than treating every frame as new.
@@ -89,7 +90,8 @@ def novelty_from_hashes(primary: list[int], candidate: list[int]) -> dict | None
                 for value in candidate)
     fraction = novel/len(candidate)
     # A single-scene clip has few distinct frames (3 is enough); it counts as new only if every one is new.
-    distinct = (novel >= 3 and fraction >= .25) if len(candidate) >= 4 else novel == len(candidate)
+    # At least half of an extra trailer must be new footage; a recut of the same shots adds only repeats.
+    distinct = (novel >= 3 and fraction >= .5) if len(candidate) >= 4 else novel == len(candidate)
     return {"novel_frames": novel, "sampled_frames": len(candidate), "novel_fraction": fraction, "distinct": distinct}
 
 

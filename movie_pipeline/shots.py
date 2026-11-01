@@ -108,11 +108,24 @@ def matches_title_card(text: str, title: str) -> bool:
     return sum(word in found for word in expected)/len(expected) >= (1 if len(expected) <= 2 else .8)
 
 
+def content_core(gray: np.ndarray) -> np.ndarray:
+    """The picture without black letterbox/pillarbox bars, then its centre (75% x 85%).
+
+    The same shot appears letterboxed in one trailer and full-frame or re-cropped in another;
+    fingerprinting only the central content lets those copies match."""
+    rows = np.where(gray.mean(axis=1) > 18)[0]
+    cols = np.where(gray.mean(axis=0) > 18)[0]
+    if len(rows) > gray.shape[0] * .4 and len(cols) > gray.shape[1] * .4:
+        gray = gray[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+    h, w = gray.shape
+    return gray[round(h * .075):round(h * .925), round(w * .125):round(w * .875)]
+
+
 def scene_hash(image: Image.Image) -> int | None:
-    gray = cv2.cvtColor(np.array(image.resize((160,90))),cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(np.array(image.resize((320,180))),cv2.COLOR_RGB2GRAY)
     if float(gray.std()) < 8 or float(gray.mean()) < 12:
         return None
-    small = cv2.resize(gray,(9,8),interpolation=cv2.INTER_AREA)
+    small = cv2.resize(content_core(gray),(9,8),interpolation=cv2.INTER_AREA)
     return sum(int(bit)<<index for index,bit in enumerate((small[:,1:]>small[:,:-1]).reshape(-1)))
 
 
@@ -169,9 +182,26 @@ def analyse(path: Path, cache: Path) -> list[dict]:
     studio cards found by OCR, which never reach the edit.
     """
     cache = cache.with_name(cache.stem + ".calm-v6.json")
-    if cache.exists():
-        return json.loads(cache.read_text())
     length = duration(path)
+    # Cross-run cache (restored by the workflow): the same video file, recognised by its name,
+    # size and length, is never analysed twice.
+    shared = Path(os.getenv("ANALYSIS_CACHE", "work/analysis-cache")) / f"{path.stem}-{path.stat().st_size}-{length:.2f}.calm-v6.json"
+    if cache.exists():
+        shots = json.loads(cache.read_text())
+        if not shared.exists():
+            try:
+                shared.parent.mkdir(parents=True, exist_ok=True)
+                save_json(shared, shots)
+            except OSError:
+                pass
+        return shots
+    if shared.exists():
+        try:
+            shots = json.loads(shared.read_text())
+            cache.write_text(json.dumps(shots))
+            return shots
+        except (OSError, ValueError):
+            pass
     # Studio channel end slates (subscribe, playlists, social links) can run longer than the
     # default final 10%; OCR finds where they begin so they never reach the edit.
     end = length * 0.90
@@ -265,6 +295,11 @@ def analyse(path: Path, cache: Path) -> list[dict]:
     if cards:
         print(f"{cards} rating/promo/text cards found in {path.name}; they are kept out of the edit.", flush=True)
     save_json(cache, shots)
+    try:
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        save_json(shared, shots)
+    except OSError:
+        pass  # the cross-run cache is a speed-up only
     return shots
 
 

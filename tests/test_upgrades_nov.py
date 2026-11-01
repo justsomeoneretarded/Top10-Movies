@@ -58,3 +58,22 @@ def test_an_official_still_renders_with_a_smooth_zoom(tmp_path):
 def test_accented_titles_match_their_plain_spelling():
     from movie_pipeline.core import fold_accents, normalized
     assert fold_accents("Shōgun") == "Shogun" and normalized("Shōgun") == normalized("SHOGUN")
+
+
+def test_letterboxed_and_full_frame_copies_of_a_shot_match():
+    import numpy as np
+    from movie_pipeline.shots import scene_hash
+    rng = np.random.default_rng(3)
+    picture = (rng.random((90, 160)) * 255).astype(np.uint8)
+    picture = np.kron(picture, np.ones((8, 8), dtype=np.uint8))[:720, :1280]
+    full = Image.fromarray(np.stack([picture] * 3, axis=2))
+    boxed = Image.new("RGB", (1280, 720))
+    boxed.paste(full.resize((1280, 534)), (0, 93))  # the same shot letterboxed to 2.4:1
+    assert (scene_hash(full) ^ scene_hash(boxed)).bit_count() <= 6
+
+
+def test_extras_need_half_new_footage():
+    from movie_pipeline.secondary_footage import novelty_from_hashes
+    primary = [0x1111111111111111, 0x3333333333333333, 0x5555555555555555, 0x7777777777777777]
+    novel = [0xEEEEEEEEEEEEEEEE, 0xCCCCCCCCCCCCCCCC, 0xAAAAAAAAAAAAAAAA]
+    assert not novelty_from_hashes(primary, [*primary, *novel[:3], primary[0], primary[1]])["distinct"]
