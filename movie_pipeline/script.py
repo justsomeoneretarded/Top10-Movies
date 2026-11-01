@@ -742,7 +742,9 @@ class Writer:
                     cleaned.append(chunk)
             issue = (_section_issue(cleaned, facts, opening=opening, closing=closing) or _editorial_issue(cleaned, opening=opening, theme=_theme(topic, brief, facts))
                      or _numbers_issue(cleaned, facts)
-                     or (not opening and not closing and _names_issue(cleaned, facts)))
+                     # Names are checked on the first two drafts; a third draft is not thrown away for a name,
+                     # since the fallback would be a bare two-sentence summary.
+                     or (not opening and not closing and attempt < 2 and _names_issue(cleaned, facts)))
             if issue:
                 correction = "Previous output used the wrong section role. "+issue
                 continue
