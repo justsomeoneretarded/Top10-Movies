@@ -677,7 +677,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     def stills_instead_of_repeats(cuts: list[dict], film_index: int) -> list[dict]:
         """When a title's fresh footage has run out, show its official stills with a slow zoom
         instead of replaying a scene the viewer has already seen (each still is used once)."""
-        if os.getenv("STILLS_FOR_REPEATS", "true").strip().lower() == "false" or \
+        # Off by default: TMDB pictures included promotional art that is not in the film, and long
+        # stills read as a slideshow. Repeats are rotated from the oldest-seen footage instead.
+        if os.getenv("STILLS_FOR_REPEATS", "false").strip().lower() != "true" or \
                 not any(cut.get("visual_reason") == "spaced-source-reuse" for cut in cuts):
             return cuts
         if film_index not in edit_stills:

@@ -708,7 +708,8 @@ class ShotSelector:
             # a moving excerpt beyond twelve seconds or adding an extra freeze.
             if remaining > beat_limit and remaining-beat_limit < 3:
                 beat_limit = remaining/2
-            freeze = 0 if still or not hold_ready else max(0, min(7,remaining)-available)
+            # A short window may hold its last frame briefly (1.5 s at most), never a long freeze-frame.
+            freeze = 0 if still or not hold_ready else min(1.5, max(0, min(7,remaining)-available))
             hold_length = remaining if remaining <= 7 else 5.5
             length = min(remaining, hold_length if still else available+freeze, beat_limit)
             if not still and hold_ready and 0 < remaining-length < 2.5 and remaining <= maximum_shot:

@@ -57,8 +57,14 @@ def key(*values) -> str:
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()[:20]
 
 
+def fold_accents(text: str) -> str:
+    """'Shōgun' -> 'Shogun', 'Amélie' -> 'Amelie': accents never decide whether two titles match."""
+    import unicodedata
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
+
+
 def normalized(text: str) -> str:
-    return " ".join(re.findall(r"\w+", text.casefold()))
+    return " ".join(re.findall(r"\w+", fold_accents(text).casefold()))
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .core import FilmInput, PipelineError, normalized, save_json
+from .core import fold_accents, FilmInput, PipelineError, normalized, save_json
 from .wiki import wikipedia_context
 
 
@@ -82,7 +82,12 @@ class Research:
                  ("tv", "movie") if getattr(self, "preferred_kind", "movie") == "tv" else ("movie", "tv"))
         for kind in kinds:
             data = self.get(f"search/{kind}", query=item.title, language="en-US", include_adult="false")
-            for found in data.get("results", []):
+            results = list(data.get("results", []))
+            if fold_accents(item.title) != item.title:  # 'Shōgun' typed with a macron: also search 'Shogun'
+                plain = self.get(f"search/{kind}", query=fold_accents(item.title), language="en-US", include_adult="false")
+                known = {row.get("id") for row in results}
+                results += [row for row in plain.get("results", []) if row.get("id") not in known]
+            for found in results:
                 date = found.get("release_date" if kind == "movie" else "first_air_date", "")
                 similarity = self.title_score(item, found, kind)
                 if date[:4] == str(item.year) and similarity >= 0.88:
