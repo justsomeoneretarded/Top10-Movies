@@ -14,7 +14,7 @@ from .availability import availability_line
 from .core import PipelineError, key, normalized, save_json
 from .timing import narration_words
 
-SCRIPT_POLICY_VERSION = 3
+SCRIPT_POLICY_VERSION = 4
 DELIVERIES = ("hype", "normal", "dramatic", "calm")
 OPENING = "a punchy opening hook, without listing every title"
 CLOSING = "a short closing thought and one audience question"
@@ -200,6 +200,7 @@ def _intro_facts(title: str, brief: str, films: list[dict]) -> dict:
     return {"titles": [film["title"] for film in films], "count": len(films),
             "genres": list(dict.fromkeys(genre for film in films for genre in film.get("genres", [])))[:6],
             "shared_genres": sorted(common_genres),
+            "requested_years": sorted(set(re.findall(r"\b(?:19|20)\d{2}\b", title + " " + brief))),
             "kind": "shows" if sum(film.get("kind") == "tv" for film in films) > len(films)/2 or re.search(r"\b(shows?|series|tv)\b", title, re.IGNORECASE) else "movies"}
 
 
@@ -214,12 +215,12 @@ def _theme(topic: str, brief: str, facts: dict) -> str:
         ("drama", r"\bdramas?\b"),
         ("mystery", r"\bmyster(?:y|ies)\b"), ("animation", r"\banimat(?:ion|ed)\b"),
     )
-    # The requested theme wins. A mixed list does not become "all sci-fi"
-    # merely because one of its recommendations has that genre.
+    # An explicit title theme wins over incidental examples in the brief.
+    # Multiple genres describe a mixed list, not the first regex in this table.
     for context in (topic, brief, " ".join(facts.get("shared_genres", facts.get("genres", [])))):
-        for label, pattern in patterns:
-            if re.search(pattern, context, re.IGNORECASE):
-                return label
+        matches = [label for label, pattern in patterns if re.search(pattern, context, re.IGNORECASE)]
+        if matches:
+            return matches[0] if len(matches) == 1 else ""
     return ""
 
 
@@ -322,9 +323,8 @@ def _fallback_intro(topic: str, brief: str, facts: dict) -> list[str]:
     if theme == "action":
         return [f"{count} action {kind} where every fight actually means something. "
                 "And number one raises the stakes higher than anything else on this list."]
-    if not theme and len(facts.get("genres", [])) > 1:
-        genres = ", ".join(genre.lower() for genre in facts["genres"][:3])
-        return [f"{count} {kind} across {genres}, each one worth your next free night. And number one is the easiest pick of all."]
+    if not theme:
+        return [f"{count} amazing {kind} worth adding to your watchlist."]
     label = f"{theme} {kind}" if theme else kind
     return [f"{count} {label} that are actually worth your time. And number one is the one people will be talking about."]
 
@@ -640,6 +640,9 @@ class Writer:
             genre = _theme(topic, brief, facts)
             if genre:
                 planned += f"Name the genre plainly (say '{genre}') so viewers instantly know what this list is. "
+            else:
+                planned += ("This is a general or mixed-genre list. Say amazing shows or movies, as appropriate; "
+                            "do not label the whole list with a genre mentioned only as part of its variety. ")
             style = ("SECTION ROLE: OPENING ONLY, spoken over the scariest or most exciting trailer moment. "
                      "Write a hook that stops the scroll in the first five seconds: open with a bold, specific claim or an image the viewer can see, "
                      f"in the spirit of: {hook!r}. " + planned +
@@ -775,7 +778,7 @@ class Writer:
             if target < 16:
                 theme = _theme(topic, brief, facts)
                 kind = facts.get("kind", "shows" if re.search(r"\b(shows?|series|tv)\b", topic, re.IGNORECASE) else "movies")
-                return completed([f"{count} {theme+' ' if theme else ''}{kind}. Here's the story and appeal of each."], keep=False)
+                return completed([f"{count} {theme+' ' if theme else 'amazing '}{kind}. Here's the story and appeal of each."], keep=False)
             return completed(_fallback_intro(topic, brief, facts), keep=False)
         if best:
             print(f"Using the closest complete draft for {label}; total audio timing will determine length.", flush=True)

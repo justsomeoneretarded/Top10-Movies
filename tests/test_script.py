@@ -234,7 +234,7 @@ def test_mixed_list_fallback_describes_variety_without_claiming_one_shared_genre
     script = {"sections": [{"kind": "intro", "paragraphs": [BAD_INTRO]}], "package": {}}
     result = writer.refresh_editorial("Top 2 Movies", "Pick something for tonight", films, script)
     text = " ".join(result["sections"][0]["paragraphs"])
-    assert "2 movies across science fiction, comedy" in text
+    assert "2 amazing movies" in text
     assert "2 sci-fi movies" not in text
 
 
@@ -301,3 +301,46 @@ def test_plan_retries_a_cut_off_answer_with_more_room(tmp_path, monkeypatch):
     plan = writer.plan("10 New Shows of 2026", "brief", films)
     assert plan["angle"] == "a" and len(budgets) == 2 and budgets[0] >= 3300 and budgets[1] > budgets[0]
     assert list(tmp_path.glob("*.json"))
+
+
+def test_mixed_genre_brief_does_not_become_a_scifi_countdown():
+    from movie_pipeline.script import _fallback_intro, _intro_facts, _theme
+
+    title = "10 New Shows of 2026 That Are So Freaking Good"
+    brief = ("Range across medical drama, fantasy, spy thriller, sci-fi mystery, "
+             "superhero crime, horror and political conspiracy so there is something for everyone.")
+    films = [{"title": "The Pitt", "kind": "tv", "genres": ["Drama"]},
+             {"title": "Severance", "kind": "tv", "genres": ["Science Fiction", "Drama"]}]
+    facts = _intro_facts(title, brief, films)
+    facts["count"] = 10
+    assert _theme(title, brief, facts) == ""
+    assert _fallback_intro(title, brief, facts) == ["10 amazing shows worth adding to your watchlist."]
+
+
+@pytest.mark.parametrize("topic,brief,expected", [
+    ("Top 5 Horror Shows", "Mix scares, mystery and drama.", "horror"),
+    ("Top 10 Shows", "Horror, sci-fi and crime.", ""),
+    ("Top 10 Sci-Fi and Fantasy Shows", "", ""),
+    ("Top 5 Movies", "Action movies only.", "action"),
+])
+def test_explicit_theme_wins_but_mixed_requests_stay_general(topic, brief, expected):
+    from movie_pipeline.script import _theme
+
+    assert _theme(topic, brief, {"shared_genres": ["Drama"]}) == expected
+
+
+def test_intro_allows_requested_year_without_allowing_unrelated_figures():
+    from movie_pipeline.script import _intro_facts, _numbers_issue
+
+    facts = _intro_facts("10 New Shows of 2026", "", [{"title": "Example", "kind": "tv", "genres": []}])
+    assert _numbers_issue(["10 amazing shows to watch in 2026."], facts) is None
+    assert _numbers_issue(["These shows cost 999999 dollars."], facts) is not None
+
+
+def test_model_failure_for_mixed_brief_keeps_general_opening():
+    writer = Writer()
+    writer.ask = Mock(return_value={"paragraphs": []})
+    result = writer.narration("Top 10 Shows", "Sci-fi, horror, crime and drama.", OPENING,
+                              {"count": 10, "kind": "shows", "shared_genres": ["Drama"]}, 28)
+    assert "10 amazing shows" in " ".join(result)
+    assert "sci-fi shows" not in " ".join(result)
