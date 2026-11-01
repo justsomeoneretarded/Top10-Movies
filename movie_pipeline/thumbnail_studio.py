@@ -868,6 +868,13 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     for candidate in candidates:
         if candidate.notes.get("large_face") is False and candidate.face is not None and not candidate.notes.get("good_face"):
             candidate.face = None  # the vision model sees no real face here
+    if os.getenv("LAB_SAVE_STILLS", "").strip().lower() == "true":
+        # Thumbnail Lab: keep the best raw stills (full resolution) for hand-made designs.
+        folder = output / "stills"
+        folder.mkdir(parents=True, exist_ok=True)
+        for rank, candidate in enumerate(sorted(candidates, key=lambda c: -c.score)[:16], 1):
+            name = re.sub(r"[^a-z0-9]+", "-", films[candidate.film]["title"].casefold()).strip("-")[:30]
+            candidate.image.convert("RGB").save(folder / f"{rank:02}-{name}-{candidate.source}.jpg", quality=92)
     picker = _Picker(candidates)
     report = []
     grade = profile["grade"]

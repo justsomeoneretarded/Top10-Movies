@@ -50,6 +50,7 @@ jobs:
       TRY_4K: "true"
       FACT_CHECK: "false"
       LAB_PHRASES: ${{ inputs.phrases }}
+      LAB_SAVE_STILLS: 'true'
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
       OLLAMA_HOST: 127.0.0.1:11435
       OLLAMA_URL: http://127.0.0.1:11435
@@ -120,6 +121,7 @@ jobs:
           fi
           mkdir -p "../lab/$target"
           cp lab-output/*.jpg lab-output/*.json lab-output/*.log "../lab/$target/" 2>/dev/null || true
+          if [ -d lab-output/stills ]; then mkdir -p "../lab/$target/stills" && cp lab-output/stills/*.jpg "../lab/$target/stills/"; fi
           cd ../lab
           git add -A
           git commit -q -m "Thumbnail Lab ${RUN}: ${VIDEO_TITLE}"
