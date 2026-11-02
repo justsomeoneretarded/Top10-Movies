@@ -162,6 +162,7 @@ def test_photo_fallback_builds_a_diverse_still_only_pool(monkeypatch,tmp_path):
     monkeypatch.setattr("movie_pipeline.image_discovery.search",lambda film:[])
     monkeypatch.setattr("movie_pipeline.stills_trailer.fetch_original",lambda path,work:Image.new("RGB",(1000,600),colors[path]))
     monkeypatch.setattr("movie_pipeline.thumbnail_studio.face_quality",lambda image:(None,1,False))
+    monkeypatch.setattr("movie_pipeline.thumbnail_studio.frame_sharpness",lambda image:100)
     monkeypatch.setattr("movie_pipeline.thumbnail_studio._dhash",lambda image:hashes[image.getpixel((0,0))[0]])
     photos,records=gather_photos([{"title":"Example","year":2026,"backdrops":list(colors)}],tmp_path)
     assert len(photos)==3
@@ -206,3 +207,9 @@ def test_primary_warmup_concurrency_is_conservative():
     import yaml
     workflow=yaml.load(Path(".github/workflows/generate-video.yml").read_text(),Loader=yaml.BaseLoader)
     assert workflow["jobs"]["footage"]["strategy"]["max-parallel"]=="2"
+
+def test_poster_tagline_and_release_date_are_not_clean_photos(monkeypatch):
+    from PIL import Image
+    from movie_pipeline.thumbnail_studio import has_burned_text
+    monkeypatch.setattr("movie_pipeline.shots.frame_text",lambda image:"DEFY THE GODS 07.17.26")
+    assert has_burned_text(Image.new("RGB",(1280,720)))

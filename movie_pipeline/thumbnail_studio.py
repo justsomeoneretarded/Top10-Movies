@@ -235,7 +235,8 @@ def has_burned_text(image: Image.Image) -> bool:
     """Reject frames with captions, title cards, or a channel/streaming logo (even a small corner bug)."""
     from .shots import frame_text
     text = frame_text(image)
-    if len(re.findall(r"\b[A-Za-z]{4,}\b", text)) >= 3 or LOGO_WORDS.search(text):
+    if (len(re.findall(r"\b[A-Za-z]{3,}\b", text)) >= 3 or LOGO_WORDS.search(text)
+            or re.search(r"\b\d{2}[./-]\d{2}[./-]\d{2,4}\b",text)):
         return True
     w, h = image.size
     for box in ((0, 0, w * .26, h * .2), (w * .74, 0, w, h * .2), (0, h * .8, w * .26, h), (w * .74, h * .8, w, h)):

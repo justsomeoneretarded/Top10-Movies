@@ -26,7 +26,7 @@ jobs:
       - name: Compile and exercise editorial safeguards
         run: |
           python -m compileall -q movie_pipeline scripts
-          pytest -q tests/test_movie_ranks_upgrade.py tests/test_script.py tests/test_secondary_footage.py tests/test_source_pool.py tests/test_production.py tests/test_packaging.py tests/test_story.py tests/test_warm_stages.py
+          pytest -q tests/test_movie_ranks_upgrade.py tests/test_script.py tests/test_secondary_footage.py tests/test_source_pool.py tests/test_production.py tests/test_packaging.py tests/test_story.py tests/test_warm_stages.py tests/test_thumbnail_studio.py
       - name: Validate workflow syntax with actionlint
         run: |
           curl -fLsS --retry 2 https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/actionlint.tgz"

@@ -150,7 +150,7 @@ def gather_photos(films: list[dict], work: Path) -> tuple[list, list[dict]]:
             for path in film.get("backdrops",[])[:6]:
                 try:
                     image=fetch_original(path,work/"publicity")
-                    if image is None or image.width<800 or has_burned_text(image):
+                    if image is None or image.width<800 or frame_sharpness(image)<20 or has_burned_text(image):
                         continue
                     image=image.convert("RGB");image.thumbnail((1800,1800),Image.Resampling.LANCZOS)
                     face,quality,good=face_quality(image)
