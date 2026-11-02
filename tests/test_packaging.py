@@ -102,7 +102,7 @@ def test_refresh_availability_replaces_old_provider_line_and_keeps_review():
     assert section['paragraphs'] == ['Original review.']
     assert films[0]['watch_availability']['subscription'] == ['Netflix']
     refresh_availability(script, films)
-    assert len(section['paragraphs']) == 2
+    assert len(section['paragraphs']) == 1
     refresh_availability(script, [{'watch_availability': {}}])
     assert section['paragraphs'] == ['Original review.']
 

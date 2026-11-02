@@ -94,3 +94,16 @@ Movie Ranks Production Request launcher, which validates fields and invokes Gene
 It uses the same secrets, selectors, retention and notifications. JSON values are passed as
 typed workflow inputs, never interpolated into shell code. This path exists for connected
 clients that can commit files but do not expose workflow_dispatch.
+
+## Remaining creative defaults
+
+The following defaults are centralized rather than silently eliminated: rank weighting gives
+later recommendations more narration; review pace profiles limit moving excerpts; freeze
+holds have a cooldown; scene planners use bounded lengths, visual-similarity thresholds
+and transcript punctuation as heuristics; the ident and end-screen have fixed short
+durations; quiet TTS padding protects consonants; title pronunciations support the user's
+pronunciations.json. The stock-word replacement table still simplifies familiar clichés
+and can reduce language variety; editorial generation and delete-only episode review are
+preferred over adding more compulsory catchphrases. Font, contrast, crop and accent
+defaults ensure a usable composition when optional models fail. None of these creative
+preferences is a reason to reject an otherwise usable finished video.

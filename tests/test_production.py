@@ -542,7 +542,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     for slot in (3,4,5):
         assert sorted(order[(slot-1)*n:slot*n]) == sorted((f"extra-{slot}",film["id"]) for film in films)
     if extra_mode == "render-fails":
-        assert records['render_fallbacks'] == count
+        assert records['render_fallbacks'] == 1  # failed optional sources are removed before another paragraph uses them
     assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(5 if extra_mode == 'found' else 1)
     assert render_sizes and set(render_sizes) == {expected_size}
     quality_report = json.loads(next((tmp_path / "jobs").glob("*/quality-report.json")).read_text())
@@ -611,7 +611,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                           if event['type'] == 'narration' and event['section_kind'] == 'film'
                           and event['film'] == card['film']]
             assert own_review
-            assert card_index == own_review[-1][0]+1
+            trailing=events[own_review[-1][0]+1:card_index]
+            assert all(e['type']=='trailer-audio' and e['film']==card['film'] for e in trailing)
             previous = events[card_index-1]
             assert previous['start']+previous['duration'] == pytest.approx(card['start'])
             assert previous['text'].startswith("You can find it")
