@@ -126,6 +126,7 @@ def test_scene_descriptions_pick_scary_shots(monkeypatch, tmp_path):
 
 
 def test_vision_logo_flag_excludes_a_candidate(monkeypatch):
+    monkeypatch.setenv("SCENE_DESCRIPTIONS", "true")
     candidates = [studio.Candidate(still((80, 80, 80)), 0, "x", score=5), studio.Candidate(still((90, 90, 90)), 0, "y", score=4)]
     verdicts = iter([{"large_face": True, "emotion": 9, "action": 3, "genre_fit": 9, "logo": True, "score": 9},
                      {"large_face": True, "emotion": 8, "action": 3, "genre_fit": 8, "logo": False, "score": 8}])
