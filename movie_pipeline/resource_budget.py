@@ -25,3 +25,43 @@ class DownloadBudget:
             if accepted:
                 with self.lock:
                     self.pending -= self.reserve_bytes
+
+# Shared within one production process: two titles must not download the same
+# discovered upload concurrently, or accept it under different source identities.
+_source_lock=threading.Lock()
+_source_claims={}
+
+def _source_key(url):
+    from urllib.parse import urlsplit,parse_qs
+    parsed=urlsplit(str(url))
+    if parsed.hostname in {"youtube.com","www.youtube.com","m.youtube.com"}:
+        return "youtube:"+parse_qs(parsed.query).get("v",[str(url)])[0]
+    if parsed.hostname=="youtu.be":
+        return "youtube:"+parsed.path.strip("/")
+    return str(url).split("#",1)[0]
+
+def reserve_source(root, url, owner):
+    identity=(str(Path(root).resolve()),_source_key(url))
+    owner=str(Path(owner).resolve())
+    with _source_lock:
+        existing=_source_claims.get(identity)
+        if existing is not None and existing!=owner:
+            return False
+        _source_claims[identity]=owner
+        return True
+
+def release_source(root,url,owner):
+    identity=(str(Path(root).resolve()),_source_key(url))
+    with _source_lock:
+        if _source_claims.get(identity)==str(Path(owner).resolve()):
+            _source_claims.pop(identity,None)
+
+def seed_sources(root,paths):
+    import json
+    for path in paths:
+        try:
+            source=json.loads(Path(path).with_suffix(".json").read_text()).get("source")
+            if source:
+                reserve_source(root,source,path)
+        except (OSError,ValueError,TypeError):
+            continue

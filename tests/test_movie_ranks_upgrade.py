@@ -173,3 +173,23 @@ def test_plain_language_rules_preserve_verified_title_names():
     result=plain_words("Journey is a captivating journey.",protected=["Journey"])
     assert result.startswith("Journey is a gripping")
     assert result.endswith("Journey.") or result.endswith("journey.")
+
+def test_source_reservations_are_atomic_and_failure_can_release(tmp_path):
+    from movie_pipeline.resource_budget import reserve_source,release_source
+    url="https://www.youtube.com/watch?v=abcdefghijk"
+    first,second=tmp_path/"a.mp4",tmp_path/"b.mp4"
+    assert reserve_source(tmp_path,url,first)
+    assert not reserve_source(tmp_path,"https://youtu.be/abcdefghijk",second)
+    assert reserve_source(tmp_path,url,first)
+    release_source(tmp_path,url,first)
+    assert reserve_source(tmp_path,url,second)
+
+def test_verified_keyword_context_broadens_queries_beyond_genre_templates():
+    film={"title":"Example","year":2026,"kind":"movie","genres":["Drama"],
+          "keywords":[{"name":"desert island"},{"name":"based on novel"}]}
+    queries=search_queries(film)
+    assert "Example 2026 desert island scene" in queries
+    assert "Example 2026 official trailer" in queries
+    assert "Example 2026 trailer" in queries
+    assert all("based on novel" not in q for q in queries)
+    assert len(queries)<=7

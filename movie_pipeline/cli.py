@@ -333,7 +333,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     shot_lookup = {str(trailer): shots for trailer, shots in zip(trailers, shot_sets)}
     for i, source in enumerate(sources):
         source.update(film=films[i]["title"], role="primary")
-    from .resource_budget import DownloadBudget
+    from .resource_budget import DownloadBudget, seed_sources
+    seed_sources(Path("work/footage"),trailers)
     download_budget = DownloadBudget()
     workers = max(1, min(3, int(os.getenv("FOOTAGE_WORKERS", "2") or 2)))
     for round_number in (2, 3, 4, 5):

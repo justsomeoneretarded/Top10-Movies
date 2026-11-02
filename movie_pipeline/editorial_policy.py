@@ -65,29 +65,52 @@ def season_hint(film: dict) -> str:
         value = value.get("season_number")
     return f"season {value}" if str(value).isdigit() and 0 < int(value) < 100 else ""
 
+def context_terms(film: dict, limit: int = 2) -> list[str]:
+    """Use this title's verified keyword context, not just a fixed genre vocabulary."""
+    keywords=film.get("keywords",[])
+    if isinstance(keywords,dict):
+        keywords=keywords.get("keywords",keywords.get("results",[]))
+    terms=[]
+    for item in keywords if isinstance(keywords,list) else []:
+        text=str(item.get("name","") if isinstance(item,dict) else item).strip()
+        if (not 1<=len(text.split())<=4 or len(text)>55
+                or re.search(r"based on|sequel|franchise|adaptation|spoiler|ending|murderer identity",text,re.I)):
+            continue
+        if text and text.casefold() not in {t.casefold() for t in terms}:
+            terms.append(text)
+        if len(terms)>=limit:
+            break
+    return terms
+
 def search_queries(film: dict, *, primary: bool = False, limit: int = 7) -> list[str]:
-    title = str(film["title"]).strip()
-    base = f"{title} {film['year']}"
-    season = season_hint(film)
-    queries = []
-    if primary:
-        queries += [f"{base} {season} official trailer".replace("  ", " "), f"{base} {season} trailer".replace("  ", " ")]
-    queries.append(f"{base} {season} best scene".replace("  ", " "))
-    if film.get("kind") == "tv":
-        queries.append(f"{title} {season} best scene".replace("  ", " "))
-    # Take the first concept per genre before spending the budget on variants.
-    concepts = [SCENE_CONCEPTS[g] for g in title_genres(film) if g in SCENE_CONCEPTS]
-    for depth in range(3):
-        queries += [f"{base} {season} {words[depth]}".replace("  ", " ")
-                    for words in concepts if depth < len(words)]
-    queries += [f"{base} trailer", f"{base} official trailer"]
+    title=str(film["title"]).strip()
+    base=f"{title} {film['year']}"
+    season=season_hint(film)
+    stem=" ".join(part for part in (base,season) if part)
+    generic=[f"{stem} official trailer",f"{stem} trailer",f"{stem} best scene"]
+    year_free=f"{title} {season} best scene".replace("  "," ")
+    concepts=[SCENE_CONCEPTS[g] for g in title_genres(film) if g in SCENE_CONCEPTS]
+    relevant=[f"{stem} {words[0]}" for words in concepts]
+    contextual=[f"{stem} {term} scene" for term in context_terms(film)]
+    required=generic if primary else [generic[2],*([year_free] if film.get("kind")=="tv" else [])]
+    if primary and film.get("kind")=="tv":
+        required.append(year_free)
+    # Preserve the generic discovery families, then spend a small budget on
+    # verified per-title genres and its own premise keywords.
+    queries=[*required,*relevant[:1],*contextual[:1]]
+    if not primary:
+        queries += generic[:2]
+    queries += [*relevant[1:],*contextual[1:]]
+    for depth in (1,2):
+        queries += [f"{stem} {words[depth]}" for words in concepts if depth<len(words)]
     return list(dict.fromkeys(queries))[:limit]
 
 def image_queries(film: dict, limit: int = 3) -> list[str]:
-    base = f"{film['title']} {film['year']} {season_hint(film)}".strip()
-    generic = [f"{base} best scene image", f"{base} best image"]
-    concepts = [SCENE_CONCEPTS[g][0] for g in title_genres(film) if g in SCENE_CONCEPTS]
-    return list(dict.fromkeys([generic[0], *[f"{base} {c} image" for c in concepts], generic[1]]))[:limit]
+    base=f"{film['title']} {film.get('year','')} {season_hint(film)}".strip()
+    relevant=[f"{base} {SCENE_CONCEPTS[g][0]} image" for g in title_genres(film) if g in SCENE_CONCEPTS]
+    contextual=[f"{base} {term} image" for term in context_terms(film)]
+    return list(dict.fromkeys([f"{base} best scene image",*relevant[:1],*contextual,
+                               *relevant[1:],f"{base} best image"]))[:limit]
 
 def source_identity(path) -> str:
     """Legacy path fallback; callers should register actual title IDs where possible."""
