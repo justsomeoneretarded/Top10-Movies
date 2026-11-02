@@ -9,6 +9,12 @@ from movie_pipeline import scenes
 from movie_pipeline.shots import ShotSelector, _zscore
 
 
+@pytest.fixture(autouse=True)
+def reset_scene_budget(monkeypatch):
+    monkeypatch.setattr(scenes, "_DEADLINE", None)
+    monkeypatch.setattr(scenes, "_READY", False)
+    monkeypatch.setattr(scenes, "_UNAVAILABLE", False)
+
 class FakeResponse:
     def __init__(self, data):
         self.data = data

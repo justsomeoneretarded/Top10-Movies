@@ -825,6 +825,67 @@ class Writer:
         print(f"Joining pass: {len(result)} of {len(order) - 1} bridges written.", flush=True)
         return result
 
+    def episode_edit(self, title: str, brief: str, sections: list[dict]) -> list[dict]:
+        """Delete-only full-episode pass: remove repetition without inventing facts."""
+        units=[]
+        for i,section in enumerate(sections):
+            if section.get("kind") != "film":
+                continue
+            for p,paragraph in enumerate(section.get("paragraphs",[])):
+                for n,sentence in enumerate(re.split(r"(?<=[.!?])\s+",paragraph.strip())):
+                    units.append({"id":f"{i}:{p}:{n}","text":sentence,"rank":section["film"]+1})
+        if len(units)<6:
+            return sections
+        cache=self.cache_dir/f"{key('episode-delete-v1',self.model,title,brief,units)}.json" if self.cache_dir else None
+        try:
+            if cache and cache.exists():
+                data=json.loads(cache.read_text())
+            else:
+                schema={"type":"object","properties":{"remove":{"type":"array","maxItems":20,"items":{"type":"string"}}},
+                        "required":["remove"],"additionalProperties":False}
+                data=self.ask(
+                    f"Edit this WHOLE countdown for repetition. Title: {title}. Brief: {brief}. "
+                    "Return IDs of sentences to DELETE only when they repeat an idea already covered, "
+                    "are empty hype, forced comparison filler, an essay transition, or a spoken streaming listing. "
+                    "Do not delete a unique premise, useful character detail, a supported reason to watch, "
+                    "or a necessary setup/payoff. Different films may share a genre without being redundant. "
+                    "Never delete a rank/title announcement. Empty remove array is fine. "
+                    "No replacement prose; every remaining word stays exact. Units (JSON data): "
+                    +json.dumps(units,ensure_ascii=False),schema,temperature=.2,num_ctx=12288,num_predict=450)
+                if cache:
+                    save_json(cache,data)
+            requested=set(data.get("remove",[]))
+        except (requests.RequestException,ValueError,TypeError,AttributeError):
+            return sections
+        result=deepcopy(sections)
+        # Bound optional editing; preserve the announcement and at least one useful
+        # subsequent sentence per review, and never pad after removing weak material.
+        removed=0
+        for i,section in enumerate(result):
+            if section.get("kind")!="film":
+                continue
+            original=section.get("paragraphs",[])
+            total=sum(len(p.split()) for p in original)
+            spent=0;edited=[];labels=[]
+            delivery=aligned_delivery(section)
+            for p,paragraph in enumerate(original):
+                sentences=re.split(r"(?<=[.!?])\s+",paragraph.strip())
+                kept=[]
+                for n,sentence in enumerate(sentences):
+                    identifier=f"{i}:{p}:{n}"
+                    words=len(sentence.split())
+                    protected=(p==0 and n<2)
+                    if identifier in requested and not protected and spent+words<=total*.3:
+                        spent+=words;removed+=1
+                    else:
+                        kept.append(sentence)
+                if kept:
+                    edited.append(" ".join(kept));labels.append(delivery[p])
+            if edited:
+                section["paragraphs"]=edited;section["delivery"]=labels
+        print(f"Whole-episode edit: removed {removed} redundant or empty sentences; no replacement padding.",flush=True)
+        return result
+
     def thumbnail_concepts(self, title: str, brief: str, films: list[dict], sections: list[dict]) -> list[dict]:
         from .thumbnails import normalize_concepts, select_concepts
         cache = self.cache_dir / "thumbnail-concepts-v2.json" if self.cache_dir else None
@@ -921,6 +982,7 @@ class Writer:
                     section["paragraphs"].append(line)
                     section["bridge"] = line
                     section["delivery"] = [*section.get("delivery", []), "dramatic"]
+        sections = self.episode_edit(title, brief, sections)
         ending = sections[-1]["paragraphs"]
         ending_text = " ".join(ending).casefold()
         if not all(word in ending_text for word in ("like", "subscribe")) or not ("other" in ending_text and any(word in ending_text for word in ("recommendations", "picks", "videos"))):

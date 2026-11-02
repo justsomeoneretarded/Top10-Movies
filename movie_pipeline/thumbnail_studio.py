@@ -435,14 +435,18 @@ def good_face(candidate: Candidate) -> bool:
     return bool(candidate.face is not None and candidate.notes.get("good_face") and not candidate.notes.get("logo"))
 
 
-def rate_with_vision(candidates: list[Candidate], limit: int = 18, profile: dict | None = None) -> int:
+def rate_with_vision(candidates: list[Candidate], limit: int = 6, profile: dict | None = None) -> int:
     """Ask the local vision model about the most promising candidates; returns how many it rated."""
     from . import scenes
     if not scenes.enabled():
         return 0
     profile = profile or GENRE_PROFILES[DEFAULT_GENRE]
+    import time
+    deadline=time.monotonic()+90
     rated = 0
     for candidate in sorted(candidates, key=lambda c: -c.score)[:limit]:
+        if time.monotonic() >= deadline:
+            break
         verdict = scenes.rate_thumbnail(candidate.image, profile["label"], profile["hint"])
         if verdict is None:
             break

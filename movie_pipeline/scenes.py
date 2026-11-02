@@ -84,11 +84,13 @@ def _describe(image) -> str:
 def describe_trailer(trailer: Path, shots: list[dict]) -> dict | None:
     """Describe representative frames within a shared optional-analysis budget."""
     global _DEADLINE, _READY, _UNAVAILABLE
-    if not enabled() or not shots or _UNAVAILABLE:
+    if not enabled() or not shots:
         return None
     cached = load(trailer, len(shots))
     if cached:
         return cached
+    if _UNAVAILABLE:
+        return None
     if _DEADLINE is None:
         _DEADLINE = time.monotonic() + max(30, float(os.getenv("SCENE_BUDGET_SECONDS", "420")))
     if time.monotonic() >= _DEADLINE:
@@ -163,7 +165,7 @@ def rate_thumbnail(image, genre: str = "", genre_hint: str = "") -> dict | None:
         response = requests.post(_url() + "/api/generate", json={
             "model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(buffer.getvalue()).decode()],
             "format": schema, "stream": False, "think": False, "keep_alive": "10m",
-            "options": {"temperature": 0.1, "num_predict": 100, "num_ctx": 2048}}, timeout=300)
+            "options": {"temperature": 0.1, "num_predict": 100, "num_ctx": 2048}}, timeout=25)
         response.raise_for_status()
         data = json.loads(response.json().get("response", "{}"))
         return {"large_face": bool(data.get("large_face")),

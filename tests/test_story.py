@@ -214,7 +214,8 @@ def test_partial_write_warms_the_cache_for_the_full_script(tmp_path):
     assert any("'Inception'" in p and "SINGLE REVIEW" in p for p in prompts)
 
 
-def test_joining_pass_adds_a_bridge_after_where_to_watch_and_never_names_the_next_title(tmp_path):
+def test_optional_bridge_validation_and_legacy_filler_cleanup(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCRIPT_BRIDGES", "true")
     from movie_pipeline.packaging import refresh_availability
     from movie_pipeline.script import Writer
     writer = Writer(cache_dir=tmp_path)
@@ -228,7 +229,7 @@ def test_joining_pass_adds_a_bridge_after_where_to_watch_and_never_names_the_nex
                "availability_text": "You can find it on Netflix.", "bridge": bridges[1]}
     script = {"sections": [section]}
     refresh_availability(script, [{}, {"watch_availability": {"subscription": ["Hulu"]}}, {}])
-    assert section["paragraphs"] == ["Review.", "You can find it on Hulu.", bridges[1]]
+    assert section["paragraphs"] == ["Review."]
 
 
 def test_plain_words_replaces_stock_ai_phrasing():

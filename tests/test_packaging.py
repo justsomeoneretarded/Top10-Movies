@@ -67,7 +67,7 @@ def test_topic_tags_are_relevant_distinct_and_bounded():
     assert featured_heading([{"kind": "movie"}, {"kind": "tv"}]) == "Featured movies and shows / series"
 
 
-def test_writer_appends_checked_availability_and_outro_cta():
+def test_writer_keeps_availability_in_metadata_and_adds_outro_cta():
     from unittest.mock import Mock
 
     from movie_pipeline.script import Writer
@@ -81,7 +81,8 @@ def test_writer_appends_checked_availability_and_outro_cta():
              {"title": "Second", "year": 2024, "status": "Released", "kind": "movie"}]
     result = writer.write("Top 2 Movies", "Keep it relaxed", films, target_seconds=300)
     review = next(section for section in result['sections'] if section['kind'] == 'film' and section['film'] == 0)
-    assert 'Hulu' in review['paragraphs'][-1]
+    assert not any('Hulu' in p for p in review['paragraphs'])
+    assert films[0]['watch_availability']['subscription'] == ['Hulu']
     assert 'US' not in review['paragraphs'][-1]
     outro = ' '.join(result['sections'][-1]['paragraphs']).casefold()
     assert all(word in outro for word in ('like', 'subscribe', 'other picks'))
@@ -97,8 +98,9 @@ def test_refresh_availability_replaces_old_provider_line_and_keeps_review():
     refresh_availability(script, films)
     section = script['sections'][0]
     assert section['paragraphs'][0] == 'Original review.'
-    assert len(section['paragraphs']) == 2
-    assert 'Netflix' in section['paragraphs'][-1] and 'Hulu' not in section['paragraphs'][-1]
+    assert len(section['paragraphs']) == 1
+    assert section['paragraphs'] == ['Original review.']
+    assert films[0]['watch_availability']['subscription'] == ['Netflix']
     refresh_availability(script, films)
     assert len(section['paragraphs']) == 2
     refresh_availability(script, [{'watch_availability': {}}])

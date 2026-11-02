@@ -191,7 +191,8 @@ def test_title_card_hold_near_source_end_preserves_the_frame_and_silent_audio(so
     assert np.abs(decoded(output)).max() == 0
 
 
-def test_finish_with_timeline_adds_effects_and_reaches_youtube_loudness(source, tmp_path):
+def test_finish_with_timeline_adds_effects_and_reaches_youtube_loudness(source, tmp_path, monkeypatch):
+    monkeypatch.setenv("TRANSITION_FX", "true")
     preview = tmp_path/'preview.mp4'
     render.trailer_video(source, 0, 2, preview, muted=True)
     speech = voice_part(source, tone(tmp_path/'voice.wav', 900, seconds=3), tmp_path/'speech.mp4', tmp_path/'speech')

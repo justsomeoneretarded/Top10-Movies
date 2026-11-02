@@ -183,7 +183,7 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
             continue
         index=section["film"]
         paragraph_seconds=[duration(speech[(section_index,p)]) for p in range(len(section["paragraphs"]))]
-        wanted=min(5,1+int(sum(paragraph_seconds)//30))
+        wanted=min(5,1+int(sum(paragraph_seconds)//30),len(paragraph_seconds)+1)
         chosen=[]
         examined=0
         for row in options.get(index,[]):

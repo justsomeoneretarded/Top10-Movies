@@ -116,3 +116,40 @@ def test_request_launcher_is_narrow_and_reuses_existing_workflow():
     assert workflow["jobs"]["produce"]["uses"]=="./.github/workflows/generate-video.yml"
     assert workflow["permissions"]=={"contents":"read"}
     assert "${{" not in workflow["jobs"]["request"]["steps"][-1]["run"]
+
+def test_whole_episode_edit_deletes_only_and_preserves_rank_and_premise():
+    from movie_pipeline.script import Writer
+    writer=Writer()
+    writer.ask=lambda *a,**k: {"remove":["0:0:0","0:0:1","0:0:2"]}
+    sections=[{"kind":"film","film":i,"paragraphs":[
+        f"Number {i+1}: Example. A teacher is stranded in space with no memory and must find a way home. It is a real game changer."]} for i in range(3)]
+    result=writer.episode_edit("3 movies","",sections)
+    assert result[0]["paragraphs"]==["Number 1: Example. A teacher is stranded in space with no memory and must find a way home."]
+    assert sections[0]["paragraphs"][0].endswith("game changer.")
+    assert all("teacher is stranded" in row["paragraphs"][0] for row in result)
+
+def test_native_planner_uses_extra_pool_and_nonfatal_small_counts(monkeypatch,tmp_path):
+    import numpy as np
+    import movie_pipeline.moments as moments
+    from movie_pipeline.core import duration
+    a,b=Path("primary.mp4"),Path("extra-5.mp4")
+    lookup={str(p):[{"start":10+j*10,"end":16+j*10,"motion":0} for j in range(5)] for p in (a,b)}
+    class Selector:
+        def __init__(self): self.used=[]
+        def identity_relevance(self,path,query):
+            return np.full(5, .8 if path==b else .1) if "People visibly" not in query and "static quiet" not in query else np.zeros(5)
+        def reserve(self,path,start,length,reason): self.used.append((str(path),start,start+length))
+        def freshness(self,path,start,length):
+            return 0 if any(p==str(path) and start<end and start+length>begin for p,begin,end in self.used) else 1
+        visual_freshness=freshness
+    def enrich(candidate,*args):
+        return {**candidate,"muted":False,"native_verified":True,"cues":[]}
+    monkeypatch.setattr(moments,"_enrich",enrich)
+    monkeypatch.setattr("movie_pipeline.core.duration",lambda path:45)
+    result=moments.plan_episode(Selector(),[[a,b]],lookup,[{"title":"Example","overview":"A specific premise"}],
+        [{"kind":"film","film":0,"paragraphs":["First.","Second."]}],
+        {(0,0):Path("one.wav"),(0,1):Path("two.wav")},{},None,tmp_path)
+    assert result["previews"][0]["source"]==str(b)
+    assert len(result["inserts"][0])==2
+    assert result["report"]["review_counts"]["0"]==3
+    assert result["report"]["opening_seconds"]<=3.2
