@@ -376,6 +376,7 @@ jobs:
     continue-on-error: true
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         part: ${{ fromJson(needs.prepare.outputs.footage_parts) }}
     env:

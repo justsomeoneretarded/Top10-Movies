@@ -201,3 +201,8 @@ def test_external_image_needs_corroboration_beyond_a_popular_name():
     assert not corroborates(film,"The Odyssey 2026 wallpaper","https://example.com/wallpapers")
     assert corroborates(film,"Matt Damon in Christopher Nolan's The Odyssey 2026","https://example.com/movies/odyssey")
     assert corroborates(film,"The Odyssey 2026","https://www.themoviedb.org/movie/12345-the-odyssey")
+
+def test_primary_warmup_concurrency_is_conservative():
+    import yaml
+    workflow=yaml.load(Path(".github/workflows/generate-video.yml").read_text(),Loader=yaml.BaseLoader)
+    assert workflow["jobs"]["footage"]["strategy"]["max-parallel"]=="2"
