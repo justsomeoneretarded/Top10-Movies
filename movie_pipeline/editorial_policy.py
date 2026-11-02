@@ -107,9 +107,12 @@ def search_queries(film: dict, *, primary: bool = False, limit: int = 7) -> list
 
 def image_queries(film: dict, limit: int = 3) -> list[str]:
     base=f"{film['title']} {film.get('year','')} {season_hint(film)}".strip()
-    relevant=[f"{base} {SCENE_CONCEPTS[g][0]} image" for g in title_genres(film) if g in SCENE_CONCEPTS]
+    cast=film.get("cast",[])
+    actor=str(cast[0]) if cast and isinstance(cast[0],str) else ""
+    subject=f"{base} {actor}".strip()
+    relevant=[f"{subject} {SCENE_CONCEPTS[g][0]} image" for g in title_genres(film) if g in SCENE_CONCEPTS]
     contextual=[f"{base} {term} image" for term in context_terms(film)]
-    return list(dict.fromkeys([f"{base} best scene image",*relevant[:1],*contextual,
+    return list(dict.fromkeys([f"{subject} best scene image",*relevant[:1],*contextual,
                                *relevant[1:],f"{base} best image"]))[:limit]
 
 def source_identity(path) -> str:

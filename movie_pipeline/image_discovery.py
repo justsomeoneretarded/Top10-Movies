@@ -18,7 +18,7 @@ from .editorial_policy import image_queries
 from .core import normalized, save_json
 
 MAX_BYTES = 10_000_000
-BAD_CONTEXT = re.compile(r"\b(ai generated|concept art|fan art|wallpaper ai|reaction|review thumbnail|youtube thumbnail)\b", re.I)
+BAD_CONTEXT = re.compile(r"\b(ai[ -]?generated|concept art|fan[ -]?(?:art|made)|wallpaper ai|reaction|review thumbnail|youtube thumbnail|gameplay|video game|game wallpaper|game cover)\b", re.I)
 
 def public_url(url: str) -> bool:
     p=urlparse(url)
@@ -31,6 +31,28 @@ def public_url(url: str) -> bool:
         return ipaddress.ip_address(host).is_global
     except ValueError:
         return "." in host
+
+def corroborates(film: dict, context: str, page: str) -> bool:
+    """A title/year alone can match a game, remake or unrelated actor photo."""
+    if BAD_CONTEXT.search(context+" "+page):
+        return False
+    stop={"the","a","an","of","and","to","in","on"}
+    words=set(normalized(film["title"]).split())-stop
+    found=set(normalized(context+" "+page).split())
+    if not words or len(words & found)/len(words)<.8:
+        return False
+    if film.get("kind")!="tv" and film.get("year") and str(film["year"]) not in context+" "+page:
+        return False
+    people=[*film.get("cast",[])[:5],*film.get("directors",[])[:2],*film.get("creators",[])[:2]]
+    for name in people:
+        parts=normalized(str(name)).split()
+        if parts and len(parts[-1])>=4 and parts[-1] in found:
+            return True
+    host=(urlparse(page).hostname or "").lower()
+    path=urlparse(page).path.lower()
+    # Exact film/TV records corroborate identity; generic image hosts do not.
+    return ((host=="www.themoviedb.org" or host=="themoviedb.org") and bool(re.match(r"/(?:movie|tv)/\d+",path))
+            or (host=="imdb.com" or host.endswith(".imdb.com")) and bool(re.match(r"/title/tt\d+",path)))
 
 def search(film: dict) -> list[dict]:
     rows=[]
@@ -50,13 +72,7 @@ def search(film: dict) -> list[dict]:
                     continue
                 if any(host in url+" "+page for host in ("ytimg.com","youtube.com","pinterest.com")):
                     continue
-                words=set(normalized(film["title"]).split())
-                found=set(normalized(context).split())
-                if len(words & found)/max(1,len(words)) < .7:
-                    continue
-                # Movie remakes require corroborating year context. Shows require title context;
-                # requested season, when present, is part of the search query.
-                if film.get("kind") != "tv" and str(film.get("year", "")) not in context:
+                if not corroborates(film,context,page):
                     continue
                 rows.append({"url":url,"page":page,"query":query,"context":context[:300]})
                 if len(rows)>=4:
@@ -134,7 +150,7 @@ def gather_photos(films: list[dict], work: Path) -> tuple[list, list[dict]]:
             for path in film.get("backdrops",[])[:6]:
                 try:
                     image=fetch_original(path,work/"publicity")
-                    if image is None or image.width<800:
+                    if image is None or image.width<800 or has_burned_text(image):
                         continue
                     image=image.convert("RGB");image.thumbnail((1800,1800),Image.Resampling.LANCZOS)
                     face,quality,good=face_quality(image)

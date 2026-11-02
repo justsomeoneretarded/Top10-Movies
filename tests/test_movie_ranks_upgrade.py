@@ -193,3 +193,11 @@ def test_verified_keyword_context_broadens_queries_beyond_genre_templates():
     assert "Example 2026 trailer" in queries
     assert all("based on novel" not in q for q in queries)
     assert len(queries)<=7
+
+def test_external_image_needs_corroboration_beyond_a_popular_name():
+    from movie_pipeline.image_discovery import corroborates
+    film={"title":"The Odyssey","year":2026,"kind":"movie","cast":["Matt Damon"],"directors":["Christopher Nolan"]}
+    assert not corroborates(film,"Assassins Creed Odyssey best image 2026","https://example.com/video-game/odyssey")
+    assert not corroborates(film,"The Odyssey 2026 wallpaper","https://example.com/wallpapers")
+    assert corroborates(film,"Matt Damon in Christopher Nolan's The Odyssey 2026","https://example.com/movies/odyssey")
+    assert corroborates(film,"The Odyssey 2026","https://www.themoviedb.org/movie/12345-the-odyssey")

@@ -22,9 +22,13 @@ if token:
         if not results:
             continue
         movie=results[0];identifier=movie["id"]
+        detail=session.get(f"https://api.themoviedb.org/3/movie/{identifier}",params={"append_to_response":"credits"},timeout=20)
+        detail.raise_for_status();details=detail.json()
         response=session.get(f"https://api.themoviedb.org/3/movie/{identifier}/images",timeout=20)
         response.raise_for_status();images=response.json()
         films.append({"id":identifier,"title":movie["title"],"year":2026,"kind":"movie","genres":[],
+                      "cast":[p["name"] for p in details.get("credits",{}).get("cast",[])[:5]],
+                      "directors":[p["name"] for p in details.get("credits",{}).get("crew",[]) if p.get("job")=="Director"],
                       "backdrops":[r["file_path"] for r in images.get("backdrops",[])[:8]],
                       "posters":[r["file_path"] for r in images.get("posters",[])[:4]]})
 if films:
