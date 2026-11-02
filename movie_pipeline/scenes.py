@@ -13,6 +13,7 @@ import base64
 import io
 import json
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,10 @@ from .core import PipelineError, save_json
 
 VISION_MODEL = os.getenv("SCENE_MODEL", "qwen3-vl:2b")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "all-minilm")
-VERSION = 1
+VERSION = 2
+_DEADLINE = None
+_READY = False
+_UNAVAILABLE = False
 PROMPT = ("Describe this movie frame in at most 14 words for a video editor: who or what is shown, "
           "the action, the mood and the setting. Plain words, no names, no quotes.")
 
@@ -36,7 +40,7 @@ def _url() -> str:
 
 
 def _pull(model: str):
-    requests.post(_url() + "/api/pull", json={"model": model, "stream": False}, timeout=1800).raise_for_status()
+    requests.post(_url() + "/api/pull", json={"model": model, "stream": False}, timeout=180).raise_for_status()
 
 
 def cache_path(trailer: Path) -> Path:
@@ -71,36 +75,55 @@ def _describe(image) -> str:
     response = requests.post(_url() + "/api/generate", json={
         "model": VISION_MODEL, "prompt": PROMPT, "images": [base64.b64encode(buffer.getvalue()).decode()],
         "stream": False, "think": False, "keep_alive": "10m",
-        "options": {"temperature": 0.2, "num_predict": 40, "num_ctx": 2048}}, timeout=300)
+        "options": {"temperature": 0.2, "num_predict": 40, "num_ctx": 2048}}, timeout=25)
     response.raise_for_status()
     text = " ".join(str(response.json().get("response", "")).replace("\n", " ").split())
     return text.strip(" \"'")[:160]
 
 
 def describe_trailer(trailer: Path, shots: list[dict]) -> dict | None:
-    """Describe every shot once and cache the result next to the trailer."""
-    if not enabled() or not shots:
+    """Describe representative frames within a shared optional-analysis budget."""
+    global _DEADLINE, _READY, _UNAVAILABLE
+    if not enabled() or not shots or _UNAVAILABLE:
         return None
     cached = load(trailer, len(shots))
     if cached:
         return cached
+    if _DEADLINE is None:
+        _DEADLINE = time.monotonic() + max(30, float(os.getenv("SCENE_BUDGET_SECONDS", "420")))
+    if time.monotonic() >= _DEADLINE:
+        return None
     from .shots import shot_frame
     try:
-        _pull(VISION_MODEL)
-        _pull(EMBED_MODEL)
-        descriptions = []
-        for index, shot in enumerate(shots):
+        if not _READY:
+            _pull(VISION_MODEL)
+            _pull(EMBED_MODEL)
+            _READY = True
+        limit = max(1, min(16, int(os.getenv("SCENE_SAMPLE_FRAMES", "6"))))
+        # Mix representative positions and impact moments; never caption the same frame twice.
+        spread = np.linspace(0, len(shots)-1, min(limit, len(shots)), dtype=int).tolist()
+        ranked = sorted(range(len(shots)), key=lambda i: -float(shots[i].get("peak", 0)))[:limit//2]
+        indices = list(dict.fromkeys([*ranked, *spread]))[:limit]
+        descriptions = [""] * len(shots)
+        for index in indices:
+            if time.monotonic() >= _DEADLINE:
+                break
             try:
-                frame = shot_frame(trailer, shots, index)
-                descriptions.append(_describe(frame) or "a scene from the trailer")
+                descriptions[index] = _describe(shot_frame(trailer, shots, index))
             except (PipelineError, requests.RequestException, ValueError):
-                descriptions.append("a scene from the trailer")
-        vectors = embed(descriptions)
+                continue
+        known = [i for i, text in enumerate(descriptions) if text]
+        if not known:
+            return None
+        embedded = embed([descriptions[i] for i in known])
+        vectors = np.zeros((len(shots), embedded.shape[1]), dtype=np.float32)
+        vectors[known] = embedded
     except (requests.RequestException, ValueError, KeyError) as exc:
-        print(f"Scene descriptions unavailable for {trailer.name} ({type(exc).__name__}); using image matching only.", flush=True)
+        _UNAVAILABLE = True
+        print(f"Optional scene description unavailable ({type(exc).__name__}); retaining image matching.", flush=True)
         return None
     data = {"version": VERSION, "model": VISION_MODEL, "embed_model": EMBED_MODEL,
-            "descriptions": descriptions, "embeddings": vectors.round(5).tolist()}
+            "descriptions": descriptions, "embeddings": vectors.round(5).tolist(), "described": known}
     save_json(cache_path(trailer), data)
     return data
 

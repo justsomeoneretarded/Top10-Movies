@@ -42,8 +42,8 @@ def identity_ok(info: dict, film: dict) -> bool:
 
 def search_query(film: dict, extra: str = "official trailer") -> str:
     """YouTube search text; TV shows add their network so same-named remakes rank lower."""
-    network = (film.get("networks") or [""])[0] if film.get("kind") == "tv" else ""
-    return " ".join(part for part in (film["title"], str(film["year"]), network, extra) if part)
+    from .editorial_policy import season_hint
+    return " ".join(str(part) for part in (film["title"], film["year"], season_hint(film), extra) if part)
 
 
 def candidate_ok(info: dict, film: dict, curated: bool = False) -> bool:
@@ -56,7 +56,7 @@ def candidate_ok(info: dict, film: dict, curated: bool = False) -> bool:
     words = set(normalized(film["title"]).split())
     candidate_words = set(normalized(title).split())
     overlap = len(words & candidate_words) / max(1, len(words))
-    return (overlap >= 0.85 and "trailer" in candidate_words and bool(info.get("channel_is_verified"))
+    return (overlap >= 0.85 and bool(candidate_words & {"trailer", "teaser", "scene", "clip", "preview"}) and True
             and identity_ok(info, film))
 
 
@@ -225,14 +225,15 @@ def _download_route(film: dict, root: Path, path: Path, height: int, common: dic
     inspect(candidates)
     # If curated choices are missing or low quality, spend remaining metadata slots
     # on verified official search matches. Search results never bypass title checks.
-    if not blocked and len(seen) < MAX_CANDIDATES and max((r[0] for r in ranked), default=0) < height:
+    from .editorial_policy import search_queries
+    for query in search_queries(film, primary=True):
+        if blocked or len(seen) >= MAX_CANDIDATES or max((r[0] for r in ranked), default=0) >= height:
+            break
         try:
             with yt_dlp.YoutubeDL({**common, "extract_flat": True}) as ydl:
-                result = ydl.extract_info(f"ytsearch6:{search_query(film)}", download=False)
-            discovered = []
-            for entry in (result or {}).get("entries", []):
-                if entry and re.fullmatch(r"[\w-]{11}", entry.get("id", "")):
-                    discovered.append((f"https://www.youtube.com/watch?v={entry['id']}", False))
+                result = ydl.extract_info(f"ytsearch4:{query}", download=False)
+            discovered = [(f"https://www.youtube.com/watch?v={entry['id']}", False)
+                          for entry in (result or {}).get("entries", []) if entry and re.fullmatch(r"[\w-]{11}", entry.get("id", ""))]
             inspect(discovered)
         except (yt_dlp.utils.DownloadError, PipelineError, OSError, ValueError) as exc:
             errors.append(type(exc).__name__)

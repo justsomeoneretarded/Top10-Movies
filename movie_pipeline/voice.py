@@ -21,7 +21,7 @@ PRONUNCIATIONS = {
 # Pause after each sentence, by its final punctuation (seconds). A reveal ('Number 3: Title.')
 # gets a short silence before it and a beat after it.
 SENTENCE_GAPS = {"?": 0.42, "!": 0.3, ".": 0.24, ":": 0.32, ";": 0.2}
-REVEAL_LEAD, REVEAL_BEAT = 0.55, 0.45
+REVEAL_LEAD, REVEAL_BEAT = 0.18, 0.18
 
 # Delivery -> original Chatterbox emotion settings (exaggeration, cfg_weight, temperature).
 # 'normal' and 'calm' lines use the faster Turbo model.
@@ -31,9 +31,9 @@ EMOTION = {"hype": (0.75, 0.35, 0.8), "dramatic": (0.62, 0.3, 0.75)}
 # compression, a little warmth and presence, then loudness. (No gate: it clipped breaths and
 # word tails; no soft clipper: it added a processed edge.)
 VOICE_CHAIN = ("asetpts=PTS-STARTPTS,highpass=f=70,"
-               "deesser=i=0.3:m=0.5:f=0.5:s=o,"
-               "acompressor=threshold=-20dB:ratio=2.2:attack=12:release=180:makeup=2:knee=6,"
-               "equalizer=f=160:t=q:w=0.9:g=1.5,equalizer=f=3200:t=q:w=0.8:g=1.5,highshelf=f=10000:g=1,"
+               "deesser=i=0.15:m=0.25:f=0.5:s=o,"
+               "acompressor=threshold=-18dB:ratio=1.6:attack=15:release=180:makeup=1:knee=6,"
+               "equalizer=f=3000:t=q:w=0.8:g=0.8,"
                "adelay={lead}:all=1,apad=pad_dur=0.26,loudnorm=I=-18:TP=-2:LRA=9")
 
 
@@ -67,7 +67,7 @@ def sentences(text: str) -> list[str]:
     return merged or [text]
 
 
-def phrases(parts: list[str], reveal: bool = False, limit: int = 30) -> list[str]:
+def phrases(parts: list[str], reveal: bool = False, limit: int = 45) -> list[str]:
     """Join consecutive sentences into phrases of at most two sentences and ``limit`` words.
 
     A rank reveal ('Number 3: Title.') always stays on its own so its beat lands.
@@ -75,8 +75,7 @@ def phrases(parts: list[str], reveal: bool = False, limit: int = 30) -> list[str
     grouped: list[str] = []
     for index, part in enumerate(parts):
         last = grouped[-1] if grouped else None
-        if (last is not None and not (reveal and len(grouped) == 1) and not (reveal and index == 0)
-                and len(re.findall(r"[.!?]", last)) < 2 and len(last.split()) + len(part.split()) <= limit):
+        if (last is not None and len(re.findall(r"[.!?]", last)) < 3 and len(last.split()) + len(part.split()) <= limit):
             grouped[-1] = f"{last} {part}"
         else:
             grouped.append(part)
@@ -101,7 +100,10 @@ def take_score(samples, rate: int, words: int) -> float:
     seconds = (last - first) / 50
     wpm = words * 60 / max(0.3, seconds)
     liveliness = float(np.std(energy[first:last][voiced[first:last]])) if voiced[first:last].any() else 0.0
-    return -abs(wpm - 165) / 25 - max(0, longest / 50 - 0.7) * 3 + min(liveliness, 12) / 6
+    # Prefer clean, complete speech; do not reward forced excitement or one exact speaking rate.
+    pace_cost = max(0, 135-wpm, wpm-190) / 35
+    clipping_cost = float(np.mean(np.abs(samples) >= .99)) * 40
+    return -pace_cost - clipping_cost - max(0, longest / 50 - 0.9) * 3 + min(liveliness, 5) / 10
 
 
 class Narrator:
@@ -168,7 +170,7 @@ class Narrator:
             self.deliveries[text] = delivery
         delivery = delivery or self.deliveries.get(text, "normal")
         emotional = self.emotion_enabled and delivery in EMOTION
-        baseline = key("voice-v5-phrases", spoken_form(text), self.reference_hash, self.model_name, delivery if emotional else "turbo", self.takes)
+        baseline = key("voice-v6-coherent-clean", spoken_form(text), self.reference_hash, self.model_name, delivery if emotional else "turbo", self.takes)
         token = key("voice-retry-v1", baseline, attempt_offset) if force else baseline
         output = self.cache / f"{token}.wav"
         suffix = 0
@@ -214,6 +216,12 @@ class Narrator:
             # short silence first so the rank lands. Padding adds real silence, never trims speech.
             lead = int((REVEAL_LEAD if reveal else 0.16) * 1000)
             ffmpeg("-i", raw, "-af", VOICE_CHAIN.format(lead=lead), "-ar", "48000", "-ac", "1", output)
+            # Keep the unprocessed take for matched diagnostics; cleanup removes these copies.
+            try:
+                import shutil
+                shutil.copyfile(raw, output.with_suffix(".dry.wav"))
+            except OSError:
+                pass
             raw.unlink(missing_ok=True)
             seconds = duration(output)
             # Rate is diagnostic only. Actual missing/repeated speech is checked by transcription.

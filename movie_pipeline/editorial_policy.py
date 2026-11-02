@@ -1,0 +1,89 @@
+"""Shared editorial intent and bounded discovery plans. Metadata never invents an episode genre."""
+from __future__ import annotations
+import re
+from pathlib import Path
+
+GENRES = {
+    "scifi": r"\bsci[ -]?fi\b|\bscience fiction\b",
+    "action": r"\baction\b", "adventure": r"\badventure\b",
+    "comedy": r"\bcomed(?:y|ies)\b|\bfunny\b|\bhilarious\b",
+    "horror": r"\bhorror\b|\bscary\b", "thriller": r"\bthrillers?\b",
+    "romance": r"\bromance\b|\bromantic\b|\brom[ -]?com\b",
+    "fantasy": r"\bfantasy\b", "drama": r"\bdramas?\b",
+    "documentary": r"\bdocumentar(?:y|ies)\b|\bdocuseries\b",
+    "family": r"\bfamily\b|\bkids\b", "crime": r"\bcrime\b",
+}
+# These are concepts, not global search terms: only a title's own genres enable them.
+SCENE_CONCEPTS = {
+    "action": ("action scene", "fight scene", "chase scene"),
+    "adventure": ("adventure scene", "chase scene", "stunt scene"),
+    "comedy": ("funny scene", "physical comedy scene"),
+    "horror": ("scary scene", "suspense scene"),
+    "thriller": ("tense scene", "suspense scene"),
+    "romance": ("romantic scene", "emotional scene"),
+    "drama": ("emotional scene", "dramatic scene"),
+    "scifi": ("science fiction scene",), "fantasy": ("fantasy scene", "battle scene"),
+    "crime": ("crime scene", "confrontation scene"),
+    "family": ("memorable scene",), "documentary": ("best clip",),
+}
+
+def explicit_genre(title: str = "", brief: str = "") -> str:
+    """A single requested genre wins; a mixed or unspecified list is neutral."""
+    for context in (title, brief):
+        matches = [name for name, pattern in GENRES.items() if re.search(pattern, context, re.I)]
+        if matches:
+            return matches[0] if len(matches) == 1 else "neutral"
+    return "neutral"
+
+def title_genres(film: dict) -> list[str]:
+    text = " ".join(str(v.get("name", "") if isinstance(v, dict) else v) for v in film.get("genres", []))
+    return [name for name, pattern in GENRES.items() if re.search(pattern, text, re.I)]
+
+def season_hint(film: dict) -> str:
+    value = film.get("requested_season") or film.get("season")
+    if isinstance(value, dict):
+        value = value.get("season_number")
+    return f"season {value}" if str(value).isdigit() and 0 < int(value) < 100 else ""
+
+def search_queries(film: dict, *, primary: bool = False, limit: int = 7) -> list[str]:
+    title = str(film["title"]).strip()
+    base = f"{title} {film['year']}"
+    season = season_hint(film)
+    queries = []
+    if primary:
+        queries += [f"{base} {season} official trailer".replace("  ", " "), f"{base} {season} trailer".replace("  ", " ")]
+    queries.append(f"{base} {season} best scene".replace("  ", " "))
+    if film.get("kind") == "tv":
+        queries.append(f"{title} {season} best scene".replace("  ", " "))
+    # Take the first concept per genre before spending the budget on variants.
+    concepts = [SCENE_CONCEPTS[g] for g in title_genres(film) if g in SCENE_CONCEPTS]
+    for depth in range(3):
+        queries += [f"{base} {season} {words[depth]}".replace("  ", " ")
+                    for words in concepts if depth < len(words)]
+    queries += [f"{base} trailer", f"{base} official trailer"]
+    return list(dict.fromkeys(queries))[:limit]
+
+def image_queries(film: dict, limit: int = 3) -> list[str]:
+    base = f"{film['title']} {film['year']} {season_hint(film)}".strip()
+    generic = [f"{base} best scene image", f"{base} best image"]
+    concepts = [SCENE_CONCEPTS[g][0] for g in title_genres(film) if g in SCENE_CONCEPTS]
+    return list(dict.fromkeys([generic[0], *[f"{base} {c} image" for c in concepts], generic[1]]))[:limit]
+
+def source_identity(path) -> str:
+    """Legacy path fallback; callers should register actual title IDs where possible."""
+    return re.sub(r"-extra(?:-\d+)?$", "", Path(str(path)).stem)
+
+def clean_review(paragraphs: list[str], availability: str = "", bridge: str = "") -> list[str]:
+    """Remove low-value whole sentences, never fill their place to meet a word count."""
+    result = []
+    provider = r"(?:you can (?:find|watch|stream)|(?:it|this (?:movie|show|series)) is (?:listed|available)|stream(?:ing)? (?:it|on)|watch it)\b"
+    comparison = r"(?:if you (?:liked|loved|enjoyed)|fans of .{0,80} (?:will|should|need to))\b"
+    for paragraph in paragraphs:
+        if paragraph.strip() in {availability, bridge} - {""}:
+            continue
+        sentences = re.split(r"(?<=[.!?])\s+", paragraph.strip())
+        kept = [s for s in sentences if not re.match(provider, s, re.I) and not re.match(comparison, s, re.I)]
+        text = " ".join(kept).strip()
+        if text:
+            result.append(text)
+    return result

@@ -40,7 +40,7 @@ def secondary_candidate_ok(info: dict, film: dict, curated: bool = False) -> boo
         return False
     years = set(re.findall(r"\b(?:18|19|20)\d{2}\b", title))
     years -= set(re.findall(r"\b(?:18|19|20)\d{2}\b", film["title"]))
-    if years and str(film["year"]) not in years:
+    if film.get("kind") != "tv" and years and str(film["year"]) not in years:
         return False
     if curated:
         return True
@@ -52,9 +52,7 @@ def secondary_candidate_ok(info: dict, film: dict, curated: bool = False) -> boo
     from .footage import identity_ok
     if not identity_ok(info, film):
         return False  # same name, different title (a remake or another country's version)
-    if info.get("channel_is_verified"):
-        return True
-    return bool(FAN.search(title)) and str(film["year"]) in title
+    return True  # A genuine matching scene need not come from a verified uploader.
 
 
 def _hashes(path: Path) -> list[int]:
@@ -155,7 +153,7 @@ from .footage import search_query  # noqa: E402
 def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tuple[int,int],
                         *, existing: list[Path] | None = None, slot: int = 2) -> Path | None:
     import yt_dlp
-    if slot not in (2, 3):
+    if slot not in (2, 3, 4, 5):
         return None
     existing = [Path(p) for p in (existing or []) if Path(p) != primary]
     accepted_sources = [json.loads(p.with_suffix(".json").read_text()).get("source", "") for p in existing]
@@ -166,7 +164,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
     if not isinstance(source,str) or not source:
         return None
     root.mkdir(parents=True,exist_ok=True)
-    suffix = "extra" if slot == 2 else "extra-3"
+    suffix = "extra" if slot == 2 else f"extra-{slot}"
     target = root / f'{primary.stem}-{suffix}.mp4'
     if _valid_cache(target,source,minimum_size):
         cached = json.loads(target.with_suffix(".json").read_text())
@@ -212,18 +210,18 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
     # Then searches: scenes that fit the list's genre (chases and fights for action, funny scenes for
     # comedy), then other trailers. Searched results must come from a verified channel and name the
     # right title, year and cast (secondary_candidate_ok).
-    genre = os.getenv("VIDEO_GENRE", "drama").strip().lower()
-    for words in (SCENE_SEARCH.get(genre, "scene"), "trailer"):
+    from .editorial_policy import search_queries
+    for query in search_queries(film):
         if blocked or len(seen)-excluded_count >= MAX_METADATA:
             break
         try:
             with yt_dlp.YoutubeDL({**common,'extract_flat':True}) as ydl:
-                result = ydl.extract_info(f"ytsearch6:{search_query(film, words)}",download=False)
+                result = ydl.extract_info(f"ytsearch4:{query}", download=False)
             inspect([(entry.get('id',''),False) for entry in (result or {}).get('entries',[]) if entry])
         except (yt_dlp.utils.DownloadError,PipelineError,OSError,ValueError):
             blocked = True
     # Official studio footage first, then single scenes (most likely to add new footage), then quality.
-    ranked.sort(key=lambda row:(not row[3], not (set(normalized(str(row[4].get('title',''))).split()) & {"clip","clips","scene","scenes"}),
+    ranked.sort(key=lambda row:(not (set(normalized(str(row[4].get('title',''))).split()) & {"clip","clips","scene","scenes"}),
                                 -row[0], row[1]))
     for _quality_value,order,url,curated,info in ranked[:MAX_DOWNLOADS]:
         attempt = root / f'{primary.stem}-{suffix}-candidate-{order:02}.mp4'

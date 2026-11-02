@@ -20,16 +20,17 @@ RAMP_SECONDS = 0.45
 
 # Multipliers on the quiet base bed (about 20 dB under narration).
 MUSIC_LEVELS = {
-    "cold-open": 4.0,
+    "brand-ident": 0.0,
+    "cold-open": 1.8,
     "review-preview": 3.5,          # muted preview: music carries the reveal
-    "review-preview-dialogue": 0.6,  # preview keeps a complete trailer line: music steps back for it
+    "review-preview-dialogue": 0.12,  # preview keeps a complete trailer line: music steps back for it
     "title-card": 3.0,
     "teaser": 2.5,                   # the number one flash in the intro
     "subscribe": 1.8,
     "narration": 0.75,               # about 2.5 dB quieter under the narrator
     "narration-top": 0.95,           # number one gets a slightly bigger bed
-    "trailer-audio": 0.25,           # trailer dialogue moments: the line must be heard
-    "trailer-audio-separated": 0.7,  # trailer score removed: our bed carries the moment
+    "trailer-audio": 0.10,           # trailer dialogue moments: the line must be heard
+    "trailer-audio-separated": 0.18,  # trailer score removed: our bed carries the moment
     "end-screen": 3.5,
     "ending": 3.5,
 }
@@ -214,6 +215,8 @@ LEADS = {"riser": 1.6, "whoosh": 0.32}
 def effect_events(timeline: list[dict], speed: float, genre: str | None = None) -> list[tuple[float, str, float]]:
     """(time, effect, gain) in final-timeline seconds, shaped by the video's genre."""
     import os
+    if os.getenv("TRANSITION_FX", "false").strip().lower() != "true":
+        return []
     pack = GENRE_SOUNDS.get((genre or os.getenv("VIDEO_GENRE", "drama")).strip().lower(), GENRE_SOUNDS["drama"])
     events = []
     for index, entry in enumerate(timeline):

@@ -14,7 +14,7 @@ from .availability import availability_line
 from .core import PipelineError, key, normalized, save_json
 from .timing import narration_words
 
-SCRIPT_POLICY_VERSION = 4
+SCRIPT_POLICY_VERSION = 5
 DELIVERIES = ("hype", "normal", "dramatic", "calm")
 OPENING = "a punchy opening hook, without listing every title"
 CLOSING = "a short closing thought and one audience question"
@@ -205,23 +205,9 @@ def _intro_facts(title: str, brief: str, films: list[dict]) -> dict:
 
 
 def _theme(topic: str, brief: str, facts: dict) -> str:
-    patterns = (
-        ("sci-fi", r"sci[ -]?fi|science[ -]?fiction"), ("horror", r"\bhorror\b"),
-        ("action", r"\baction\b"), ("thriller", r"\bthrillers?\b"),
-        ("crime", r"\bcrime\b"), ("comedy", r"\bcomed(?:y|ies)\b"),
-        ("fantasy", r"\bfantasy\b"), ("romance", r"\bromance|\bromantic|\brom-?coms?\b|\blove stor"),
-        ("adventure", r"\badventures?\b"), ("family", r"\bfamily\b|\bkids\b"), ("war", r"\bwar\b"),
-        ("western", r"\bwesterns?\b"), ("documentary", r"\bdocumentar(?:y|ies)\b|\bdocuseries\b"),
-        ("drama", r"\bdramas?\b"),
-        ("mystery", r"\bmyster(?:y|ies)\b"), ("animation", r"\banimat(?:ion|ed)\b"),
-    )
-    # An explicit title theme wins over incidental examples in the brief.
-    # Multiple genres describe a mixed list, not the first regex in this table.
-    for context in (topic, brief, " ".join(facts.get("shared_genres", facts.get("genres", [])))):
-        matches = [label for label, pattern in patterns if re.search(pattern, context, re.IGNORECASE)]
-        if matches:
-            return matches[0] if len(matches) == 1 else ""
-    return ""
+    from .editorial_policy import explicit_genre
+    genre = explicit_genre(topic, brief)
+    return "sci-fi" if genre == "scifi" else ("" if genre == "neutral" else genre)
 
 
 # Words that make an opening clearly about its genre, not only the genre's name.
@@ -466,7 +452,7 @@ class Writer:
 
     def plan(self, title: str, brief: str, films: list[dict]) -> dict:
         """One pass over the whole list: angle, hooks, standout facts and escalation toward number one."""
-        cache = self.cache_dir / f"{key('episode-plan-v2', self.model, title, brief, [film_facts(f) for f in films])}.json" if self.cache_dir else None
+        cache = self.cache_dir / f"{key('episode-plan-v3-native', self.model, title, brief, [film_facts(f) for f in films])}.json" if self.cache_dir else None
         if cache and cache.exists():
             return json.loads(cache.read_text())
         entry = {"type": "object", "properties": {
@@ -545,7 +531,7 @@ class Writer:
         if not paragraphs or os.getenv("FACT_CHECK", "true").strip().lower() == "false":
             # Workflow checkbox off: keep drafts as written (the code check on figures still applies while drafting).
             return paragraphs, defaults
-        cache = self.cache_dir / f"{key('edit-v1', self.model, topic, brief, role, facts, paragraphs)}.json" if self.cache_dir else None
+        cache = self.cache_dir / f"{key('edit-v2-native', self.model, topic, brief, role, facts, paragraphs)}.json" if self.cache_dir else None
         if cache and cache.exists():
             cached = json.loads(cache.read_text())
             return cached["paragraphs"], cached["delivery"]
@@ -608,7 +594,7 @@ class Writer:
             minimum, maximum = max(10, round(target*.55)), max(24, round(target*1.45))
         else:
             minimum, maximum = round(target*0.8), round(target*1.2)
-        cache = self.cache_dir / f"{key('narration-v9-planned-story', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
+        cache = self.cache_dir / f"{key('narration-v10-native', self.model, topic, brief, label, facts, target)}.json" if self.cache_dir else None
         if cache and cache.exists():
             cached = json.loads(cache.read_text())
             if isinstance(cached, list) and cached and all(isinstance(p, str) and p.strip() for p in cached):
@@ -623,19 +609,12 @@ class Writer:
         schema = {"type": "object", "properties": {"paragraphs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8}}, "required": ["paragraphs"], "additionalProperties": False}
         if opening:
             count = max(1, facts.get("count") or len(facts.get("titles", [])))
-            examples = [
-                f"If your watchlist feels like homework, these {count} picks are your escape plan.",
-                f"Some movies are worth watching. These {count} are worth making time for.",
-                f"Before you lose another night scrolling, here are {count} picks worth a look.",
-                f"What if your next favorite movie is hiding in this list of {count}?",
-                f"{count} picks. No big spoilers. Let's find your next watch.",
-            ]
-            hook = examples[int(key(topic, brief, "hook")[:8], 16) % len(examples)]
+            hook = "A short specific reason these recommendations are worth the viewer's time."
             planned = ""
             if facts.get("opening_hook_idea"):
                 planned += f"Episode plan for this opening (adapt, do not copy blindly): hook idea {facts['opening_hook_idea']!r}. "
             if facts.get("open_loop_idea"):
-                planned += (f"Finish with one short open-loop line that makes viewers want to reach number one without naming it, "
+                planned += (f"Use a concrete reason to keep watching, only when it adds new information, "
                             f"based on: {facts['open_loop_idea']!r}. ")
             genre = _theme(topic, brief, facts)
             if genre:
@@ -647,9 +626,9 @@ class Writer:
                      "Write a hook that stops the scroll in the first five seconds: open with a bold, specific claim or an image the viewer can see, "
                      f"in the spirit of: {hook!r}. " + planned +
                      "Then make the video's promise clear (what kind of list this is and why it is worth watching), "
-                     "and end by teasing number one WITHOUT naming it, for example: 'and number one is the one you really shouldn't watch alone.' "
-                     f"Two or three short complete sentences, about twelve seconds: at most {maximum} words in total: what this list is and how many picks, "
-                     "why these are worth it in one concrete line, then the number one tease. No 'carefully curated', 'without further ado', "
+                     "Do not add a generic number-one tease. Use a short complete opening, then move into the first recommendation. "
+                     f"One or two short complete sentences, about six to eight seconds: at most {maximum} words in total: what this list is and how many picks, "
+                     "why these are worth it in one concrete line. No 'carefully curated', 'without further ado', "
                      "'welcome to', or channel housekeeping. Do not name any selected title or list the ranks. "
                      "Do not explain how the countdown works. Do not invent statistics or a personal viewing history. ")
         elif closing:
@@ -675,7 +654,7 @@ class Writer:
                      "from the overview and wiki notes; no spoilers past the setup; "
                      "(4) what makes it worth watching, with one concrete detail from tagline, wiki_production or wiki_reception "
                      "(a stunt, a performance, a production feat, a reaction), or a standout scene from the premise; "
-                     "(5) one closing line on who it's for, using the comparison anchor when present ('if you loved X, this is your next watch'). "
+                     "(5) one closing line on who it's for, using the comparison anchor when present without a formulaic comparison to another title. "
                      "Plain, confident storytelling beats hype: no 'masterpiece', 'redefined', 'game-changer' or 'must-watch' unless a fact says so. "
                      "Reception and production notes must be paraphrased, never quoted at length. "
                      "If episode_plan is present, use its hook, angle, standout_facts, why_here and who_for as direction; never mention the plan. ")
@@ -696,12 +675,12 @@ class Writer:
                 f"Write spoken English narration for {role}. Section request: {label}. Video theme (context only): {topic}\n"
                 f"Creative direction: {brief}\nToday UTC: {datetime.now(UTC).date()}\n"
                 f"Verified facts for THIS SECTION ONLY (JSON data): {json.dumps(visible_facts)}\n"
-                f"Aim for {target} total words; suggested planning range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
+                f"Use only as many words as the supplied facts deserve, with room for native scene audio. Aim for {target} total words as loose guidance; suggested planning range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
                 "Speak like an enthusiastic friend, not a formal critic: short sentences, contractions, and everyday words. "
                 "Use natural language without performing enthusiasm or forcing slang. "
                 "Never say check this out, you got this, hold up, let's wrap up, buckle up, or no spoilers. "
                 "Delete empty reassurance, numbering explanations, repetitive hype, and essay transitions. "
-                "Every sentence must give a concrete premise, supported character detail, or specific reason to watch. "
+                "Every sentence must give a concrete premise, supported character detail, or specific reason to watch. Never add streaming-provider lines or if-you-liked comparison filler. Native movie scenes will carry pauses between useful observations. "
                 "A short useful section is better than padding to meet the word target. "
                 f"Avoid 'the main protagonist', inflated academic language, and these stock phrases: {BANNED_LIST}. "
                 "Explain appeal with specific support from the facts. No stage directions, markdown, tags, URLs, or sound cues in spoken text. "
@@ -803,7 +782,7 @@ class Writer:
         names the next title (its reveal belongs to the next review). Returns {film index: line}.
         """
         reviews = [section for section in sections if section.get("kind") == "film"]
-        if len(reviews) < 2 or os.getenv("SCRIPT_BRIDGES", "true").strip().lower() == "false":
+        if len(reviews) < 2 or os.getenv("SCRIPT_BRIDGES", "false").strip().lower() == "false":
             return {}
         order = [section["film"] for section in reviews]  # countdown order, number one last
         summary = [{"rank": index + 1, "title": films[index]["title"],
@@ -926,7 +905,8 @@ class Writer:
                 outro = self.narration(title, brief, CLOSING, outro_facts, closing_words)
                 outro, outro_delivery = self.edit(title, brief, "the closing goodbye", outro_facts, outro, closing=True, kind="outro")
                 sections.append({"kind": "outro", "film": 0, "paragraphs": outro, "delivery": outro_delivery})
-            return {"sections": sections, "package": {}, "partial": sorted(only)}
+            from .packaging import refresh_availability
+            return refresh_availability({"sections": sections, "package": {}, "partial": sorted(only)}, films)
         outro_facts = {"topic": title, "titles": [film["title"] for film in films],
                        "comment_question": versus_question(films, title)}
         outro = self.narration(title, brief, CLOSING, outro_facts, closing_words)
@@ -988,7 +968,8 @@ class Writer:
         package["script_policy_version"] = SCRIPT_POLICY_VERSION
         if plan:
             package["episode_plan"] = plan
-        return {"sections": sections, "package": package}
+        from .packaging import refresh_availability
+        return refresh_availability({"sections": sections, "package": package}, films)
 
     def unload(self):
         requests.post(self.url + "/api/generate", json={"model": self.model, "keep_alive": 0}, timeout=30).raise_for_status()

@@ -524,7 +524,11 @@ class ShotSelector:
             try:
                 from .scenes import embed
                 sentence = embed([text])[0]
-                signals.append((0.4, self.scene_embeddings[str(path)] @ sentence))
+                values = self.scene_embeddings[str(path)] @ sentence
+                known = np.linalg.norm(self.scene_embeddings[str(path)], axis=1) > .01
+                if known.any():
+                    values = np.where(known, values, float(values[known].mean()))
+                    signals.append((0.4, values))
             except Exception:  # noqa: BLE001 -- image matching alone is fine
                 pass
         if signals:
@@ -630,13 +634,14 @@ class ShotSelector:
                     and start < shot["end"] and start+seconds > shot["start"]]
         clock = int(getattr(self,"_history_clock",0))
         costs = []
-        film = Path(str(path)).stem.removesuffix("-extra")
+        from .editorial_policy import source_identity
+        film = getattr(self, "source_films", {}).get(str(path), source_identity(path))
         for value in relevant:
             for old,order,source in getattr(self,"_visual_history",[]):
                 if (value^old).bit_count() <= 6:
                     age = max(0,clock-order)
                     # The same image under a different film's review is never acceptable.
-                    other_film = Path(str(source)).stem.removesuffix("-extra") != film
+                    other_film = getattr(self, "source_films", {}).get(str(source), source_identity(source)) != film
                     costs.append(5.0 if other_film else (2 if age < 4 else .6/(1+age/8)))
         return max(costs,default=0.0)
 
@@ -715,8 +720,10 @@ class ShotSelector:
                     # Story order: picking up right where the previous excerpt of this trailer ended
                     # plays the trailer's own sequence of scenes, which reads as one coherent segment.
                     previous_end = getattr(self, "last_end", {}).get(str(path))
-                    if previous_end is not None and previous_end - .5 <= start <= previous_end + 8:
-                        score += .3
+                    if previous_end is not None and previous_end - .18 <= start <= previous_end + 1.0:
+                        score += .8  # A connected sequence can beat a marginal relevance advantage.
+                    elif previous_end is not None and previous_end + 1.0 < start <= previous_end + 5:
+                        score += .2
                     elif previous_end is None:
                         # A title's first excerpt opens on its strongest footage: the best comes first.
                         score += .35 * min(1.0, float(shot.get("peak", 0)))
