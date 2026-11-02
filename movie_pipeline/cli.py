@@ -560,7 +560,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     # Keep the recognizer briefly for bounded extra-source scene windows.
     gc.collect()
 
-    action = bool(re.search(r"\b(action|energetic|fast.paced|fight|intense)\b", title + " " + brief, re.IGNORECASE)) or sum("Action" in film.get("genres", []) for film in films) >= max(1, len(films)//2)
+    action = genre in {"action", "adventure"}
     selector = ShotSelector()
     selector.source_films = {str(source): f"{film.get('kind', 'movie')}:{film.get('id', film['title'])}"
                              for film, pool in zip(films, pools) for source in pool}
@@ -794,6 +794,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         film = films[film_index]
         trailer = trailers[film_index]
         is_film = section["kind"] == "film"
+        from .editorial_policy import title_genres
+        section_action = bool(set(title_genres(film)) & {"action","adventure"}) if is_film else action
         chapter = f"#{film_index+1} {film['title']} ({film['year']})" if is_film else section["kind"].title()
         if section["kind"] != "subscribe":
             chapters.append({"start": 0.0 if section["kind"] == "intro" else offset, "title": chapter})
@@ -847,8 +849,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         for paragraph_index, text in enumerate(section["paragraphs"]):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
-            selector.pace_limit = pace_limit(aligned_delivery(section)[paragraph_index], action)
-            chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), action)
+            selector.pace_limit = pace_limit(aligned_delivery(section)[paragraph_index], section_action)
+            chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), section_action)
             if montage is None and is_film:
                 chosen = stills_instead_of_repeats(chosen, film_index)
             if is_film and duration(audio) >= 4:

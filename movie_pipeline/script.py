@@ -848,7 +848,7 @@ class Writer:
                 if cache:
                     save_json(cache,data)
             requested=set(data.get("remove",[]))
-        except (requests.RequestException,ValueError,TypeError,AttributeError):
+        except (requests.RequestException,ValueError,TypeError,AttributeError,KeyError,RuntimeError):
             return sections
         result=deepcopy(sections)
         # Bound optional editing; preserve the announcement and at least one useful

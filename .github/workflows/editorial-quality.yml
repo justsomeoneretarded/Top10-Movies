@@ -2,6 +2,9 @@ name: Editorial Quality Review
 on:
   push:
     branches: [quality/movie-ranks-upgrade]
+concurrency:
+  group: editorial-quality-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -25,6 +28,7 @@ jobs:
           python -m compileall -q movie_pipeline scripts
           pytest -q tests/test_movie_ranks_upgrade.py tests/test_script.py tests/test_secondary_footage.py tests/test_source_pool.py
       - name: Render real-photo contact sheet and brand sample
+        if: ${{ !cancelled() }}
         run: python -m scripts.quality_preview
       - uses: actions/upload-artifact@v4
         if: always()

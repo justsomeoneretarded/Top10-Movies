@@ -597,6 +597,9 @@ jobs:
           echo "Warm-up archives unpacked: $(ls work/footage 2>/dev/null | grep -c '\.mp4$' || true) trailers ready."
       - name: Produce the complete package
         run: bash scripts/run_logged.sh "Production" python -m movie_pipeline.cli
+      - name: Render review frames from the finished video
+        continue-on-error: true
+        run: python -m scripts.review_package
       - name: Downloadable video package
         uses: actions/upload-artifact@v4
         with:
