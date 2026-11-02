@@ -464,7 +464,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     added_visual_seconds = 2.3 + 5 + count*5.0 + cli.END_SCREEN_SECONDS
     if extra_mode in {'title-cards', 'title-card-fails'}:
         added_visual_seconds += (count-(extra_mode == 'title-card-fails'))*1.5
-    assert 285 <= records['final_duration']-added_visual_seconds/1.02 <= 315
+    # All rendered parts, final hold and metadata use the same measured timebase.
+    assert records['final_duration'] == pytest.approx((sum(durations[part] for part in records['parts'])+3)/1.02)
     assert records['writes'] == (2 if extra_mode == "rewrite-fails" else 1)
     # The short joke is generated and verified before any full-length narration.
     events = records['speech_events']
@@ -551,7 +552,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert .30 <= cta['start']/raw_duration <= .50
     assert cta['duration']/timeline['speed'] < 10
     assert events[index-1]['film'] != events[index+1]['film']
-    preceding_review = events[index-2] if events[index-1]['type'] == 'title-card' else events[index-1]
+    preceding_review = next(e for e in reversed(events[:index]) if e.get('type')=='narration' and e.get('section_kind')=='film')
     assert preceding_review['text'].startswith("Review number")  # preceding review completed
     assert events[index+1]['type'] == 'review-preview'  # next review begins after the CTA
     assert events[index+2]['text'].startswith('Review number')

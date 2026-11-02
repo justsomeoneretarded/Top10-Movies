@@ -302,19 +302,12 @@ def fit_opening(paragraphs: list[str], maximum: int) -> list[str]:
 
 
 def _fallback_intro(topic: str, brief: str, facts: dict) -> list[str]:
-    count = max(1, facts.get("count") or len(facts.get("titles", [])) or 1)
+    count = max(1, facts.get("count") or len(facts.get("titles", [])) or (int(re.search(r"\b(?:top|best)\s+(\d{1,2})\b",topic,re.I)[1]) if re.search(r"\b(?:top|best)\s+(\d{1,2})\b",topic,re.I) else 1))
     kind = facts.get("kind") or ("shows" if re.search(r"\b(shows?|series|tv)\b", topic, re.IGNORECASE) else "movies")
     theme = _theme(topic, brief, facts)
-    if theme == "horror":
-        return [f"These {count} horror {kind} don't just jump-scare you. They stay with you after the lights go off. "
-                "And number one is the one you really shouldn't watch alone."]
-    if theme == "action":
-        return [f"{count} action {kind} where every fight actually means something. "
-                "And number one raises the stakes higher than anything else on this list."]
     if not theme:
         return [f"{count} amazing {kind} worth adding to your watchlist."]
-    label = f"{theme} {kind}" if theme else kind
-    return [f"{count} {label} that are actually worth your time. And number one is the one people will be talking about."]
+    return [f"{count} {theme} {kind}, with the story and a reason to watch each."]
 
 
 def is_fallback_opening(paragraphs: list[str], topic: str, brief: str, facts: dict) -> bool:

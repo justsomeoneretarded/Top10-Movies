@@ -52,7 +52,7 @@ def test_invalid_opening_uses_fallback_instead_of_aborting(draft):
     writer.ask = Mock(return_value=draft)
     result = writer.narration("Top 5", "Action", "a punchy opening hook, without listing every title", {}, 65)
     assert writer.ask.call_count == 3
-    assert 16 <= len(" ".join(result).split()) <= 22
+    assert 6 <= len(" ".join(result).split()) <= 24
     assert "action" in " ".join(result)
 
 
@@ -134,7 +134,7 @@ def test_empty_bait_and_spoken_numeric_debris_receive_useful_nonfatal_fallback(b
     result = writer.narration("Top 10 Horror Shows", "Keep it relaxed", OPENING,
                               {"count": 10, "kind": "shows", "genres": ["Horror"]}, 65)
     text = " ".join(result)
-    assert 16 <= len(text.split()) <= 32
+    assert 6 <= len(text.split()) <= 28
     assert "10 horror shows" in text
     assert "1.0" not in text and "list starts" not in text
     assert writer.ask.call_count == 3

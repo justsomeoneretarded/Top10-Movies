@@ -40,6 +40,8 @@ def explicit_genre(title: str = "", brief: str = "") -> str:
         return "neutral"
     matches=[]
     for name,pattern in GENRES.items():
+        if re.fullmatch(pattern,brief.strip(),re.I):
+            return name
         for match in re.finditer(pattern,brief,re.I):
             before=brief[max(0,match.start()-45):match.start()]
             after=brief[match.end():match.end()+45]
