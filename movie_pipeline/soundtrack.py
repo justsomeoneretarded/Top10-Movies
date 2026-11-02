@@ -13,23 +13,8 @@ RATE = 48000
 
 
 def theme_for(title: str, brief: str = "") -> str:
-    """Bundled-track family: action, mystery (dark/tense), romance or drama."""
-    genre = os.getenv("VIDEO_GENRE", "").strip().lower()
-    by_genre = {"horror": "mystery", "thriller": "mystery", "scifi": "mystery", "action": "action", "adventure": "action",
-                "fantasy": "action", "romance": "romance", "family": "romance", "comedy": "romance",
-                "drama": "drama", "documentary": "drama"}
-    if genre in by_genre:
-        return by_genre[genre]
-    text = title.casefold()
-    # The title takes precedence over incidental examples in the creative brief.
-    for source in (text, brief.casefold()):
-        for theme, pattern in (("romance", r"romance|romantic|love stor"),
-                               ("action", r"\baction\b|adventure"),
-                               ("mystery", r"mystery|thriller|horror|sci.?fi"),
-                               ("drama", r"\bdrama\b")):
-            if re.search(pattern, source):
-                return theme
-    return "drama"
+    from .editorial_policy import explicit_genre
+    return explicit_genre(title, brief)
 
 
 def narration_rate(theme: str) -> float:
@@ -42,7 +27,7 @@ MUSIC_ROOT = Path(__file__).resolve().parents[1] / "assets" / "music"
 
 def selected_track(theme: str) -> dict:
     import json
-    name = {"action": "titan", "mystery": "celestial", "romance": "aurora", "drama": "aurora"}.get(theme, "aurora")
+    name = {"action": "titan", "adventure": "titan", "mystery": "celestial", "horror": "celestial", "thriller": "celestial", "scifi": "celestial", "romance": "aurora", "drama": "aurora", "neutral": "aurora"}.get(theme, "aurora")
     return json.loads((MUSIC_ROOT / "catalog.json").read_text())[name]
 
 
@@ -51,6 +36,7 @@ GENERATED_SCORE = Path(os.getenv("GENERATED_SCORE", "work/music-generated/score.
 
 # What the score should sound like for each genre (instrumental only).
 GENRE_MUSIC = {
+    "neutral": "restrained neutral instrumental underscore, soft muted keys, gentle understated pulse, clear space for a narrator, consistent warm mood, no dramatic stings, no vocals",
     "horror": "dark horror film score, low drones, dissonant strings, sparse eerie piano notes, distant metallic textures, slow heartbeat pulse, creeping tension, no vocals",
     "thriller": "suspenseful thriller underscore, ticking pulse, low synth bass, tense staccato strings, building tension, no vocals",
     "action": "epic action trailer score, driving taiko percussion, brass hits, aggressive strings, powerful and fast, no vocals",
@@ -67,8 +53,16 @@ GENRE_MUSIC = {
 
 def generated_score() -> Path | None:
     try:
-        return GENERATED_SCORE if GENERATED_SCORE.exists() and GENERATED_SCORE.stat().st_size > 48000 * 4 * 20 else None
-    except OSError:
+        import soundfile as sf
+        if not GENERATED_SCORE.exists():
+            return None
+        samples, rate = sf.read(GENERATED_SCORE, dtype="float32", always_2d=True)
+        if (rate < 8000 or samples.shape[1] not in (1,2) or len(samples)/rate < 20
+                or not np.isfinite(samples).all() or float(np.sqrt(np.mean(samples**2))) < .0001
+                or float(np.mean(np.abs(samples) >= 1)) > .02):
+            return None
+        return GENERATED_SCORE
+    except (OSError, RuntimeError, ValueError):
         return None
 
 
@@ -109,6 +103,9 @@ def music_bed(path: Path, seconds: float, action: bool = False, *, theme: str | 
         samples, rate = sf.read(source, dtype="float32", always_2d=True)
     if rate != RATE or len(samples) < RATE*8 or samples.shape[1] != 2:
         raise PipelineError("Bundled music must be stereo 48 kHz with a readable loop.")
+    from .core import save_json
+    save_json(path.with_suffix(".source.json"), {"genre": theme or "neutral", "source": str(source),
+              "generated": score is not None, "fallback": None if score is not None else "bundled licensed instrumental"})
     overlap = RATE*3
     weight = np.linspace(0, 1, overlap, dtype=np.float32)[:, None]
     loop = np.concatenate((samples[overlap:-overlap],

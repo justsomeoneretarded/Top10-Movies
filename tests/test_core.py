@@ -121,12 +121,12 @@ def test_speech_verification_detects_missing_words():
     assert spoken_coverage(expected, [{"text": "This movie takes us"}]) < 0.72
 
 
-def test_trailer_rejects_fan_and_unverified_search_results():
+def test_trailer_rejects_fake_and_wrong_titles_without_uploader_gate():
     film = {"title": "Arrival"}
     base = {"title": "Arrival Official Trailer", "duration": 150, "channel_is_verified": True}
     assert candidate_ok(base, film)
     assert not candidate_ok({**base, "title": "Arrival Fan-Made Concept Trailer"}, film, curated=True)
-    assert not candidate_ok({**base, "channel_is_verified": False}, film)
+    assert candidate_ok({**base, "channel_is_verified": False}, film)
     assert not candidate_ok({**base, "title": "Interstellar Official Trailer"}, film)
 
 

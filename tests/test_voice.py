@@ -95,9 +95,9 @@ def test_dramatic_lines_use_the_expressive_model_and_reveals_get_a_lead(monkeypa
     filters = []
     monkeypatch.setattr("movie_pipeline.voice.ffmpeg", lambda *args: (filters.append(args[3]), args[-1].write_bytes(b"n")))
     speaker.speak("Number 3: Sinners. Two brothers come home.", delivery="dramatic")
-    assert expressive.generate.call_count == 2 and speaker.model.generate.call_count == 0
+    assert expressive.generate.call_count == 1 and speaker.model.generate.call_count == 0
     assert expressive.generate.call_args.kwargs["exaggeration"] > 0.5
-    assert "adelay=550" in filters[0] and "deesser" in filters[0] and "acompressor" in filters[0]
+    assert "adelay=180" in filters[0] and "deesser" in filters[0] and "acompressor" in filters[0]
 
 
 def test_spoken_form_fixes_trouble_titles_but_coverage_still_matches():

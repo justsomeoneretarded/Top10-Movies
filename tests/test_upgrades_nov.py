@@ -38,9 +38,9 @@ def test_watermark_is_small_and_translucent(tmp_path):
     assert width < 320 and height == 44 and image.getchannel("A").getextrema()[1] < 255
 
 
-def test_phrases_keep_the_reveal_alone_and_join_short_sentences():
+def test_phrases_keep_context_across_reveal_and_following_sentences():
     parts = ["Number 5: White Chicks.", "Two agents go undercover.", "It gets weird fast.", "Then weirder."]
-    assert phrases(parts, reveal=True) == ["Number 5: White Chicks.", "Two agents go undercover. It gets weird fast.", "Then weirder."]
+    assert phrases(parts, reveal=True) == ["Number 5: White Chicks. Two agents go undercover. It gets weird fast.", "Then weirder."]
 
 
 def test_an_official_still_renders_with_a_smooth_zoom(tmp_path):

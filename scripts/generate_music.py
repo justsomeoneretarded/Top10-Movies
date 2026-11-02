@@ -7,6 +7,9 @@ file, so production falls back to the bundled licensed tracks.
 from __future__ import annotations
 
 import shutil
+import hashlib
+import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -21,7 +24,7 @@ def notice(title: str, message: str, level: str = "notice"):
 def main() -> int:
     root, genre, seconds, output = sys.argv[1], sys.argv[2].strip().lower(), float(sys.argv[3]), Path(sys.argv[4])
     from movie_pipeline.soundtrack import GENRE_MUSIC
-    caption = GENRE_MUSIC.get(genre, GENRE_MUSIC["drama"])
+    caption = GENRE_MUSIC.get(genre, GENRE_MUSIC["neutral"])
     sys.path.insert(0, root)
     try:
         from acestep.handler import AceStepHandler
@@ -33,7 +36,7 @@ def main() -> int:
             raise RuntimeError(f"initialize_service: {status}")
         work = output.parent / "ace-output"
         params = GenerationParams(caption=caption, instrumental=True, lyrics="[Instrumental]",
-                                  duration=seconds, inference_steps=8, seed=7, thinking=False)
+                                  duration=seconds, inference_steps=8, seed=int(hashlib.sha256((genre+os.getenv("MUSIC_TOPIC","")).encode()).hexdigest()[:7],16), thinking=False)
         result = generate_music(dit, None, params, GenerationConfig(batch_size=1, audio_format="wav"), save_dir=str(work))
         if not result.success:
             raise RuntimeError(result.error)
@@ -42,6 +45,7 @@ def main() -> int:
             raise RuntimeError("no audio written")
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(produced[-1], output)
+        output.with_suffix(".json").write_text(json.dumps({"genre":genre,"prompt":caption,"topic":os.getenv("MUSIC_TOPIC",""),"seconds":seconds,"model":"ACE-Step 1.5"}))
         shutil.rmtree(work, ignore_errors=True)
         notice("Genre score", f"{genre}: {seconds:.0f}s generated in {(time.time()-started)/60:.1f} min. Prompt: {caption}")
         return 0

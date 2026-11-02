@@ -2,6 +2,9 @@ name: Tests
 on:
   push:
   pull_request:
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -12,6 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
       - name: Install test media dependencies
         # Hard per-attempt limits, a mirror switch, then a static FFmpeg from GitHub: never hangs.
         timeout-minutes: 35

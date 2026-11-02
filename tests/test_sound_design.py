@@ -38,7 +38,8 @@ def test_curve_follows_final_tempo():
     assert curve[int(14 * CONTROL_RATE)] == pytest.approx(MUSIC_LEVELS["review-preview"], rel=.02)
 
 
-def test_rank_reveals_get_whoosh_then_impact():
+def test_rank_reveals_get_whoosh_then_impact(monkeypatch):
+    monkeypatch.setenv("TRANSITION_FX", "true")
     events = effect_events(TIMELINE, 1.0)
     names = [(round(t, 2), name) for t, name, _ in events]
     assert names[0] == (0.02, "impact")
@@ -53,7 +54,8 @@ def test_effects_are_finite_and_peak_normalized():
         assert 0.6 < float(np.max(np.abs(sound))) <= 1.0  # panned whoosh peaks lower per channel
 
 
-def test_effects_track_and_music_shaping_write_valid_audio(tmp_path):
+def test_effects_track_and_music_shaping_write_valid_audio(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRANSITION_FX", "true")
     fx = tmp_path / "fx.wav"
     assert effects_track(fx, TIMELINE, 1.0, 45) == 4
     with wave.open(str(fx)) as stream:
@@ -95,7 +97,8 @@ def test_export_is_normalized_to_youtube_loudness(tmp_path):
     assert after["true_peak"] <= -0.5
 
 
-def test_each_genre_gets_its_own_reveal_sounds():
+def test_each_genre_gets_its_own_reveal_sounds(monkeypatch):
+    monkeypatch.setenv("TRANSITION_FX", "true")
     from movie_pipeline.sound_design import GENRE_SOUNDS, effect_events, effects_track
     timeline = [{"type": "cold-open", "start": 0}, {"type": "review-preview", "start": 10}]
     horror = effect_events(timeline, 1.0, "horror")
@@ -108,6 +111,7 @@ def test_each_genre_gets_its_own_reveal_sounds():
 
 
 def test_effects_track_renders_every_genre_sound(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRANSITION_FX", "true")
     from movie_pipeline.sound_design import GENRE_SOUNDS, effects_track
     timeline = [{"type": "cold-open", "start": 0}, {"type": "review-preview", "start": 3}]
     for genre in GENRE_SOUNDS:
@@ -135,11 +139,14 @@ def test_generated_genre_score_replaces_the_bundled_track(tmp_path, monkeypatch)
     assert "Scott Buckley" in soundtrack.music_credit("drama")
 
 
-def test_genre_picks_the_bundled_fallback_family(monkeypatch):
+def test_no_automatic_genre_music_for_an_unspecified_episode(monkeypatch):
     from movie_pipeline.soundtrack import theme_for
     monkeypatch.setenv("VIDEO_GENRE", "horror")
-    assert theme_for("anything") == "mystery"
-    monkeypatch.setenv("VIDEO_GENRE", "adventure")
-    assert theme_for("anything") == "action"
-    monkeypatch.setenv("VIDEO_GENRE", "family")
-    assert theme_for("anything") == "romance"
+    assert theme_for("8 movies to watch") == "neutral"
+    assert theme_for("8 horror movies") == "horror"
+    assert theme_for("8 movies", "Romance recommendations") == "romance"
+
+
+def test_transition_fx_are_opt_in(monkeypatch):
+    monkeypatch.delenv("TRANSITION_FX", raising=False)
+    assert effect_events(TIMELINE, 1.0) == []

@@ -235,7 +235,8 @@ def has_burned_text(image: Image.Image) -> bool:
     """Reject frames with captions, title cards, or a channel/streaming logo (even a small corner bug)."""
     from .shots import frame_text
     text = frame_text(image)
-    if len(re.findall(r"\b[A-Za-z]{4,}\b", text)) >= 3 or LOGO_WORDS.search(text):
+    if (len(re.findall(r"\b[A-Za-z]{3,}\b", text)) >= 3 or LOGO_WORDS.search(text)
+            or re.search(r"\b\d{2}[./-]\d{2}[./-]\d{2,4}\b",text)):
         return True
     w, h = image.size
     for box in ((0, 0, w * .26, h * .2), (w * .74, 0, w, h * .2), (0, h * .8, w * .26, h), (w * .74, h * .8, w, h)):
@@ -375,7 +376,7 @@ def gather(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]],
     from .stills_trailer import fetch_original
     profile = profile or GENRE_PROFILES[DEFAULT_GENRE]
     candidates: list[Candidate] = []
-    for index, film in enumerate(films[:max(3, min(len(films), 5))]):
+    for index, film in enumerate(films):
         pool = []
         for path in film.get("backdrops", [])[:10]:
             image = fetch_original(path, work / "stills") or fetch_still(path, work / "stills")
@@ -435,14 +436,18 @@ def good_face(candidate: Candidate) -> bool:
     return bool(candidate.face is not None and candidate.notes.get("good_face") and not candidate.notes.get("logo"))
 
 
-def rate_with_vision(candidates: list[Candidate], limit: int = 18, profile: dict | None = None) -> int:
+def rate_with_vision(candidates: list[Candidate], limit: int = 6, profile: dict | None = None) -> int:
     """Ask the local vision model about the most promising candidates; returns how many it rated."""
     from . import scenes
     if not scenes.enabled():
         return 0
     profile = profile or GENRE_PROFILES[DEFAULT_GENRE]
+    import time
+    deadline=time.monotonic()+90
     rated = 0
     for candidate in sorted(candidates, key=lambda c: -c.score)[:limit]:
+        if time.monotonic() >= deadline:
+            break
         verdict = scenes.rate_thumbnail(candidate.image, profile["label"], profile["hint"])
         if verdict is None:
             break
@@ -880,8 +885,13 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     grade = profile["grade"]
 
     def save_design(number: int, image: Image.Image, style: str, chosen: list[Candidate], **extra):
-        save(image, output / f"thumbnail-0{number}.jpg")
-        report.append({"file": f"thumbnail-0{number}.jpg", "style": style,
+        image = image.convert("RGB")
+        from .editorial_policy import explicit_genre
+        accent = {"action":"#e52a35", "adventure":"#df8c27", "horror":"#b92338",
+                  "comedy":"#f4ba32", "romance":"#db6686", "scifi":"#339db9"}.get(explicit_genre(title, brief), "#d92935")
+        ImageDraw.Draw(image).rectangle((2,2,image.width-3,image.height-3), outline=accent, width=5)
+        save(image, output / f"thumbnail-{number:02}.jpg")
+        report.append({"file": f"thumbnail-{number:02}.jpg", "style": style,
                        "films": [films[c.film]["title"] for c in chosen], "sources": [c.source for c in chosen],
                        "faces": [c.notes.get("face_quality") for c in chosen], **extra})
 
@@ -914,26 +924,53 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
         single = picker.take(picker.any(faces=True))
         save_design(2, finish(face_crop(single, face_height=0.5, face_x=0.42), grade), "face", [single])
 
-    # 3. Spectacle: the biggest genre moment in the list, full frame (an explosion, a creature, a vista).
-    pool = picker.free() or picker.candidates
-    spectacle = picker.take(max(pool, key=lambda c: c.action * 2 + c.genre_fit * 2 + c.notes.get("score", 5) / 5
-                                + (0.0 if c.face is None else -0.4)))
-    save_design(3, finish(face_crop(spectacle, face_height=0.4, face_x=0.5), grade), "spectacle", [spectacle])
+    # 3-5: image-led alternatives to the hero/split compositions. No compulsory
+    # service badges, countdown typography or action bias for an unthemed list.
+    for number in (3,4,5):
+        free=picker.free(faces=True) or picker.free() or picker.candidates
+        lead=picker.take(free[0])
+        if number == 4:
+            other=next((c for c in picker.free(faces=True) if c.film != lead.film),None)
+            if other is not None:
+                picker.take(other)
+                save_design(number,finish(panels([lead,other],profile["divider"]),grade),"duo",[lead,other])
+                continue
+        save_design(number,finish(face_crop(lead,face_height=.48,
+                    face_x=.56 if number==3 else .45),grade),"editorial-hero",[lead])
 
-    # 4. Streaming mark: number one again (another picture), the mark top-left, the face right.
-    mark_service, mark_reason = choose_service(films, [c.film for c in faces], title)
-    star = picker.take(picker.any(film=0, faces=True))
-    save_design(4, service_mark(finish(face_crop(star, face_height=0.5, face_x=0.68, face_y=0.42), grade), mark_service),
-                "service", [star], service=mark_service, service_reason=mark_reason)
-
-    # 5. Countdown: a huge yellow number, two bold words and a red year tag on the left,
-    #    the biggest action moment or face on the right ("10 MUST WATCH 2026").
-    number, words, tag = count_parts(title, phrases, len(films), profile["label"])
-    pool = picker.free() or picker.candidates
-    lead = picker.take(max(pool, key=lambda c: c.action * 2 + c.genre_fit + (1.5 if good_face(c) else 0) + c.score * 0.1))
-    image = face_crop(lead, face_height=0.48, face_x=0.72, face_y=0.40)
-    save_design(5, count_headline(finish(image, grade), number, words, tag), "countdown", [lead],
-                text=f"{number} {' '.join(words)} {tag}")
+    # 6-10: independently discovered photos, never extracted trailer frames.
+    from .image_discovery import gather_photos
+    photos,provenance=gather_photos(films,work/"image-search")
+    photo_picker=_Picker(photos) if photos else None
+    for number in range(6,11):
+        if photo_picker is not None:
+            available=photo_picker.free(faces=True) or photo_picker.free()
+            if available:
+                lead=available[0]
+            else:
+                lead=min(photo_picker.candidates,key=lambda candidate:sum(_similar(candidate,u) for u in photo_picker.used))
+            photo_picker.take(lead)
+            other=next((c for c in photo_picker.free() if c.film != lead.film),None)
+            if number in (7,9) and other is not None:
+                photo_picker.take(other)
+                canvas=panels([lead,other],profile["divider"]);chosen=[lead,other]
+            else:
+                canvas=face_crop(lead,face_height=.48,face_x=.38 if number%2 else .64)
+                chosen=[lead]
+            save_design(number,finish(canvas,grade),"searched-photo",chosen,
+                        photo_sources=[{k:v for k,v in c.notes.items() if k!="hash"} for c in chosen])
+        else:
+            # Last resort is an honest typographic design, never fabricated actors.
+            canvas=Image.new("RGB",(WIDTH,HEIGHT),"#101116")
+            draw=ImageDraw.Draw(canvas)
+            face=brand_font("display",72)
+            draw.text((WIDTH/2,HEIGHT*.38),"MOVIE RANKS",font=face,anchor="mm",fill="white")
+            short=" ".join(title.split()[:7])
+            draw.text((WIDTH/2,HEIGHT*.6),short,font=brand_font("body-medium",30),
+                      anchor="mm",fill="#f1c968")
+            save_design(number,canvas,"typographic-fallback",[],
+                        fallback_reason="No verified photo available; no video frames used")
+    save_json(output/"thumbnail-sources.json",{"image_search":provenance,"designs":report})
 
     save_json(work / "thumbnail-report.json", {"genre": genre, "vision_rated": rated, "candidates": len(candidates),
               "good_faces": sum(good_face(c) for c in candidates),

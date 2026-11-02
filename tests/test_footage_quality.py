@@ -120,11 +120,11 @@ def test_low_quality_curated_trailer_can_be_replaced_by_verified_search_candidat
     assert not json.loads(result.with_suffix('.json').read_text())['curated']
 
 
-def test_unverified_search_trailer_does_not_displace_official_usable_source(monkeypatch,tmp_path):
+def test_genuine_higher_quality_search_trailer_can_come_from_unverified_uploader(monkeypatch,tmp_path):
     downloaded, _ = setup_downloads(monkeypatch,{IDS[0]:info(720),IDS[1]:info(2160,verified=False)},discovery=[IDS[1]])
     result = download(film(IDS[:1]),tmp_path)
-    assert downloaded == [IDS[0]]
-    assert result.read_text() == IDS[0]
+    assert downloaded == [IDS[1]]
+    assert result.read_text() == IDS[1]
 
 
 def test_dimension_and_storage_ranking_does_not_overstate_landscape_detail():

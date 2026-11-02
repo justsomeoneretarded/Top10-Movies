@@ -161,7 +161,7 @@ def validate_package(output: Path, spec: DurationSpec | None = None):
     if not video or (video["width"], video["height"]) != export_size() or not any(s["codec_type"] == "audio" for s in streams):
         raise PipelineError(f"Final export must have {export_size()[0]}x{export_size()[1]} video and an audio stream.")
     from PIL import Image
-    for n in range(1, 4):
+    for n in range(1, 11):
         path = output / f"thumbnail-{n:02}.jpg"
         with Image.open(path) as image:
             if image.size != (1280, 720) or path.stat().st_size >= 2_000_000:
@@ -230,13 +230,13 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     os.environ["VIDEO_RESOLUTION"] = str(ceiling)
     spec = workflow_duration(title, len(items))
     max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
-    expected_breaks = min(3, max_beat) * len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
+    expected_breaks = min(spec.target*.28, 20*len(items)) + COLD_OPEN_SECONDS + 2.3
     print(f"Requested runtime: {spec.target/60:.2f} minutes", flush=True)
     narrator = selected_narrator(brief)
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v14-nov-edit", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v15-scene-first-movie-ranks", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -311,7 +311,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
 
     ctx = setup_run(title, brief, movies, work, output, started)
     from .thumbnail_studio import detect_genre
-    genre = detect_genre(ctx.films, title, brief)
+    from .editorial_policy import explicit_genre
+    genre = explicit_genre(title, brief)
     os.environ["VIDEO_GENRE"] = genre  # drives the footage grade, music theme and reveal weighting
     items, content_type, ceiling, spec = ctx.items, ctx.content_type, ctx.ceiling, ctx.spec
     max_beat, expected_breaks, narrator, reference = ctx.max_beat, ctx.expected_breaks, ctx.narrator, ctx.reference
@@ -332,8 +333,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     shot_lookup = {str(trailer): shots for trailer, shots in zip(trailers, shot_sets)}
     for i, source in enumerate(sources):
         source.update(film=films[i]["title"], role="primary")
+    from .resource_budget import DownloadBudget, seed_sources
+    seed_sources(Path("work/footage"),trailers)
+    download_budget = DownloadBudget()
     workers = max(1, min(3, int(os.getenv("FOOTAGE_WORKERS", "2") or 2)))
-    for round_number in (2, 3):
+    for round_number in (2, 3, 4, 5):
         print(f"Footage round {round_number}: optional extra trailers and clips, {workers} titles at a time, "
               "after the previous round finishes for all titles.", flush=True)
 
@@ -342,9 +346,12 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             film, primary = films[i], trailers[i]
             try:
                 require_disk(work, spec.target)  # stop adding extras gracefully when storage is tight
-                return (download_secondary(film, Path("work/footage"), primary, (width, height)) if round_number == 2 else
-                        download_secondary(film, Path("work/footage"), primary, (width, height),
-                                           existing=pools[i][1:], slot=3))
+                with download_budget.claim(Path("work/footage")) as reserved:
+                    if not reserved:
+                        return None
+                    return (download_secondary(film, Path("work/footage"), primary, (width, height)) if round_number == 2 else
+                            download_secondary(film, Path("work/footage"), primary, (width, height),
+                                               existing=pools[i][1:], slot=round_number))
             except Exception as exc:  # noqa: BLE001 -- an optional extra must never discard a usable first trailer
                 print(f"Trailer {round_number} download skipped for {film['title']} ({type(exc).__name__}).", flush=True)
                 return None
@@ -367,7 +374,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 require_disk(work, spec.target)
                 pools[i].append(extra)
                 shot_lookup[str(extra)] = extra_shots
-                details.update(film=film["title"], role="secondary" if round_number == 2 else "tertiary")
+                details.update(film=film["title"], role="secondary" if round_number == 2 else f"extra-{round_number}")
                 sources.append(details)
                 print(f"Using {len(pools[i])} trailers for {film['title']} to provide more scene variety.", flush=True)
             except Exception:  # noqa: BLE001 -- an optional extra trailer must never discard a usable first one.
@@ -512,6 +519,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     unpaced_take = next(iter(speech.values()), None)
     if unpaced_take is not None:
         ffmpeg("-i", unpaced_take, "-t", 12, "-c:a", "pcm_s24le", work / "voice-before-pacing.wav")
+        dry_take = unpaced_take.with_suffix(".dry.wav")
+        if dry_take.exists():
+            ffmpeg("-i", dry_take, "-t", 12, "-c:a", "pcm_s24le", work / "voice-dry.wav")
     music_theme = theme_for(title, brief)
     voice_speed = narration_rate(music_theme)
     from .script import aligned_delivery
@@ -548,11 +558,13 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         cues = json.loads(cache.read_text()) if cache.exists() else captions(trailer, recognizer)
         save_json(cache, cues)
         trailer_cues.append(cues)
-    del recognizer
+    # Keep the recognizer briefly for bounded extra-source scene windows.
     gc.collect()
 
-    action = bool(re.search(r"\b(action|energetic|fast.paced|fight|intense)\b", title + " " + brief, re.IGNORECASE)) or sum("Action" in film.get("genres", []) for film in films) >= max(1, len(films)//2)
+    action = genre in {"action", "adventure"}
     selector = ShotSelector()
+    selector.source_films = {str(source): f"{film.get('kind', 'movie')}:{film.get('id', film['title'])}"
+                             for film, pool in zip(films, pools) for source in pool}
     selector.peak_weight = {"horror": 1.1, "action": 1.1, "thriller": 1.0, "adventure": 0.9, "scifi": 0.9, "fantasy": 0.9}.get(genre, 0.6)
     selector.titles = {str(source): film["title"] for film, pool in zip(films, pools) for source in pool}
     for film, trailer, shots in zip(films, trailers, shot_sets):
@@ -619,26 +631,39 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 if callable(reserve):
                     reserve(trailers[film_index], start, end - start, "trailer-audio")
     dialogue = {str(trailer): cues for trailer, cues in zip(trailers, trailer_cues)}
-    # Action-type lists open on a ~25-second reel of the list's best moments under the music
-    # (no voice); other genres keep the short five-second cold open.
-    opening = []
-    import sys
-    preview_module = sys.modules.get(__package__ + ".previews")
-    sizzle_plan = getattr(preview_module, "sizzle_plan", None)
-    if (genre in getattr(preview_module, "SIZZLE_GENRES", ()) and callable(sizzle_plan)
-            and os.getenv("SIZZLE_INTRO", "true").strip().lower() != "false"):
-        opening = sizzle_plan(selector, pools, shot_lookup, float(os.getenv("SIZZLE_SECONDS", "25")))
+    # Plan natural scenes before reserving fallback previews.
+    opening, previews = [], {}
+    opening_seconds = 0.0
+    from .moments import plan_episode
+    native_plan = None
+    try:
+        native_plan = plan_episode(selector, pools, shot_lookup, films, script["sections"], speech,
+                                   dialogue, recognizer, work / "native-scenes")
+    except (PipelineError, OSError, ValueError, RuntimeError) as exc:
+        print(f"Optional native-scene plan unavailable ({type(exc).__name__}); using safe previews.", flush=True)
+    native_insertions = {}
+    if native_plan:
+        opening = native_plan["opening"] or opening
+        opening_seconds = sum(shot["duration"] for shot in opening)
+        previews.update(native_plan["previews"])
+        native_insertions = native_plan["inserts"]
+        beats, extra_beats, impacts = {}, {}, {}
+        save_json(work / "native-scenes.json", native_plan)
+        notice("Native scenes", f"{native_plan['report']}")
     if not opening:
         opening = cold_open_plan(selector, pools, shot_lookup, title+". "+brief, action,
                                  dialogue=dialogue, seconds=COLD_OPEN_SECONDS)
-    opening_seconds = sum(shot["duration"] for shot in opening)
-    previews = {i: choose_preview(selector, pools[section["film"]], shot_lookup,
+        opening_seconds = sum(shot["duration"] for shot in opening)
+    for i, section in enumerate(script["sections"]):
+        if section["kind"] == "film" and i not in previews:
+            previews[i] = choose_preview(selector, pools[section["film"]], shot_lookup,
                  films[section["film"]].get("overview", "")+". "+title+". "+brief,
                  REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
-                for i, section in enumerate(script["sections"]) if section["kind"] == "film"}
+    del recognizer
+    gc.collect()
     tease = None
     top_index = next((i for i, section in enumerate(script["sections"]) if section["kind"] == "film" and section["film"] == 0), None)
-    if top_index is not None and len(films) >= 3 and os.getenv("TEASE_NUMBER_ONE", "true").strip().lower() != "false":
+    if top_index is not None and len(films) >= 3 and os.getenv("TEASE_NUMBER_ONE", "false").strip().lower() != "false":
         taken = [(previews[top_index]["start"], previews[top_index]["start"] + previews[top_index]["duration"])] \
             if Path(previews[top_index]["source"]) == trailers[0] else []
         taken += [(b["start"], b["end"]) for b in (beats.get(top_index), extra_beats.get(top_index), impacts.get(top_index)) if b]
@@ -649,14 +674,16 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     planned_seconds = (sum(lengths.values())+sum(preview["duration"] for preview in previews.values())
                        +sum(card["duration"] for card in ending_cards.values() if card)
                        +sum(beat["end"]-beat["start"] for beat in [*beats.values(), *extra_beats.values(), *impacts.values()] if beat)
-                       +opening_seconds+duration(cta_audio)+(TEASE_SECONDS if tease else 0))
+                       +sum(clip["duration"] for moments in native_insertions.values() for clip in moments.values())
+                       +2.3+opening_seconds+duration(cta_audio)+(TEASE_SECONDS if tease else 0))
     selector.playback_speed = final_tempo(planned_seconds, spec)
     boundary, fraction = subscription_boundary(script["sections"], lengths,
         {i: preview["duration"] + (beats[i]["end"]-beats[i]["start"] if beats.get(i) else 0)
             + (extra_beats[i]["end"]-extra_beats[i]["start"] if extra_beats.get(i) else 0)
             + (impacts[i]["end"]-impacts[i]["start"] if impacts.get(i) else 0)
+            + sum(clip["duration"] for clip in native_insertions.get(i,{}).values())
             + (ending_cards[script["sections"][i]["film"]]["duration"] if ending_cards.get(script["sections"][i]["film"]) else 0)
-         for i, preview in previews.items()}, duration(cta_audio), opening_seconds=opening_seconds)
+         for i, preview in previews.items()}, duration(cta_audio), opening_seconds=opening_seconds+2.3)
     print(f"Like/subscribe break before a review at {fraction:.0%} of the measured video.", flush=True)
     shifted = {}
     shifted_cues = {}
@@ -671,6 +698,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     previews = {i+(i >= boundary): preview for i, preview in previews.items()}
     extra_beats = {i+(i >= boundary): beat for i, beat in extra_beats.items()}
     impacts = {i+(i >= boundary): beat for i, beat in impacts.items()}
+    native_insertions = {i+(i >= boundary): moments for i, moments in native_insertions.items()}
     overlays = []  # countdown tracker images with their (pre-tempo) start and end
     edit_stills: dict[int, list[Path]] = {}
 
@@ -731,6 +759,12 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     portraits_used = set()
     offset = 0.0
     film_position = 0  # entries shown so far, for rotating the rank reveal
+    from .branding import render_ident
+    ident_path = work / "part-000.mp4"
+    ident_seconds = render_ident(ident_path, work / "brand-ident")
+    parts.append(ident_path)
+    timeline.append({"start": 0.0, "duration": ident_seconds, "type": "brand-ident", "narration": False})
+    offset += ident_seconds
     for shot in opening:
         film_index = shot["film_index"]
         source = Path(shot["source"])
@@ -749,6 +783,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         seconds = duration(path)
         timeline.append({"start": offset, "duration": seconds, "type": "cold-open", "film": films[film_index]["title"],
                          "source_start": shot["start"], "shots": [shot], "narration": False})
+        for cue in shot.get("cues", []):
+            if cue["start"] >= shot["start"] and cue["end"] <= shot["start"]+seconds:
+                all_cues.append({"start":offset+cue["start"]-shot["start"], "end":offset+cue["end"]-shot["start"], "text":cue["text"]})
         parts.append(path)
         used_video_sources.add(str(source))
         offset += seconds
@@ -758,6 +795,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         film = films[film_index]
         trailer = trailers[film_index]
         is_film = section["kind"] == "film"
+        from .editorial_policy import title_genres
+        section_action = bool(set(title_genres(film)) & {"action","adventure"}) if is_film else action
         chapter = f"#{film_index+1} {film['title']} ({film['year']})" if is_film else section["kind"].title()
         if section["kind"] != "subscribe":
             chapters.append({"start": 0.0 if section["kind"] == "intro" else offset, "title": chapter})
@@ -774,8 +813,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
                               still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
-                              reveal=True, reveal_style=style, audio=None if preview["muted"] or preview.get("still") else
-                              isolate_dialogue(source, preview["start"], preview["duration"], work / "dialogue"))
+                              reveal=True, reveal_style=style, audio=None)
             except (PipelineError, OSError, RuntimeError, ValueError):
                 if source == trailer:
                     raise
@@ -785,10 +823,12 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 trailer_video(source, preview["start"], preview["duration"], path,
                               label=label, label_seconds=preview["duration"], muted=preview["muted"],
                               still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
-                              reveal=True, reveal_style=style, audio=None if preview["muted"] or preview.get("still") else
-                              isolate_dialogue(source, preview["start"], preview["duration"], work / "dialogue"))
+                              reveal=True, reveal_style=style, audio=None)
             seconds = duration(path)
             preview_seconds = seconds
+            for cue in preview.get("cues", []):
+                if cue["start"] >= preview["start"] and cue["end"] <= preview["start"]+seconds:
+                    all_cues.append({"start":offset+cue["start"]-preview["start"], "end":offset+cue["end"]-preview["start"], "text":cue["text"]})
             timeline.append({"start": offset, "duration": seconds, "type": "review-preview", "film": film["title"],
                              "source_start": preview["start"], "shots": [preview], "narration": False, "reveal_style": style})
             parts.append(path)
@@ -810,8 +850,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         for paragraph_index, text in enumerate(section["paragraphs"]):
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
-            selector.pace_limit = pace_limit(aligned_delivery(section)[paragraph_index], action)
-            chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), action)
+            selector.pace_limit = pace_limit(aligned_delivery(section)[paragraph_index], section_action)
+            chosen = montage[paragraph_index] if montage is not None else choose_from_sources(selector, pools[film_index], shot_lookup, text, duration(audio), section_action)
             if montage is None and is_film:
                 chosen = stills_instead_of_repeats(chosen, film_index)
             if is_film and duration(audio) >= 4:
@@ -858,43 +898,64 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                              "film": section["kind"].title()+" montage" if montage is not None else film["title"], "films": sorted({films[cut.get("film_index", film_index)]["title"] for cut in chosen}), "text": text, "shots": chosen})
             parts.append(path)
             offset += seconds
-            impact = impacts.get(section_index) if paragraph_index == 0 else None
-            if impact:
+            native_clip = native_insertions.get(section_index, {}).get(paragraph_index)
+            if native_clip:
+                native_path = work / f"part-{len(parts):03}.mp4"
                 try:
-                    j_cut(parts[-1], trailer, impact["start"])
-                    path = work / f"part-{len(parts):03}.mp4"
-                    trailer_video(trailer, impact["start"], impact["end"]-impact["start"], path)
-                except (PipelineError, OSError, RuntimeError, ValueError):
-                    print(f"Impact moment skipped for {film['title']}.", flush=True)
+                    trailer_video(Path(native_clip["source"]), native_clip["start"], native_clip["duration"],
+                                  native_path, muted=native_clip.get("muted", False))
+                except (PipelineError, OSError, RuntimeError, ValueError) as exc:
+                    print(f"Optional scene skipped ({type(exc).__name__}); preserving the review.", flush=True)
                 else:
-                    seconds = duration(path)
-                    timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio", "film": film["title"],
-                                     "source_start": impact["start"], "separated": False, "impact": True})
-                    parts.append(path)
-                    used_video_sources.add(str(trailer))
+                    seconds = duration(native_path)
+                    for cue in native_clip.get("cues", []):
+                        if cue["start"] >= native_clip["start"] and cue["end"] <= native_clip["start"]+seconds:
+                            all_cues.append({"start": offset+cue["start"]-native_clip["start"],
+                                             "end": offset+cue["end"]-native_clip["start"], "text": cue["text"]})
+                    timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio",
+                                     "film": film["title"], "source_start": native_clip["start"],
+                                     "source": native_clip["source"], "native_verified": True, "separated": False})
+                    parts.append(native_path)
+                    used_video_sources.add(native_clip["source"])
                     offset += seconds
-            active_beat = (beat if paragraph_index+1 == midpoint else
-                           extra_beats.get(section_index) if paragraph_index+1 == max(midpoint+1, len(section["paragraphs"])-1) else None)
-            if active_beat:
-                beat = active_beat
-                try:
-                    j_cut(parts[-1], trailer, beat["start"])
-                except (PipelineError, OSError, RuntimeError, ValueError):
-                    pass
-                path = work / f"part-{len(parts):03}.mp4"
-                separated = isolate_dialogue(trailer, beat["start"], beat["end"]-beat["start"], work / "dialogue")
-                trailer_video(trailer, beat["start"], beat["end"]-beat["start"], path, audio=separated)
-                seconds = duration(path)
-                # Align the exact retained audio rather than copy a potentially truncated cue.
-                # Word timestamps from the source transcript are clipped to this insert.
-                for cue in trailer_cues[film_index]:
-                    start, end = max(cue["start"], beat["start"]), min(cue["end"], beat["end"])
-                    if end > start:
-                        all_cues.append({"start": offset+start-beat["start"], "end": offset+end-beat["start"], "text": cue["text"]})
-                timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio", "film": film["title"], "source_start": beat["start"],
-                                 "separated": separated is not None})
-                parts.append(path)
-                offset += seconds
+            elif not native_plan:
+                impact = impacts.get(section_index) if paragraph_index == 0 else None
+                if impact:
+                    try:
+                        j_cut(parts[-1], trailer, impact["start"])
+                        path = work / f"part-{len(parts):03}.mp4"
+                        trailer_video(trailer, impact["start"], impact["end"]-impact["start"], path)
+                    except (PipelineError, OSError, RuntimeError, ValueError):
+                        print(f"Impact moment skipped for {film['title']}.", flush=True)
+                    else:
+                        seconds = duration(path)
+                        timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio", "film": film["title"],
+                                         "source_start": impact["start"], "separated": False, "impact": True})
+                        parts.append(path)
+                        used_video_sources.add(str(trailer))
+                        offset += seconds
+                active_beat = (beat if paragraph_index+1 == midpoint else
+                               extra_beats.get(section_index) if paragraph_index+1 == max(midpoint+1, len(section["paragraphs"])-1) else None)
+                if active_beat:
+                    beat = active_beat
+                    try:
+                        j_cut(parts[-1], trailer, beat["start"])
+                    except (PipelineError, OSError, RuntimeError, ValueError):
+                        pass
+                    path = work / f"part-{len(parts):03}.mp4"
+                    separated = isolate_dialogue(trailer, beat["start"], beat["end"]-beat["start"], work / "dialogue")
+                    trailer_video(trailer, beat["start"], beat["end"]-beat["start"], path, audio=separated)
+                    seconds = duration(path)
+                    # Align the exact retained audio rather than copy a potentially truncated cue.
+                    # Word timestamps from the source transcript are clipped to this insert.
+                    for cue in trailer_cues[film_index]:
+                        start, end = max(cue["start"], beat["start"]), min(cue["end"], beat["end"])
+                        if end > start:
+                            all_cues.append({"start": offset+start-beat["start"], "end": offset+end-beat["start"], "text": cue["text"]})
+                    timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio", "film": film["title"], "source_start": beat["start"],
+                                     "separated": separated is not None})
+                    parts.append(path)
+                    offset += seconds
         card = ending_cards.get(film_index) if is_film else None
         if is_film:
             # Lower left, where the rank/title box sat: the small countdown tracker appears once that
@@ -992,6 +1053,12 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     write_srt(output / "subtitles.srt", all_cues)
     for chapter in chapters:
         chapter["start"] /= speed
+    save_json(output / "run-manifest.json", {"channel":"MOVIE RANKS", "commit":os.getenv("GITHUB_SHA","local"),
+              "genre":genre, "requested_minutes":spec.target/60, "actual_minutes":final_duration/60,
+              "native_scenes_rendered":sum(e.get("type")=="trailer-audio" and e.get("native_verified",False) for e in timeline),
+              "review_previews":sum(e.get("type")=="review-preview" for e in timeline),
+              "accepted_sources":[{"title":film["title"],"sources":[str(p) for p in pool]} for film,pool in zip(films,pools)],
+              "voice_model":os.getenv("TTS_MODEL","turbo"),"narrator":narrator})
     package = script["package"]
     (output / "recommended-title.txt").write_text(package["title"].strip() + "\n")
     write_upload_extras(output, package, films)
@@ -1062,6 +1129,12 @@ def warm_voice(sections: list[dict], ctx) -> int:
         for section in sections:
             labels = aligned_delivery(section)
             for index, text in enumerate(section.get("paragraphs", [])):
+                if section.get("kind") == "film":
+                    from .editorial_policy import clean_review
+                    cleaned=clean_review([text], section.get("availability_text",""), section.get("bridge",""))
+                    if not cleaned:
+                        continue
+                    text=cleaned[0]
                 try:
                     speaker.speak(text, delivery=labels[index])
                     voiced += 1
@@ -1097,7 +1170,7 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
         from .thumbnail_studio import detect_genre
         parts = {"script_parts": ["intro", "outro", *[f"film-{i}" for i in range(len(films))]],
                  "footage_parts": [str(i) for i in range(len(films))],
-                 "genre": detect_genre(films, title, brief),
+                 "genre": __import__("movie_pipeline.editorial_policy", fromlist=["explicit_genre"]).explicit_genre(title, brief),
                  # ACE-Step stops any generation after 10 minutes (about 120 s of music on the CPU);
                  # 100 s stays safely inside that, and the music bed loops it with crossfades.
                  "music_seconds": 100}
