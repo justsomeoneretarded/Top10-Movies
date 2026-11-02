@@ -18,14 +18,24 @@ def complete_window(candidate: dict, cues: list[dict], extent: tuple[float,float
     """Grow to full recognized utterances instead of truncating their words."""
     start,end=candidate["start"],candidate["start"]+candidate["duration"]
     low,high=extent
-    relevant=[c for c in cues if c.get("end",0)>start-.12 and c.get("start",high)<end+.12]
-    if relevant:
-        start=min(start,min(c["start"] for c in relevant)-.14)
-        end=max(end,max(c["end"] for c in relevant)+.20)
-        # A transcript touching an extraction edge may itself be a fragment.
+    ordered=sorted(cues,key=lambda c:c.get("start",0))
+    indices=[i for i,c in enumerate(ordered) if c.get("end",0)>start-.12 and c.get("start",high)<end+.12]
+    relevant=[]
+    terminal=lambda c: bool(re.search(r"[.!?][\"'’”)]?$",str(c.get("text","")).strip()))
+    if indices:
+        first,last=indices[0],indices[-1]
+        # Whisper captions are word-aligned display chunks, not necessarily
+        # whole sentences. Walk back/forward to a real utterance boundary.
+        while first>0 and not terminal(ordered[first-1]) and ordered[first]["start"]-ordered[first-1]["end"]<.8:
+            first-=1
+        while last+1<len(ordered) and not terminal(ordered[last]) and ordered[last+1]["start"]-ordered[last]["end"]<.8:
+            last+=1
+        relevant=ordered[first:last+1]
+        start=min(start,relevant[0]["start"]-.14)
+        end=max(end,relevant[-1]["end"]+.20)
         if start<low+.04 or end>high-.04:
             return None
-        if end-start>22 or not re.search(r"[.!?][\"'’”)]?$",str(relevant[-1].get("text","")).strip()):
+        if end-start>22 or not terminal(relevant[-1]):
             return None
     if not 3 <= end-start <= 22:
         return None
@@ -50,30 +60,42 @@ def candidates(selector,pool,shot_lookup,film):
         energetic=_scores(selector,source,"People visibly fighting, running from danger, shooting, a vehicle crash or an explosion.",len(shots))
         quiet=_scores(selector,source,"A static quiet view, an empty room or a person standing still.",len(shots))
         relevant=_scores(selector,source,str(film.get("overview") or film["title"]),len(shots))
+        features=getattr(selector,"features",{}).get(str(source))
+        if features is not None:
+            try:
+                features=features.detach().cpu().numpy()
+            except AttributeError:
+                features=np.asarray(features)
         for i,shot in enumerate(shots):
-            if getattr(selector,"card_kind",lambda *_:None)(source,i) is not None:
-                continue
-            start,end=float(shot["start"]),float(shot["end"])
-            length=end-start
-            if length<3:
-                continue
-            # A whole original scene gets priority over a fixed-length crop. Long
-            # scenes may be bounded only at another known source-shot boundary.
-            if length>22:
-                continue  # Never arbitrarily truncate an unresolved long scene.
-            fresh=getattr(selector,"freshness",lambda *_:1)(source,start,end-start)
-            if fresh<.98:
-                continue
-            visual=getattr(selector,"visual_freshness",lambda *_:1)(source,start,end-start)
-            if visual<.8:
-                continue
-            strength=float(energetic[i]-quiet[i])
-            score=float(meaningful[i]+relevant[i])+.10*fresh+.06*min(length/10,1)
-            result.append({"source":str(source),"start":start,"duration":end-start,
-                           "score":score,"action_strength":strength,
-                           "motion":float(shot.get("motion",0)),"film_index":None,
-                           "scene_index":i,"scene_end":float(shot["end"]),"extent":max(float(x["end"]) for x in shots),
-                           "muted":True,"cues":[]})
+            start=float(shot["start"])
+            for last in range(i,min(i+3,len(shots))):
+                indices=list(range(i,last+1))
+                if any(getattr(selector,"card_kind",lambda *_:None)(source,j) is not None for j in indices):
+                    break
+                if last>i:
+                    gap=float(shots[last]["start"])-float(shots[last-1]["end"])
+                    # Joined shots must be genuinely adjacent with consistent
+                    # visual context, not a jump to a new trailer location.
+                    if gap>.55 or features is None or float(np.dot(features[last-1],features[last]))<.78:
+                        break
+                end=float(shots[last]["end"])
+                length=end-start
+                if length>22:
+                    break
+                if length<3:
+                    continue
+                fresh=getattr(selector,"freshness",lambda *_:1)(source,start,length)
+                visual=getattr(selector,"visual_freshness",lambda *_:1)(source,start,length)
+                if fresh<.98 or visual<.8:
+                    continue
+                strength=float(np.mean(energetic[indices]-quiet[indices]))
+                score=float(np.mean(meaningful[indices]+relevant[indices]))+.10*fresh+.06*min(length/10,1)
+                result.append({"source":str(source),"start":start,"duration":length,
+                               "score":score,"action_strength":strength,
+                               "motion":float(np.mean([shots[j].get("motion",0) for j in indices])),
+                               "film_index":None,"scene_index":i,"scene_end":end,
+                               "extent":max(float(x["end"]) for x in shots),
+                               "muted":True,"cues":[]})
     return sorted(result,key=lambda c:-c["score"])
 
 def _enrich(candidate, dialogue, recognizer, work):
@@ -105,6 +127,18 @@ def _enrich(candidate, dialogue, recognizer, work):
         extent=(low,high)
     return complete_window(candidate,cues,extent)
 
+def _usable(selector,clip,shot_lookup):
+    source=Path(clip["source"])
+    if getattr(selector,"freshness",lambda *_:1)(source,clip["start"],clip["duration"])<.98:
+        return False
+    if getattr(selector,"visual_freshness",lambda *_:1)(source,clip["start"],clip["duration"])<.8:
+        return False
+    for i,shot in enumerate(shot_lookup.get(str(source),[])):
+        if shot["start"]<clip["start"]+clip["duration"] and shot["end"]>clip["start"]:
+            if getattr(selector,"card_kind",lambda *_:None)(source,i) is not None:
+                return False
+    return True
+
 def _reserve(selector,clip):
     getattr(selector,"reserve",lambda *_:None)(Path(clip["source"]),clip["start"],clip["duration"],"native-scene")
 
@@ -134,7 +168,7 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
             clip=_enrich(candidate,dialogue,recognizer,work)
         except (OSError,ValueError,RuntimeError):
             clip=None
-        if clip and sum(c["duration"] for c in opening)+clip["duration"]<=18:
+        if clip and _usable(selector,clip,shot_lookup) and sum(c["duration"] for c in opening)+clip["duration"]<=18:
             opening.append(clip);used.append(clip);_reserve(selector,clip)
     if not opening:
         all_clips=[{**clip,"film_index":i} for i,rows in options.items() for clip in rows]
@@ -165,7 +199,7 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
                 clip=_enrich(candidate,dialogue,recognizer,work)
             except (OSError,ValueError,RuntimeError):
                 clip=None
-            if clip is None:
+            if clip is None or not _usable(selector,clip,shot_lookup):
                 continue
             if any(c["source"]==clip["source"] and _overlap(c,clip) for c in used):
                 continue

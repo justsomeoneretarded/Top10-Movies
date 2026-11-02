@@ -197,9 +197,11 @@ def _intro_facts(title: str, brief: str, films: list[dict]) -> dict:
     common_genres = set(films[0].get("genres", [])) if films else set()
     for film in films[1:]:
         common_genres.intersection_update(film.get("genres", []))
+    from .editorial_policy import explicit_genre
+    requested=explicit_genre(title,brief)
     return {"titles": [film["title"] for film in films], "count": len(films),
-            "genres": list(dict.fromkeys(genre for film in films for genre in film.get("genres", [])))[:6],
-            "shared_genres": sorted(common_genres),
+            "genres": [requested] if requested != "neutral" else [],
+            "shared_genres": [],
             "requested_years": sorted(set(re.findall(r"\b(?:19|20)\d{2}\b", title + " " + brief))),
             "kind": "shows" if sum(film.get("kind") == "tv" for film in films) > len(films)/2 or re.search(r"\b(shows?|series|tv)\b", title, re.IGNORECASE) else "movies"}
 
@@ -476,11 +478,11 @@ class Writer:
             "- promise: one plain sentence on what the title promises the viewer and how this list pays it off; everything else serves it.\n"
             "- angle: one sentence on what ties this list together for the viewer, in plain words.\n"
             "- opening_hook: one or two spoken sentences that hook viewers in under eight seconds; name no titles and no ranks.\n"
-            "- open_loop: one short line teasing why number one is worth waiting for, without naming it.\n"
+            "- open_loop: optional; return an empty string unless a genuinely useful unresolved question exists. No compulsory number-one tease.\n"
             "- entries: for EVERY rank, a one-sentence spoken hook (specific, not a rhetorical question plus hype), the angle that makes it "
             "different from the others, up to three standout facts copied faithfully from its data (production feats, awards, reception, "
             "cast, tagline), why_here (why it sits at this rank, escalating toward number one), who_for, "
-            "comparison_anchor (one famous, older film or show of the same kind that is NOT in this list, as 'if you liked X'), "
+             "comparison_anchor (return an empty string; comparison bridges are not required), "
             "and standout_scene (one spoiler-light moment from the premise a viewer can picture).\n"
             "- comment_question: one specific question viewers can answer in the comments.\n"
             f"Use only facts in the data; spoiler-light; casual spoken English; no markdown. Never use: {BANNED_LIST}.")
@@ -674,7 +676,7 @@ class Writer:
             try:
                 result = self.ask(
                 f"Write spoken English narration for {role}. Section request: {label}. Video theme (context only): {topic}\n"
-                f"Creative direction: {brief}\nToday UTC: {datetime.now(UTC).date()}\n"
+                f"Creative direction: {brief}\nOverall genre label: {_theme(topic, brief, facts) or 'NONE: use general movies/shows wording, never invent a shared genre'}\nToday UTC: {datetime.now(UTC).date()}\n"
                 f"Verified facts for THIS SECTION ONLY (JSON data): {json.dumps(visible_facts)}\n"
                 f"Use only as many words as the supplied facts deserve, with room for native scene audio. Aim for {target} total words as loose guidance; suggested planning range {minimum}–{maximum}. Use paragraphs of at most 60 words; shorter paragraphs are fine. Original, engaging, spoiler-light. "
                 "Speak like an enthusiastic friend, not a formal critic: short sentences, contractions, and everyday words. "
@@ -855,7 +857,7 @@ class Writer:
         Section names for ``only``: "intro", "outro" and "film-<index>" (0 is number one).
         """
         availability = [availability_line(film.get("watch_availability", {})) for film in films]
-        provider_seconds = sum(len(line.split()) for line in availability) * 60/145
+        provider_seconds = 0  # availability belongs in the description, never narration
         opening_words, per_film, closing_words = narration_words(max(1, target_seconds-11-provider_seconds), len(films), trailer_seconds, word_scale)
         plan = self.plan(title, brief, films)
         weights = rank_weights(len(films))
@@ -877,7 +879,7 @@ class Writer:
             facts["rank"] = index + 1
             facts["other_titles"] = [film["title"] for i, film in enumerate(films) if i != index]
             if plan.get("entries", {}).get(str(index + 1)):
-                facts["episode_plan"] = plan["entries"][str(index + 1)]
+                facts["episode_plan"] = {k:v for k,v in plan["entries"][str(index + 1)].items() if k != "comparison_anchor"}
             words = max(30, round(per_film * weights[index]))
             paragraphs = []
             # Bound each model request so long runtimes do not exceed its output limit.

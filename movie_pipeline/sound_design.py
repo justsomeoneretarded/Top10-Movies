@@ -38,6 +38,8 @@ MUSIC_LEVELS = {
 
 def segment_level(entry: dict, top_title: str | None = None) -> float:
     kind = entry.get("type", "narration")
+    if kind == "cold-open" and entry.get("shots") and not entry["shots"][0].get("muted", True):
+        return MUSIC_LEVELS["review-preview-dialogue"]
     if kind == "review-preview":
         shots = entry.get("shots") or [{}]
         return MUSIC_LEVELS["review-preview" if shots[0].get("muted", True) else "review-preview-dialogue"]

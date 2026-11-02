@@ -68,10 +68,7 @@ def sentences(text: str) -> list[str]:
 
 
 def phrases(parts: list[str], reveal: bool = False, limit: int = 45) -> list[str]:
-    """Join consecutive sentences into phrases of at most two sentences and ``limit`` words.
-
-    A rank reveal ('Number 3: Title.') always stays on its own so its beat lands.
-    """
+    """Join up to three complete sentences within a bounded coherent TTS phrase."""
     grouped: list[str] = []
     for index, part in enumerate(parts):
         last = grouped[-1] if grouped else None
@@ -187,7 +184,7 @@ class Narrator:
             pieces, rate = [], None
             seed_base = int(baseline[:8], 16) + attempt * 7919 + attempt_offset + suffix * 1009
             try:
-                # Sentences are voiced in natural phrases of up to two sentences, so intonation flows
+                # Sentences are voiced in natural phrases of up to three sentences, so intonation flows
                 # across a full stop instead of resetting on every sentence.
                 for index, sentence in enumerate(phrases(sentences(spoken_form(text)), reveal)):
                     best, best_score = None, float("-inf")

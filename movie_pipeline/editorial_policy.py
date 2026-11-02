@@ -12,6 +12,8 @@ GENRES = {
     "fantasy": r"\bfantasy\b", "drama": r"\bdramas?\b",
     "documentary": r"\bdocumentar(?:y|ies)\b|\bdocuseries\b",
     "family": r"\bfamily\b|\bkids\b", "crime": r"\bcrime\b",
+    "mystery": r"\bmyster(?:y|ies)\b", "animation": r"\banimation\b|\banimated\b",
+    "war": r"\bwar\b", "western": r"\bwesterns?\b",
 }
 # These are concepts, not global search terms: only a title's own genres enable them.
 SCENE_CONCEPTS = {
@@ -25,15 +27,31 @@ SCENE_CONCEPTS = {
     "scifi": ("science fiction scene",), "fantasy": ("fantasy scene", "battle scene"),
     "crime": ("crime scene", "confrontation scene"),
     "family": ("memorable scene",), "documentary": ("best clip",),
+    "mystery": ("mystery scene","confrontation scene"), "animation": ("best scene",),
+    "war": ("battle scene","rescue scene"), "western": ("showdown scene","chase scene"),
 }
 
 def explicit_genre(title: str = "", brief: str = "") -> str:
     """A single requested genre wins; a mixed or unspecified list is neutral."""
-    for context in (title, brief):
-        matches = [name for name, pattern in GENRES.items() if re.search(pattern, context, re.I)]
-        if matches:
-            return matches[0] if len(matches) == 1 else "neutral"
-    return "neutral"
+    title_matches=[name for name,pattern in GENRES.items() if re.search(pattern,title,re.I)]
+    if title_matches:
+        return title_matches[0] if len(title_matches)==1 else "neutral"
+    if re.search(r"\b(?:neutral|mixed|general|broad)\s+(?:genre|list|selection|countdown|music|instrumental|recommendation)",brief,re.I):
+        return "neutral"
+    matches=[]
+    for name,pattern in GENRES.items():
+        for match in re.finditer(pattern,brief,re.I):
+            before=brief[max(0,match.start()-45):match.start()]
+            after=brief[match.end():match.end()+45]
+            # A per-film scene request is not an instruction to theme the episode.
+            requested=(re.match(r"\s+(?:movies|films|shows|series|recommendations|countdown|theme|music|tone)\b",after,re.I)
+                       or re.search(r"\b(?:genre|theme|tone|music)\s*(?:is|:|=|should be)?\s*$",before,re.I)
+                       or re.search(r"\b(?:focus on|list of|video about|countdown of)\s*$",before,re.I))
+            if requested:
+                matches.append(name)
+    matches=list(dict.fromkeys(matches))
+    return matches[0] if len(matches)==1 else "neutral"
+
 
 def title_genres(film: dict) -> list[str]:
     text = " ".join(str(v.get("name", "") if isinstance(v, dict) else v) for v in film.get("genres", []))

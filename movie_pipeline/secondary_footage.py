@@ -42,6 +42,12 @@ def secondary_candidate_ok(info: dict, film: dict, curated: bool = False) -> boo
     years -= set(re.findall(r"\b(?:18|19|20)\d{2}\b", film["title"]))
     if film.get("kind") != "tv" and years and str(film["year"]) not in years:
         return False
+    requested = film.get("requested_season")
+    if isinstance(requested, dict):
+        requested=requested.get("season_number")
+    labelled=re.findall(r"\bseason\s+(\d+)\b|\bs(\d{1,2})e\d+", title, re.I)
+    if str(requested).isdigit() and labelled and all(int(a or b) != int(requested) for a,b in labelled):
+        return False
     if curated:
         return True
     expected = set(normalized(film["title"]).split())

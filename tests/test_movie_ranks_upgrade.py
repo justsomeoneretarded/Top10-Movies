@@ -78,3 +78,41 @@ def test_ident_is_original_and_decodable(monkeypatch,tmp_path):
     render_ident(output,tmp_path/"ident")
     assert duration(output)==pytest.approx(2.3,abs=.05)
     assert {s["codec_type"] for s in probe(output)["streams"]}=={"audio","video"}
+
+def test_incidental_brief_genre_is_not_episode_direction():
+    assert explicit_genre("8 movies", "Use an action scene from the third film.") == "neutral"
+    assert explicit_genre("8 movies", "Keep neutral instrumental music, even for the horror title.") == "neutral"
+    assert explicit_genre("8 movies", "The video is about horror movies.") == "horror"
+
+def test_complete_dialogue_grows_across_word_aligned_display_chunks():
+    c={"start":10.5,"duration":4.5,"source":"x.mp4"}
+    cues=[{"start":8,"end":9,"text":"A previous thought."},
+          {"start":9.3,"end":11,"text":"We have to"},
+          {"start":11.1,"end":14,"text":"get across the bridge"},
+          {"start":14.2,"end":16,"text":"before it collapses."}]
+    clip=complete_window(c,cues,(0,30))
+    assert clip["start"] < 9.3
+    assert clip["start"]+clip["duration"] > 16
+    assert len(clip["cues"])==3
+
+def test_explicit_season_rejects_contradictory_upload():
+    from movie_pipeline.secondary_footage import secondary_candidate_ok
+    film={"title":"Example Show","year":2020,"kind":"tv","requested_season":3}
+    info={"title":"Example Show Season 2 Best Scene","duration":90}
+    assert not secondary_candidate_ok(info,film)
+    info["title"]="Example Show Season 3 Best Scene"
+    assert secondary_candidate_ok(info,film)
+
+def test_native_cold_open_music_steps_back():
+    from movie_pipeline.sound_design import segment_level, MUSIC_LEVELS
+    assert segment_level({"type":"cold-open","shots":[{"muted":False}]})==MUSIC_LEVELS["review-preview-dialogue"]
+
+def test_request_launcher_is_narrow_and_reuses_existing_workflow():
+    import yaml
+    path=Path(".github/workflows/production-request.yml")
+    workflow=yaml.load(path.read_text(),Loader=yaml.BaseLoader)
+    assert workflow["on"]["push"]["branches"]==["production-requests"]
+    assert workflow["on"]["push"]["paths"]==["requests/current.json"]
+    assert workflow["jobs"]["produce"]["uses"]=="./.github/workflows/generate-video.yml"
+    assert workflow["permissions"]=={"contents":"read"}
+    assert "${{" not in workflow["jobs"]["request"]["steps"][-1]["run"]

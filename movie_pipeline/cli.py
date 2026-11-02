@@ -630,23 +630,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 if callable(reserve):
                     reserve(trailers[film_index], start, end - start, "trailer-audio")
     dialogue = {str(trailer): cues for trailer, cues in zip(trailers, trailer_cues)}
-    # Action-type lists open on a ~25-second reel of the list's best moments under the music
-    # (no voice); other genres keep the short five-second cold open.
-    opening = []
-    import sys
-    preview_module = sys.modules.get(__package__ + ".previews")
-    sizzle_plan = getattr(preview_module, "sizzle_plan", None)
-    if (False and genre in getattr(preview_module, "SIZZLE_GENRES", ()) and callable(sizzle_plan)
-            and os.getenv("SIZZLE_INTRO", "true").strip().lower() != "false"):
-        opening = sizzle_plan(selector, pools, shot_lookup, float(os.getenv("SIZZLE_SECONDS", "25")))
-    if not opening:
-        opening = cold_open_plan(selector, pools, shot_lookup, title+". "+brief, action,
-                                 dialogue=dialogue, seconds=COLD_OPEN_SECONDS)
-    opening_seconds = sum(shot["duration"] for shot in opening)
-    previews = {i: choose_preview(selector, pools[section["film"]], shot_lookup,
-                 films[section["film"]].get("overview", "")+". "+title+". "+brief,
-                 REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
-                for i, section in enumerate(script["sections"]) if section["kind"] == "film"}
+    # Plan natural scenes before reserving fallback previews.
+    opening, previews = [], {}
+    opening_seconds = 0.0
     from .moments import plan_episode
     native_plan = None
     try:
@@ -663,6 +649,15 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         beats, extra_beats, impacts = {}, {}, {}
         save_json(work / "native-scenes.json", native_plan)
         notice("Native scenes", f"{native_plan['report']}")
+    if not opening:
+        opening = cold_open_plan(selector, pools, shot_lookup, title+". "+brief, action,
+                                 dialogue=dialogue, seconds=COLD_OPEN_SECONDS)
+        opening_seconds = sum(shot["duration"] for shot in opening)
+    for i, section in enumerate(script["sections"]):
+        if section["kind"] == "film" and i not in previews:
+            previews[i] = choose_preview(selector, pools[section["film"]], shot_lookup,
+                 films[section["film"]].get("overview", "")+". "+title+". "+brief,
+                 REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
     del recognizer
     gc.collect()
     tease = None
@@ -678,14 +673,16 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     planned_seconds = (sum(lengths.values())+sum(preview["duration"] for preview in previews.values())
                        +sum(card["duration"] for card in ending_cards.values() if card)
                        +sum(beat["end"]-beat["start"] for beat in [*beats.values(), *extra_beats.values(), *impacts.values()] if beat)
-                       +opening_seconds+duration(cta_audio)+(TEASE_SECONDS if tease else 0))
+                       +sum(clip["duration"] for moments in native_insertions.values() for clip in moments.values())
+                       +2.3+opening_seconds+duration(cta_audio)+(TEASE_SECONDS if tease else 0))
     selector.playback_speed = final_tempo(planned_seconds, spec)
     boundary, fraction = subscription_boundary(script["sections"], lengths,
         {i: preview["duration"] + (beats[i]["end"]-beats[i]["start"] if beats.get(i) else 0)
             + (extra_beats[i]["end"]-extra_beats[i]["start"] if extra_beats.get(i) else 0)
             + (impacts[i]["end"]-impacts[i]["start"] if impacts.get(i) else 0)
+            + sum(clip["duration"] for clip in native_insertions.get(i,{}).values())
             + (ending_cards[script["sections"][i]["film"]]["duration"] if ending_cards.get(script["sections"][i]["film"]) else 0)
-         for i, preview in previews.items()}, duration(cta_audio), opening_seconds=opening_seconds)
+         for i, preview in previews.items()}, duration(cta_audio), opening_seconds=opening_seconds+2.3)
     print(f"Like/subscribe break before a review at {fraction:.0%} of the measured video.", flush=True)
     shifted = {}
     shifted_cues = {}
@@ -1129,6 +1126,12 @@ def warm_voice(sections: list[dict], ctx) -> int:
         for section in sections:
             labels = aligned_delivery(section)
             for index, text in enumerate(section.get("paragraphs", [])):
+                if section.get("kind") == "film":
+                    from .editorial_policy import clean_review
+                    cleaned=clean_review([text], section.get("availability_text",""), section.get("bridge",""))
+                    if not cleaned:
+                        continue
+                    text=cleaned[0]
                 try:
                     speaker.speak(text, delivery=labels[index])
                     voiced += 1

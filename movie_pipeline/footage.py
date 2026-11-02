@@ -10,7 +10,7 @@ from . import download_access
 from .core import PipelineError, duration, normalized, probe, save_json
 from .video_settings import export_size, require_disk
 
-REJECT = re.compile(r"\b(fan.?made|concept|ai.?generated|unofficial|reaction|review|explained)\b", re.IGNORECASE)
+REJECT = re.compile(r"\b(concept|ai.?generated|reaction|review|explained|deepfake|full (?:movie|episode|film))\b", re.IGNORECASE)
 MAX_TRAILER_BYTES = 800_000_000
 MAX_CANDIDATES = 8
 MAX_QUALITY_DOWNLOADS = 3
@@ -41,7 +41,7 @@ def identity_ok(info: dict, film: dict) -> bool:
 
 
 def search_query(film: dict, extra: str = "official trailer") -> str:
-    """YouTube search text; TV shows add their network so same-named remakes rank lower."""
+    """YouTube search text; network names are metadata, not mandatory query terms."""
     from .editorial_policy import season_hint
     return " ".join(str(part) for part in (film["title"], film["year"], season_hint(film), extra) if part)
 
@@ -56,7 +56,7 @@ def candidate_ok(info: dict, film: dict, curated: bool = False) -> bool:
     words = set(normalized(film["title"]).split())
     candidate_words = set(normalized(title).split())
     overlap = len(words & candidate_words) / max(1, len(words))
-    return (overlap >= 0.85 and bool(candidate_words & {"trailer", "teaser", "scene", "clip", "preview"}) and True
+    return (overlap >= 0.85 and bool(candidate_words & {"trailer", "teaser", "scene", "clip", "preview"})
             and identity_ok(info, film))
 
 

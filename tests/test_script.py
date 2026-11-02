@@ -186,14 +186,15 @@ def test_editorial_cache_migration_preserves_safe_body_audio_inputs_exactly():
     result = writer.refresh_editorial("Top Horror Shows", "Casual", films, script)
     assert writer.ask.call_count == 1
     assert result["package"]["script_policy_version"] == SCRIPT_POLICY_VERSION
-    assert result["sections"][1:] == script["sections"][1:]
+    assert result["sections"][1]["paragraphs"] == script["sections"][1]["paragraphs"][:1]
+    assert result["sections"][2] == script["sections"][2]
     assert script["sections"][0]["paragraphs"] == [BAD_INTRO]
     writer.ask.reset_mock()
     assert writer.refresh_editorial("Top Horror Shows", "Casual", films, result) == result
     writer.ask.assert_not_called()
 
 
-def test_editorial_repair_excludes_checked_availability_from_model_and_restores_it_once():
+def test_editorial_repair_excludes_checked_availability_from_spoken_script():
     films, script = cached_script()
     script["package"]["script_policy_version"] = SCRIPT_POLICY_VERSION
     script["sections"][0]["paragraphs"] = ["One horror show traps a teacher in a disappearing town. Here's the setup, without the big reveals."]
@@ -203,8 +204,8 @@ def test_editorial_repair_excludes_checked_availability_from_model_and_restores_
     result = writer.refresh_editorial("Top Horror Shows", "Casual", films, script)
     assert writer.ask.call_count >= 1
     assert all("Hulu" not in call.args[0] for call in writer.ask.call_args_list)
-    assert result["sections"][1]["paragraphs"].count("You can watch it on Hulu.") == 1
-    assert result["sections"][1]["availability_text"] == "You can watch it on Hulu."
+    assert result["sections"][1]["paragraphs"].count("You can watch it on Hulu.") == 0
+    assert result["sections"][1]["availability_text"] == ""
 
 
 def test_measured_intro_retry_honors_shorter_goal_without_modifying_body():
