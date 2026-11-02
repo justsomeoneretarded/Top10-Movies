@@ -943,7 +943,12 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
     photo_picker=_Picker(photos) if photos else None
     for number in range(6,11):
         if photo_picker is not None:
-            lead=photo_picker.take(photo_picker.any(faces=True))
+            available=photo_picker.free(faces=True) or photo_picker.free()
+            if available:
+                lead=available[0]
+            else:
+                lead=min(photo_picker.candidates,key=lambda candidate:sum(_similar(candidate,u) for u in photo_picker.used))
+            photo_picker.take(lead)
             other=next((c for c in photo_picker.free() if c.film != lead.film),None)
             if number in (7,9) and other is not None:
                 photo_picker.take(other)

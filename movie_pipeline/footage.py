@@ -53,6 +53,9 @@ def candidate_ok(info: dict, film: dict, curated: bool = False) -> bool:
         return False
     if curated:
         return True
+    years = set(re.findall(r"\b(?:18|19|20)\d{2}\b", title)) - set(re.findall(r"\b(?:18|19|20)\d{2}\b", film["title"]))
+    if film.get("kind") != "tv" and film.get("year") and years and str(film["year"]) not in years:
+        return False
     words = set(normalized(film["title"]).split())
     candidate_words = set(normalized(title).split())
     overlap = len(words & candidate_words) / max(1, len(words))

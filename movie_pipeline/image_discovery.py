@@ -131,7 +131,7 @@ def gather_photos(films: list[dict], work: Path) -> tuple[list, list[dict]]:
             if len(accepted)>=2:
                 break
         if not accepted:
-            for path in film.get("backdrops",[])[:3]:
+            for path in film.get("backdrops",[])[:6]:
                 try:
                     image=fetch_original(path,work/"publicity")
                     if image is None or image.width<800:
@@ -144,8 +144,11 @@ def gather_photos(films: list[dict], work: Path) -> tuple[list, list[dict]]:
                                      "source_kind":"publicity-fallback","url":"https://image.tmdb.org/t/p/original"+path,
                                      "fallback_reason":"No usable independently searched photo",
                                      "identity_evidence":"TMDB image attached to this exact title ID"}
+                    if any((_dhash(image)^old.notes["hash"]).bit_count()<=5 for old in accepted):
+                        continue
                     accepted.append(candidate)
-                    break
+                    if len(accepted)>=3:
+                        break
                 except (OSError,ValueError,requests.RequestException):
                     continue
         return accepted

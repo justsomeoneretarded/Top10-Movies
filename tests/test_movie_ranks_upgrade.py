@@ -153,3 +153,17 @@ def test_native_planner_uses_extra_pool_and_nonfatal_small_counts(monkeypatch,tm
     assert len(result["inserts"][0])==2
     assert result["report"]["review_counts"]["0"]==3
     assert result["report"]["opening_seconds"]<=3.2
+
+def test_photo_fallback_builds_a_diverse_still_only_pool(monkeypatch,tmp_path):
+    from PIL import Image
+    from movie_pipeline.image_discovery import gather_photos
+    colors={"/a":(10,20,30),"/b":(40,50,60),"/c":(70,80,90)}
+    hashes={10:0,40:0xffffffffffffffff,70:0xaaaaaaaaaaaaaaaa}
+    monkeypatch.setattr("movie_pipeline.image_discovery.search",lambda film:[])
+    monkeypatch.setattr("movie_pipeline.stills_trailer.fetch_original",lambda path,work:Image.new("RGB",(1000,600),colors[path]))
+    monkeypatch.setattr("movie_pipeline.thumbnail_studio.face_quality",lambda image:(None,1,False))
+    monkeypatch.setattr("movie_pipeline.thumbnail_studio._dhash",lambda image:hashes[image.getpixel((0,0))[0]])
+    photos,records=gather_photos([{"title":"Example","year":2026,"backdrops":list(colors)}],tmp_path)
+    assert len(photos)==3
+    assert all(c.source=="publicity-fallback" for c in photos)
+    assert all(r["source_kind"]=="publicity-fallback" and "image.tmdb.org" in r["url"] for r in records)

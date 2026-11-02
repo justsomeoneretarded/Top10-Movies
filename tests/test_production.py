@@ -33,6 +33,7 @@ from movie_pipeline.video_settings import export_size
 
 @pytest.mark.parametrize("count,try_4k,source_height,expected_size,extra_mode,content_type,narrator", [
     (2,"true",2160,(3840,2160),"found",None,None),
+    (2,"false",1080,(1920,1080),"native-scenes","Movies","Warguy"),
     # One weaker primary among 4K sources is enlarged (at most 1.5x) instead of lowering the whole video.
     (5,"true",1080,(2560,1440),"missing","Shows","Female"),
     (2,"false",2160,(1920,1080),"raises","Movies","Kit Laser"),
@@ -354,7 +355,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 'status': 'rejected' if extra_mode == 'final-audio-rejected' else 'verified'}
 
     def thumbnails(trailers, choices, phrases, output, **kwargs):
-        for i in range(1, 4):
+        for i in range(1, 11):
             Image.new('RGB', (1280, 720), '#234567').save(output / f'thumbnail-{i:02}.jpg')
 
     def reference_for(selected_narrator, root):
@@ -405,6 +406,21 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         records['end_screen'] = seconds
         make(target, seconds)
     monkeypatch.setattr(render, 'end_screen_video', end_screen)
+    if extra_mode == "native-scenes":
+        def native_plan(selector,pools,lookup,films,sections,speech,dialogue,recognizer,work):
+            def clip(source,start,seconds,film_index):
+                return {"source":str(source),"start":start,"duration":seconds,
+                        "film_index":film_index,"muted":False,"native_verified":True,
+                        "cues":[{"start":start+1,"end":start+3,"text":"A complete scene sentence."}]}
+            previews={};inserts={}
+            for i,section in enumerate(sections):
+                if section["kind"]=="film":
+                    index=section["film"]
+                    assert len(pools[index])==5
+                    previews[i]=clip(pools[index][4],60,8,index)
+                    inserts[i]={0:clip(pools[index][3],90,8,index)}
+            return {"opening":[clip(pools[0][2],20,5,0)],"previews":previews,"inserts":inserts,"report":{}}
+        monkeypatch.setattr("movie_pipeline.moments.plan_episode",native_plan)
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
     monkeypatch.setattr("movie_pipeline.branding.render_ident", lambda target, work: (make(target, 2.3), 2.3)[1])
     monkeypatch.setitem(sys.modules, 'movie_pipeline.previews', SimpleNamespace(
@@ -447,6 +463,25 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         cli.validate_package.assert_not_called()
         return
     cli.produce(*arguments)
+    if extra_mode == "native-scenes":
+        timeline=json.loads(next((tmp_path/"jobs").glob("*/timeline.json")).read_text())
+        events=timeline["events"]
+        native=[event for event in events if event.get("native_verified")]
+        assert len(native)==count
+        assert all("extra-4" in event["source"] for event in native)
+        previews=[event for event in events if event["type"]=="review-preview"]
+        assert all(event["duration"]==8 for event in previews)
+        assert all("extra-5" in event["shots"][0]["source"] for event in previews)
+        assert len([cue for cue in written_cues if cue["text"]=="A complete scene sentence."])==1+count*2
+        assert all(a["end"]<=b["start"]+.001 for a,b in pairwise(written_cues))
+        for preview,chapter in zip(previews,embedded[1:-1]):
+            assert chapter["start"]==pytest.approx(preview["start"]/timeline["speed"])
+        cta_index=next(i for i,e in enumerate(events) if e["type"]=="subscribe")
+        assert events[cta_index-1]["type"]=="trailer-audio"
+        assert events[cta_index+1]["type"]=="review-preview"
+        assert records["final_duration"]==pytest.approx((sum(durations[p] for p in records["parts"])+3)/1.02)
+        assert events[0]["type"]=="brand-ident"
+        return
 
     assert records['editorial_refreshed'] is True
     assert records.get('intro_refinements', []) == ([] if extra_mode == 'initial-speaker-error'
@@ -627,7 +662,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert not any('Netflix' in event.get('text', '') for event in events)
     assert all('US' not in event.get('text', '') for event in events)
     assert (output / 'subtitles.srt').exists()
-    for i in range(1, 4):
+    for i in range(1, 11):
         with Image.open(output / f'thumbnail-{i:02}.jpg') as thumbnail:
             assert thumbnail.size == (1280, 720)
     assert not list(timeline_file.parent.glob('part-*.mp4'))
