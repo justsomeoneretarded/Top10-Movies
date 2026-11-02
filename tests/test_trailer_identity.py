@@ -23,7 +23,7 @@ def test_the_real_show_is_accepted():
     assert identity_ok(by_surname, OFFICE)
 
 
-def test_tv_searches_name_the_network_and_titles_without_data_pass():
-    assert search_query(OFFICE) == "The Office 2005 NBC official trailer"
+def test_tv_searches_omit_network_and_titles_without_data_pass():
+    assert search_query(OFFICE) == "The Office 2005 official trailer"
     assert search_query({"title": "Dune", "year": 2021, "kind": "movie", "networks": ["X"]}) == "Dune 2021 official trailer"
     assert identity_ok(video("Anything"), {"title": "Unknown", "year": 2020})

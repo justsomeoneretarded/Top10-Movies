@@ -23,6 +23,18 @@ def offline(monkeypatch):
     monkeypatch.setattr("movie_pipeline.stills_trailer.fetch_original", lambda path, cache: None)
     monkeypatch.setattr(studio, "has_burned_text", lambda image: False)
     monkeypatch.setattr("movie_pipeline.scenes.rate_thumbnail", lambda image, *args, **kw: None)
+    monkeypatch.setattr("movie_pipeline.image_discovery.search", lambda film: [])
+    def photos(films, work):
+        pool=[]
+        for index, film in enumerate(films):
+            for path in film.get("backdrops", []):
+                image=images.get(path)
+                if image is not None:
+                    candidate=studio.Candidate(image,index,"publicity-fallback",score=1)
+                    candidate.notes={"source_kind":"publicity-fallback","url":"https://image.tmdb.org/t/p/original"+path}
+                    pool.append(candidate)
+        return pool, []
+    monkeypatch.setattr("movie_pipeline.image_discovery.gather_photos", photos)
 
 
 def films(service=None):
@@ -41,13 +53,15 @@ def test_letterbox_bars_are_removed():
 def test_three_distinct_text_free_thumbnails(offline, tmp_path, monkeypatch):
     monkeypatch.delenv("THUMBNAIL_TEXT", raising=False)
     report = studio.build(films(), [], [], ["Watch these"], tmp_path, tmp_path / "work")
-    assert [r["style"].split("-")[0] for r in report] == ["hero", "face", "spectacle", "service", "countdown"]
-    pixels = [np.asarray(Image.open(tmp_path / f"thumbnail-0{i}.jpg"), dtype=float) for i in (1, 2, 3, 4, 5)]
+    assert len(report) == 10
+    assert report[0]["style"] == "hero"
+    assert report[1]["style"] in {"split-2","split-3","face"}
+    pixels = [np.asarray(Image.open(tmp_path / f"thumbnail-{i:02}.jpg"), dtype=float) for i in range(1,11)]
     assert all(p.shape == (720, 1280, 3) for p in pixels)
-    assert report[3]["service"] in studio.RANDOM_SERVICES and report[3]["service_reason"].startswith("random")
-    assert report[4]["text"] == "3 WATCH THESE DRAMA"  # number, the two-word phrase, the genre tag
-    # With only four source images some reuse is unavoidable; uniqueness is tested with a larger pool below.
-    assert "service" not in report[2]  # only design 4 carries a service mark
+    assert all("service" not in r for r in report)
+    assert all(r["style"] == "searched-photo" for r in report[5:])
+    assert all(p[3,3,0] > p[3,3,1]*1.5 for p in pixels)
+    assert report[-1]["file"] == "thumbnail-10.jpg"
 
 
 def test_panels_have_white_diagonal_dividers(offline):
@@ -58,7 +72,7 @@ def test_panels_have_white_diagonal_dividers(offline):
 
 def test_service_badge_only_when_number_one_is_listed(offline, tmp_path):
     report = studio.build(films("Paramount+ Amazon Channel"), [], [], ["x"], tmp_path, tmp_path / "work")
-    assert report[3]["service"] == "Paramount Plus"
+    assert all("service" not in r for r in report)
     assert studio.service_on_number_one(films()) is None
 
 
@@ -149,7 +163,7 @@ def test_no_design_repeats_an_image(offline, tmp_path):
     titles = [{"title": f"T{k}", "backdrops": [f"/{k * 3 + j}" for j in range(3)]} for k in range(3)]
     report = studio.build(titles, [], [], ["Big words"], tmp_path, tmp_path / "work")
     used = [tuple(r["sources"]) + tuple(r["films"]) for r in report]
-    assert len(report) == 5
+    assert len(report) == 10
     hashes = [studio._dhash(Image.open(tmp_path / f"thumbnail-0{i}.jpg")) for i in range(1, 6)]
     assert len(set(hashes)) == 5
 

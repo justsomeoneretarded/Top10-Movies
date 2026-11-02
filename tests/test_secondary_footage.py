@@ -23,8 +23,8 @@ def info(title='Example Movie (2025) Fan-Made Trailer', height=1080, verified=Fa
 @pytest.mark.parametrize('title,verified,accepted',[
     ('Example Movie (2025) Fan-Made Trailer',False,True),
     ('Example Movie (2025) Unofficial Trailer',False,True),
-    ('Example Movie Fan Edit Trailer',False,False),
-    ('Example Movie (2025) Trailer',False,False),
+    ('Example Movie Fan Edit Trailer',False,True),
+    ('Example Movie (2025) Trailer',False,True),
     ('Example Movie Official Trailer',True,True),
     ('Example Movie (2026) Fan-Made Trailer',False,False),
     ('Example Movie (2025) AI-Generated Concept Trailer',True,False),

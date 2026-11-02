@@ -56,7 +56,7 @@ def search(film: dict) -> list[dict]:
                     continue
                 # Movie remakes require corroborating year context. Shows require title context;
                 # requested season, when present, is part of the search query.
-                if film.get("kind") != "tv" and str(film["year"]) not in context:
+                if film.get("kind") != "tv" and str(film.get("year", "")) not in context:
                     continue
                 rows.append({"url":url,"page":page,"query":query,"context":context[:300]})
                 if len(rows)>=4:
@@ -112,7 +112,11 @@ def gather_photos(films: list[dict], work: Path) -> tuple[list, list[dict]]:
     def one(pair):
         index,film=pair
         accepted=[]
-        for row in search(film):
+        try:
+            rows=search(film)
+        except (OSError,ValueError,KeyError,requests.RequestException):
+            rows=[]
+        for row in rows:
             image=read_image(row["url"],work/"web")
             if image is None or frame_sharpness(image)<20 or has_burned_text(image):
                 continue

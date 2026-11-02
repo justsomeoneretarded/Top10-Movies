@@ -81,6 +81,33 @@ on:
         type: boolean
         default: true
 
+  workflow_call:
+    inputs:
+      title:
+        required: true
+        type: string
+      description:
+        required: true
+        type: string
+      movies:
+        required: true
+        type: string
+      content_type:
+        type: string
+        default: Movies
+      narrator:
+        type: string
+        default: Warguy
+      duration_minutes:
+        type: string
+        default: Auto
+      try_4k:
+        type: boolean
+        default: true
+      fact_check:
+        type: boolean
+        default: true
+
 permissions:
   contents: read
 
@@ -216,6 +243,7 @@ jobs:
       ACESTEP_INIT_LLM: 'false'
       GENRE: ${{ needs.prepare.outputs.genre }}
       MUSIC_SECONDS: ${{ needs.prepare.outputs.music_seconds }}
+      MUSIC_TOPIC: ${{ inputs.title }}
     steps:
       - uses: actions/checkout@v4
       - name: Free runner disk for the music model
@@ -372,6 +400,8 @@ jobs:
       PYTHONUNBUFFERED: '1'
       PIPELINE_PART: ${{ matrix.part }}
       SCENE_DESCRIPTIONS: 'true'
+      SCENE_BUDGET_SECONDS: '420'
+      SCENE_SAMPLE_FRAMES: '6'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -580,6 +610,7 @@ jobs:
         with:
           name: audio-inspection-${{ github.run_number }}
           path: |
+            work/jobs/*/voice-dry.wav
             work/jobs/*/voice-before-pacing.wav
             work/jobs/*/voice-after-pacing.wav
             work/jobs/*/finished-mix.wav

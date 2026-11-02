@@ -9,7 +9,7 @@ import math
 import re
 from pathlib import Path
 import numpy as np
-from .core import ffmpeg, key, save_json
+from .core import ffmpeg, key, save_json, probe
 
 def _overlap(a,b):
     return a["start"] < b["start"]+b["duration"] and a["start"]+a["duration"] > b["start"]
@@ -78,6 +78,8 @@ def candidates(selector,pool,shot_lookup,film):
 
 def _enrich(candidate, dialogue, recognizer, work):
     source=Path(candidate["source"])
+    if not any(stream.get("codec_type") == "audio" for stream in probe(source).get("streams", [])):
+        return None
     if str(source) in dialogue:
         cues=dialogue[str(source)]
         extent=(0.0,candidate["extent"])
@@ -85,7 +87,7 @@ def _enrich(candidate, dialogue, recognizer, work):
         if recognizer is None:
             return None
         low=max(0,candidate["start"]-2)
-        high=candidate["start"]+candidate["duration"]+2
+        high=min(candidate["extent"], candidate["start"]+candidate["duration"]+2)
         token=key(source.name,source.stat().st_size,round(low,3),round(high,3),"native-v1")
         cache=work/f"{token}.json"
         if cache.exists():
@@ -154,6 +156,8 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
             if len(chosen)>=wanted or examined>=max(6,wanted*2):
                 break
             candidate={**row,"film_index":index}
+            if getattr(selector,"visual_freshness",lambda *_:1)(Path(candidate["source"]),candidate["start"],candidate["duration"]) < .8:
+                continue
             if any(c["source"]==candidate["source"] and _overlap(c,candidate) for c in used):
                 continue
             examined+=1

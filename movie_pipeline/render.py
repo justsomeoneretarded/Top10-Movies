@@ -779,12 +779,16 @@ def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str]
     """Thumbnails from official TMDB stills when available; generated/local designs remain the fallback."""
     from .thumbnails import build_thumbnails
     films = options.pop("films", None)
+    def completed(result):
+        from .thumbnail_fallback import complete
+        complete(output, films, Path(options.get("work") or output / ".thumbnail-work"))
+        return result
     if films and os.getenv("THUMBNAIL_SOURCE", "stills").lower() != "ai":
         from .still_thumbnails import build_still_thumbnails
         from .thumbnail_studio import build as build_studio
         work = Path(options.get("work") or output / ".thumbnail-work")
         try:
-            return build_studio(films, trailers, shots, phrases, output, work)
+            return completed(build_studio(films, trailers, shots, phrases, output, work))
         except Exception as exc:  # noqa: BLE001 -- the headline designs remain available
             import traceback
 
@@ -792,7 +796,7 @@ def thumbnails(trailers: list[Path], shots: list[list[dict]], phrases: list[str]
             print(f"Studio thumbnails unavailable ({type(exc).__name__}: {exc}); using headline still designs.", flush=True)
             notice("Thumbnail studio fell back", f"{type(exc).__name__}: {str(exc)[:300]}\n{traceback.format_exc()[-1200:]}", "warning")
         try:
-            return build_still_thumbnails(films, phrases, output, work)
+            return completed(build_still_thumbnails(films, phrases, output, work))
         except Exception as exc:  # noqa: BLE001 -- stills are preferred, never required
             print(f"Still-based thumbnails unavailable ({type(exc).__name__}); using the generated designs.", flush=True)
-    return build_thumbnails(trailers, shots, phrases, output, **options)
+    return completed(build_thumbnails(trailers, shots, phrases, output, **options))

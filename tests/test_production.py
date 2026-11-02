@@ -171,13 +171,14 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
 
     def secondary(film, root, primary, minimum_size, *, existing=None, slot=2):
         assert len([event for event in records["footage_order"] if event[0]=="primary"]) == count
-        if slot == 3:
-            assert len([event for event in records["footage_order"] if event[0]=="secondary"]) == count
+        if slot >= 3:
+            previous = "secondary" if slot == 3 else f"extra-{slot-1}"
+            assert len([event for event in records["footage_order"] if event[0]==previous]) == count
             assert existing is not None
-        records["footage_order"].append(("secondary" if slot == 2 else "tertiary", film["id"]))
+        records["footage_order"].append(("secondary" if slot == 2 else f"extra-{slot}", film["id"]))
         records['extra_attempts'] = records.get('extra_attempts', 0)+1
         assert minimum_size == expected_size
-        if extra_mode == 'render-fails' and slot == 3:
+        if extra_mode == 'render-fails' and slot >= 3:
             return None  # exercise failed second decoding with a missing third
         if extra_mode == 'raises':
             raise RuntimeError('Optional source unavailable')
@@ -186,7 +187,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                           'final-audio-rejected', 'final-audio-error', 'title-cards',
                           'title-card-fails'}:
             return None
-        suffix = "extra" if slot == 2 else "extra-3"
+        suffix = "extra" if slot == 2 else f"extra-{slot}"
         path = make(root / f"movie-{film['id']}-{suffix}.mp4", 150)
         save_json(path.with_suffix('.json'), {'source': f"https://example.org/extra/{film['id']}"})
         return path
@@ -405,6 +406,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         make(target, seconds)
     monkeypatch.setattr(render, 'end_screen_video', end_screen)
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
+    monkeypatch.setattr("movie_pipeline.branding.render_ident", lambda target, work: (make(target, 2.3), 2.3)[1])
     monkeypatch.setitem(sys.modules, 'movie_pipeline.previews', SimpleNamespace(
         cold_open_plan=cold_open_plan, choose_preview=choose_preview, choose_title_card=choose_title_card,
         outro_recap_plan=lambda selector, pools, shots, lengths, text, action: montage(
@@ -459,7 +461,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert saved_input['content_type'] == (expected_kind if content_type else 'auto')
     assert saved_input['narrator'] == expected_narrator
     # Cold opening and title previews add intentional screen time to the old plan.
-    added_visual_seconds = 5 + count*5.0 + cli.END_SCREEN_SECONDS
+    added_visual_seconds = 2.3 + 5 + count*5.0 + cli.END_SCREEN_SECONDS
     if extra_mode in {'title-cards', 'title-card-fails'}:
         added_visual_seconds += (count-(extra_mode == 'title-card-fails'))*1.5
     assert 285 <= records['final_duration']-added_visual_seconds/1.02 <= 315
@@ -473,8 +475,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     cta_checks = [check for check in speech_checks if check.get('label') == 'subscribe break']
     assert any(check.get('accepted') and check.get('expected') == records['cta_text'] for check in cta_checks)
     if extra_mode == 'shared-audio-retry':
-        assert records['shared_transcriptions'] == 4  # three ASR routes, then the verified replacement
-        assert records['shared_regenerations'] == 1  # reused by every repeated paragraph
+        assert not records.get('shared_transcriptions')
+        assert not records.get('shared_regenerations')  # provider filler never enters TTS
     if extra_mode == 'cta-vad-retry':
         takes = [call for call in records['speech_calls'] if call['text'] in records['cta_candidates']]
         assert len(takes) == 1  # a no-VAD check retains the original generated audio
@@ -496,15 +498,16 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert opening_checks[0]['accepted'] is True
         assert opening_checks[0]['heard'] == first
         assert sum(part['text'] == first for part in records['spoken_renders']) == 1
-    assert records['extra_attempts'] == count*2
+    assert records['extra_attempts'] == count*4
     # Rounds stay strictly ordered; within a round, titles download in parallel (any order).
     order, n = records["footage_order"], len(films)
     assert order[:n] == [("primary",film["id"]) for film in films]
     assert sorted(order[n:2*n]) == sorted(("secondary",film["id"]) for film in films)
-    assert sorted(order[2*n:]) == sorted(("tertiary",film["id"]) for film in films)
+    for slot in (3,4,5):
+        assert sorted(order[(slot-1)*n:slot*n]) == sorted((f"extra-{slot}",film["id"]) for film in films)
     if extra_mode == "render-fails":
         assert records['render_fallbacks'] == count
-    assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(3 if extra_mode == 'found' else 1)
+    assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(5 if extra_mode == 'found' else 1)
     assert render_sizes and set(render_sizes) == {expected_size}
     quality_report = json.loads(next((tmp_path / "jobs").glob("*/quality-report.json")).read_text())
     assert quality_report["try_4k"] == (try_4k == "true")
@@ -520,12 +523,13 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     events = timeline['events']
     assert records['export_audio_review']['events'] == events
     assert len(records['export_audio_review']['samples']) == 3
-    assert events[0]['type'] == 'cold-open'
+    assert events[0]['type'] == 'brand-ident'
+    assert events[1]['type'] == 'cold-open'
     assert events[0]['start'] == 0
     assert sum(event['duration'] for event in events if event['type'] == 'cold-open') == pytest.approx(5)
-    assert records['parts'][0] == records['trailer_renders'][0]['target']
+    assert records['parts'][1] == records['trailer_renders'][0]['target']
     assert records['trailer_renders'][0]['muted'] is True
-    assert min(cue['start'] for cue in written_cues) == pytest.approx(5/timeline['speed'])
+    assert min(cue['start'] for cue in written_cues) == pytest.approx(7.3/timeline['speed'])
     assert written_cues[0]['text'] == first
     previews = [event for event in events if event['type'] == 'review-preview']
     assert len(previews) == count
@@ -534,7 +538,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 and Path(event['label']).name != 'number-one-tease.png']
     assert len(labelled) == count
     teasers = [event for event in events if event['type'] == 'teaser']
-    assert len(teasers) == (1 if count >= 3 else 0)  # short lists have no countdown to tease
+    assert len(teasers) == 0  # short lists have no countdown to tease
     if teasers:
         assert teasers[0]['duration'] == pytest.approx(3.0)
         intro_end = max(e['start'] + e['duration'] for e in events if e.get('section_kind') == 'intro')
@@ -548,7 +552,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert cta['duration']/timeline['speed'] < 10
     assert events[index-1]['film'] != events[index+1]['film']
     preceding_review = events[index-2] if events[index-1]['type'] == 'title-card' else events[index-1]
-    assert preceding_review['text'].startswith("You can find it")  # preceding review completed
+    assert preceding_review['text'].startswith("Review number")  # preceding review completed
     assert events[index+1]['type'] == 'review-preview'  # next review begins after the CTA
     assert events[index+2]['text'].startswith('Review number')
     cards = [(i, event) for i, event in enumerate(events) if event['type'] == 'title-card']
@@ -619,7 +623,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert ('Featured shows / series' if expected_kind == 'tv' else 'Featured movies') in description
     assert ' — Netflix' in description and 'Scott Buckley' in description
     assert 'Film information: TMDB' not in description
-    assert any('Netflix' in event.get('text', '') for event in events)
+    assert not any('Netflix' in event.get('text', '') for event in events)
     assert all('US' not in event.get('text', '') for event in events)
     assert (output / 'subtitles.srt').exists()
     for i in range(1, 4):

@@ -436,7 +436,8 @@ class Writer:
                     section["paragraphs"] = self.narration(title, brief, CLOSING, facts, 30)
                     section.pop("delivery", None)
         refreshed.setdefault("package", {})["script_policy_version"] = SCRIPT_POLICY_VERSION
-        return refreshed
+        from .packaging import refresh_availability
+        return refresh_availability(refreshed, films)
 
     def ask(self, prompt: str, schema: dict, *, temperature: float = 0.65, num_ctx: int = 8192, num_predict: int = 2300) -> dict:
         response = requests.post(self.url + "/api/chat", json={
@@ -654,7 +655,7 @@ class Writer:
                      "from the overview and wiki notes; no spoilers past the setup; "
                      "(4) what makes it worth watching, with one concrete detail from tagline, wiki_production or wiki_reception "
                      "(a stunt, a performance, a production feat, a reaction), or a standout scene from the premise; "
-                     "(5) one closing line on who it's for, using the comparison anchor when present without a formulaic comparison to another title. "
+                     "End when the useful facts are covered; a closing audience recommendation is optional. "
                      "Plain, confident storytelling beats hype: no 'masterpiece', 'redefined', 'game-changer' or 'must-watch' unless a fact says so. "
                      "Reception and production notes must be paraphrased, never quoted at length. "
                      "If episode_plan is present, use its hook, angle, standout_facts, why_here and who_for as direction; never mention the plan. ")
@@ -770,7 +771,7 @@ class Writer:
                 if len(premise.split()) > 60:
                     premise = " ".join(premise.split()[:56]).rstrip(".,;:")+"."
                 return completed([lead, premise], keep=False)
-            genre = _theme("", "", facts)
+            genre = ", ".join(str(g).lower() for g in facts.get("genres", [])[:2])
             return completed([lead] + ([f"If you're in the mood for {genre}, keep this one on your watchlist."] if genre else []), keep=False)
         raise PipelineError(f"No usable narration text generated for {label} after three attempts.")
 

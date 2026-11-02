@@ -886,7 +886,7 @@ def build(films: list[dict], trailers: list[Path], shot_sets: list[list[dict]], 
                   "comedy":"#f4ba32", "romance":"#db6686", "scifi":"#339db9"}.get(explicit_genre(title, brief), "#d92935")
         ImageDraw.Draw(image).rectangle((2,2,image.width-3,image.height-3), outline=accent, width=5)
         save(image, output / f"thumbnail-{number:02}.jpg")
-        report.append({"file": f"thumbnail-0{number}.jpg", "style": style,
+        report.append({"file": f"thumbnail-{number:02}.jpg", "style": style,
                        "films": [films[c.film]["title"] for c in chosen], "sources": [c.source for c in chosen],
                        "faces": [c.notes.get("face_quality") for c in chosen], **extra})
 
