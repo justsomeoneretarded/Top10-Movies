@@ -167,3 +167,9 @@ def test_photo_fallback_builds_a_diverse_still_only_pool(monkeypatch,tmp_path):
     assert len(photos)==3
     assert all(c.source=="publicity-fallback" for c in photos)
     assert all(r["source_kind"]=="publicity-fallback" and "image.tmdb.org" in r["url"] for r in records)
+
+def test_plain_language_rules_preserve_verified_title_names():
+    from movie_pipeline.script import plain_words
+    result=plain_words("Journey is a captivating journey.",protected=["Journey"])
+    assert result.startswith("Journey is a gripping")
+    assert result.endswith("Journey.") or result.endswith("journey.")

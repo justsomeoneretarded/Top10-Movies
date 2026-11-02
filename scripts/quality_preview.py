@@ -31,6 +31,7 @@ if films:
     report=build(films,[],[],["Worth watching"],root,root/"work",
                  title="8 Movies of 2026 You Should Watch Right Now",brief="A broad movie recommendation list.")
     save_json(root/"design-report.json",report)
+    print("THUMBNAIL_DIMENSIONS",json.dumps({str(i):Image.open(root/f"thumbnail-{i:02}.jpg").size for i in range(1,11)}))
     sheet=Image.new("RGB",(1280,800),"#121216")
     draw=ImageDraw.Draw(sheet)
     for i in range(1,11):

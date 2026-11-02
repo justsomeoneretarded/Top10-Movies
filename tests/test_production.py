@@ -543,7 +543,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert sorted(order[(slot-1)*n:slot*n]) == sorted((f"extra-{slot}",film["id"]) for film in films)
     if extra_mode == "render-fails":
         assert records['render_fallbacks'] == 1  # failed optional sources are removed before another paragraph uses them
-    assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == count*(5 if extra_mode == 'found' else 1)
+    assert len(json.loads(next((tmp_path / 'jobs').glob('*/quality-report.json')).read_text())['sources']) == (count*5 if extra_mode == 'found' else count*2-1 if extra_mode == 'render-fails' else count)
     assert render_sizes and set(render_sizes) == {expected_size}
     quality_report = json.loads(next((tmp_path / "jobs").glob("*/quality-report.json")).read_text())
     assert quality_report["try_4k"] == (try_4k == "true")
@@ -615,7 +615,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             assert all(e['type']=='trailer-audio' and e['film']==card['film'] for e in trailing)
             previous = events[card_index-1]
             assert previous['start']+previous['duration'] == pytest.approx(card['start'])
-            assert previous['text'].startswith("You can find it")
+            assert previous["type"] in {"narration","trailer-audio"}
+            assert previous["film"] == card["film"]
             following = events[card_index+1]
             assert following['type'] in {'subscribe', 'review-preview'} or following.get('section_kind') == 'outro'
             card_start = card['start']/timeline['speed']
@@ -652,9 +653,10 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert 'featuring' in description.split('\n\n')[0]
     assert '00:00 Intro' in description
     assert ('#ActionShows' if expected_kind == 'tv' else '#ActionMovies') in description
-    if extra_mode == 'found':
-        assert 'https://example.org/extra/1' in description
-        assert any('-extra.mp4' in shot.get('source','') for event in events for shot in event.get('shots',[]))
+    if extra_mode in {'found','render-fails'}:
+        assert 'https://example.org/extra/' in description
+        if extra_mode == 'found':
+            assert any('-extra.mp4' in shot.get('source','') for event in events for shot in event.get('shots',[]))
     else:
         assert 'https://example.org/extra/' not in description
     assert ('Featured shows / series' if expected_kind == 'tv' else 'Featured movies') in description

@@ -100,6 +100,11 @@ def candidates(selector,pool,shot_lookup,film):
 
 def _enrich(candidate, dialogue, recognizer, work):
     source=Path(candidate["source"])
+    try:
+        if json.loads(source.with_suffix(".json").read_text()).get("stills_fallback"):
+            return None  # a synthetic stills reel has no worthwhile original scene sound
+    except (OSError,ValueError,TypeError):
+        pass
     if not any(stream.get("codec_type") == "audio" for stream in probe(source).get("streams", [])):
         return None
     if str(source) in dialogue:

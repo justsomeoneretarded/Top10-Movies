@@ -251,8 +251,14 @@ BANNED_PHRASES = {
 BANNED_LIST = "curated, unsettling, high-concept, delves into, explores how, a testament to, tapestry, captivating, thought-provoking, masterclass, nuanced, compelling, in a world where, embark, visual feast, journey, resonates"
 
 
-def plain_words(text: str) -> str:
-    """Swap stock AI phrasing for plain spoken words; tidy any doubled spaces or articles left behind."""
+def plain_words(text: str, protected=()) -> str:
+    """Simplify stock phrases while preserving verified movie/show names exactly."""
+    originals=[]
+    for title in sorted((t for t in protected if isinstance(t,str) and t.strip()),key=len,reverse=True):
+        def protect(match):
+            originals.append(match.group(0))
+            return f"\ue000{len(originals)-1}\ue001"
+        text=re.sub(re.escape(title),protect,text,flags=re.I)
     for pattern, replacement in BANNED_PHRASES.items():
         def keep_case(match, replacement=replacement):
             word = match.group(0)
@@ -260,7 +266,10 @@ def plain_words(text: str) -> str:
         text = re.sub(pattern, keep_case, text, flags=re.IGNORECASE)
     text = re.sub(r"\b(a|an)\s+(a|an)\b", r"\1", text, flags=re.IGNORECASE)
     text = re.sub(r"\ban (?=[^aeiouAEIOU\W])", "a ", text)
-    return " ".join(text.split()).replace(" ,", ",").replace(" .", ".")
+    text=" ".join(text.split()).replace(" ,", ",").replace(" .", ".")
+    for i,original in enumerate(originals):
+        text=text.replace(f"\ue000{i}\ue001",original)
+    return text
 
 
 def _editorial_issue(paragraphs: list[str], *, opening: bool = False, theme: str = "") -> str | None:
@@ -556,7 +565,7 @@ class Writer:
         except (requests.RequestException, ValueError, TypeError):
             return paragraphs, defaults
         items = result.get("paragraphs", []) if isinstance(result, dict) else []
-        edited = [plain_words(" ".join(str(item.get("text", "")).replace("*", "").split())) for item in items if isinstance(item, dict)]
+        edited = [plain_words(" ".join(str(item.get("text", "")).replace("*", "").split()),protected=[facts.get("title"),*facts.get("titles",[])]) for item in items if isinstance(item, dict)]
         labels = [item.get("delivery") if item.get("delivery") in DELIVERIES else "normal" for item in items if isinstance(item, dict)]
         edited_words = sum(len(p.split()) for p in edited)
         issue = (not edited or not all(edited) or any(len(p.split()) > 65 for p in edited)
@@ -697,7 +706,7 @@ class Writer:
             cleaned = []
             for paragraph in paragraphs:
                 paragraph = re.sub(r"<think>.*?</think>", "", paragraph, flags=re.DOTALL).strip()
-                paragraph = plain_words(paragraph.replace("*", "").replace("#", ""))
+                paragraph = plain_words(paragraph.replace("*", "").replace("#", ""),protected=[facts.get("title"),*facts.get("titles",[])])
                 paragraph = re.sub(r"(?i)\b(?:check this out|you got this|let[’']s wrap up|buckle up|but hold up)\s*[,!:;.—-]*\s*", "", paragraph).strip()
                 paragraph = re.sub(r"(?i)(?:^|(?<=[.!?])\s+)(?:this (?:video|list) is (?:completely )?spoiler.free|no spoilers here)[.!?]\s*", "", paragraph).strip()
                 paragraph = re.sub(r"(?i)(?:^|(?<=[.!?])\s+)no spoilers[^.!?]*[.!?]\s*", "", paragraph).strip()
