@@ -187,7 +187,10 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
         if section.get("kind")!="film":
             continue
         index=section["film"]
-        paragraph_seconds=[duration(speech[(section_index,p)]) for p in range(len(section["paragraphs"]))]
+        # The title announcement precedes the preview; native inserts belong
+        # only after complete review paragraphs, never between a name and its scene.
+        body_positions=list(range(1 if section.get("rank_intro_version") else 0, len(section["paragraphs"])))
+        paragraph_seconds=[duration(speech[(section_index,p)]) for p in body_positions]
         wanted=min(5,1+int(sum(paragraph_seconds)//30),len(paragraph_seconds)+1)
         chosen=[]
         examined=0
@@ -215,8 +218,8 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
             if remaining:
                 # Spread pauses across complete paragraphs, including a useful scene
                 # after the final review sentence when appropriate.
-                positions=np.linspace(0,len(paragraph_seconds)-1,len(remaining),dtype=int)
-                inserts[section_index]={int(p):clip for p,clip in zip(positions,remaining)}
+                positions=np.linspace(0,len(body_positions)-1,len(remaining),dtype=int)
+                inserts[section_index]={body_positions[int(p)]:clip for p,clip in zip(positions,remaining)}
     return {"opening":opening,"previews":previews,"inserts":inserts,
             "report":{"opening_seconds":sum(c["duration"] for c in opening),
                       "native_moments":sum(c.get("native_verified",False) and not c.get("muted",True) for c in used),"review_counts":{str(i):1+len(inserts.get(i,{})) for i in previews}}}

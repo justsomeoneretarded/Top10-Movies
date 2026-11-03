@@ -378,12 +378,31 @@ def _number_spelling(value: int) -> str:
 
 def _aligned_tokens(planned: list[str], heard: list[str]) -> tuple[set[int], set[int]]:
     """Monotone word alignment with at most a three-token spelling join/split."""
-    def spelling(token):
-        return _number_spelling(int(token)) if token.isdigit() else token
+    def spellings(token):
+        if not token.isdigit():
+            return {token}
+        value = int(token)
+        forms = {_number_spelling(value)}
+        if 1000 <= value <= 2099:
+            century, remainder = divmod(value, 100)
+            prefix = _number_spelling(century)
+            if remainder == 0:
+                forms.add(prefix+"hundred")
+            elif remainder < 10:
+                # Preserve the zero: "twenty one" means 21, not 2001.
+                forms.update(prefix+zero+_number_spelling(remainder) for zero in ("oh", "zero"))
+            else:
+                forms.add(prefix+_number_spelling(remainder))
+        return forms
 
     def spans(tokens):
-        return {(start, size): "".join(spelling(word) for word in tokens[start:start+size])
-                for start in range(len(tokens)) for size in range(1, min(3, len(tokens)-start)+1)}
+        result = {}
+        for start in range(len(tokens)):
+            forms = {""}
+            for size in range(1, min(3, len(tokens)-start)+1):
+                forms = {prefix+suffix for prefix in forms for suffix in spellings(tokens[start+size-1])}
+                result[start, size] = forms
+        return result
 
     left, right = spans(planned), spans(heard)
     scores = [[(0, 0) for _ in range(len(heard)+1)] for _ in range(len(planned)+1)]
@@ -402,7 +421,7 @@ def _aligned_tokens(planned: list[str], heard: list[str]) -> tuple[set[int], set
             if j < len(heard):
                 update(i, j+1, score, (i, j, 0, 0))
             for a, b in ((1, 1), (1, 2), (1, 3), (2, 1), (3, 1)):
-                if i+a <= len(planned) and j+b <= len(heard) and left[i, a] == right[j, b]:
+                if i+a <= len(planned) and j+b <= len(heard) and not left[i, a].isdisjoint(right[j, b]):
                     update(i+a, j+b, (score[0]+a, score[1]+b), (i, j, a, b))
     expected_matches, heard_matches = set(), set()
     position = (len(planned), len(heard))
@@ -422,9 +441,11 @@ def speech_check(expected: str, cues: list[dict]) -> dict:
     substantial extra/repeated speech instead of accepting a complete sentence
     merely because it appears somewhere inside a runaway recording.
     """
-    planned = _speech_tokens(expected)
+    # The verifier must compare the pronunciation actually sent to TTS. Keep
+    # the written transcript unchanged in diagnostics and captions.
+    planned = _speech_tokens(spoken_form(expected))
     transcript = " ".join(cue.get("text", "") for cue in cues)
-    heard = _speech_tokens(transcript)
+    heard = _speech_tokens(spoken_form(transcript))
     absent_edge = {"accepted": False, "matched": 0, "required": max(1, (min(8, len(planned))+1)//2),
                    "unmatched_tokens": len(planned)}
     result = {"accepted": False, "coverage": 0.0, "precision": 0.0,

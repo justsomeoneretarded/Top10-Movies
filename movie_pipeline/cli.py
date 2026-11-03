@@ -407,6 +407,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks)
     script = writer.refresh_editorial(title, brief, films, script)
     refresh_availability(script, films)
+    from .rank_intro import prepare_rank_intros
+    script = prepare_rank_intros(script, films)
     if script["package"].get("thumbnail_version") != 2:
         script["package"]["thumbnail_concepts"] = writer.thumbnail_concepts(title, brief, films, script["sections"])
         script["package"]["thumbnail_version"] = 2
@@ -492,6 +494,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         word_scale *= max(.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
         try:
             script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks)
+            refresh_availability(script, films)
+            script = prepare_rank_intros(script, films)
             writer.unload()
         except Exception:  # noqa: BLE001 -- duration guidance is best effort; keep a complete usable draft.
             print("Timing rewrite unavailable; retaining a complete draft.", flush=True)
@@ -595,7 +599,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     extra_beats = {}
     for i, section in enumerate(script["sections"]):
         first = beats.get(i)
-        if section["kind"] == "film" and first and len(section["paragraphs"]) >= 3 and os.getenv("EXTRA_BEATS", "false") == "true":
+        if section["kind"] == "film" and first and len(section["paragraphs"])-1 >= 3 and os.getenv("EXTRA_BEATS", "false") == "true":
             film_index = section["film"]
             extra_beats[i] = choose_beat(trailer_cues[film_index], shot_sets[film_index],
                 duration(trailers[film_index]), action, maximum=max_beat,
@@ -610,7 +614,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     for i, section in enumerate(script["sections"]):
         # Off by default: each review plays as one uninterrupted segment (preview, narration over
         # running footage, one trailer dialogue moment). IMPACT_BEATS=true brings the extra stops back.
-        if section["kind"] != "film" or len(section["paragraphs"]) < 3 or os.getenv("IMPACT_BEATS", "false") != "true":
+        if section["kind"] != "film" or len(section["paragraphs"])-1 < 3 or os.getenv("IMPACT_BEATS", "false") != "true":
             continue
         film_index = section["film"]
         taken = [beat for beat in (beats.get(i), extra_beats.get(i)) if beat]
@@ -808,30 +812,63 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             style = reveal_style_for(film_position, film_index+1)
             film_position += 1
             source = Path(preview["source"])
-            path = work / f"part-{len(parts):03}.mp4"
+            # Render the full native scene first so an optional-source fallback is
+            # settled before choosing the announcement's matching trailer still.
+            preview_path = work / f"review-preview-{section_index}.mp4"
             try:
-                trailer_video(source, preview["start"], preview["duration"], path,
-                              label=label, label_seconds=preview["duration"], muted=preview["muted"],
-                              still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
-                              reveal=True, reveal_style=style, audio=None)
+                trailer_video(source, preview["start"], preview["duration"], preview_path,
+                              muted=preview["muted"], still=bool(preview.get("still", False)),
+                              still_motion="zoom_in" if preview.get("still") else None)
             except (PipelineError, OSError, RuntimeError, ValueError):
                 if source == trailer:
                     raise
                 preview = choose_preview(selector, [trailer], shot_lookup, title+". "+brief,
-                                         REVIEW_PREVIEW_SECONDS, action, dialogue=dialogue)
+                                         REVIEW_PREVIEW_SECONDS, section_action, dialogue=dialogue)
                 source = Path(preview["source"])
-                trailer_video(source, preview["start"], preview["duration"], path,
-                              label=label, label_seconds=preview["duration"], muted=preview["muted"],
-                              still=bool(preview.get("still", False)), still_motion="zoom_in" if preview.get("still") else None,
-                              reveal=True, reveal_style=style, audio=None)
-            seconds = duration(path)
-            preview_seconds = seconds
+                trailer_video(source, preview["start"], preview["duration"], preview_path,
+                              muted=preview["muted"], still=bool(preview.get("still", False)),
+                              still_motion="zoom_in" if preview.get("still") else None)
+
+            # A complete, separately verified utterance: no waveform is sliced
+            # to insert the preview, and the title is not repeated in the body.
+            announcement = section["paragraphs"][0]
+            audio = speech[(section_index, 0)]
+            reveal_shot = {"source": str(source), "start": preview["start"],
+                           "duration": duration(audio), "still": True, "freeze": 0,
+                           "still_motion": style, "film_index": film_index,
+                           "visual_reason": "rank-announcement"}
+            path = work / f"part-{len(parts):03}.mp4"
+            try:
+                speech_video(source, audio, [reveal_shot], path, label,
+                             work / f"render-{len(parts):03}", label_seconds=duration(audio))
+            except (PipelineError, OSError, RuntimeError, ValueError):
+                if source == trailer:
+                    raise
+                print("Optional reveal still unavailable; keeping the announcement over primary footage.", flush=True)
+                reveal_shot = {**reveal_shot, "source": str(trailer),
+                               "start": min(preview["start"], max(0, duration(trailer)-1))}
+                speech_video(trailer, audio, [reveal_shot], path, label,
+                             work / f"render-{len(parts):03}", label_seconds=duration(audio))
+            announcement_seconds = duration(path)
+            for cue in script_cues(announcement, aligned[(section_index, 0)]):
+                all_cues.append({"start": offset+cue["start"],
+                                 "end": offset+min(cue["end"], announcement_seconds), "text": cue["text"]})
+            timeline.append({"start": offset, "duration": announcement_seconds, "type": "narration",
+                             "section_kind": "film", "rank_announcement": True, "reveal_style": style,
+                             "film": film["title"], "films": [film["title"]], "text": announcement,
+                             "source_audio": str(audio), "shots": [reveal_shot]})
+            parts.append(path)
+            used_video_sources.add(reveal_shot["source"])
+            offset += announcement_seconds
+            note_visual_beat(selector, announcement_seconds, still=True)
+
+            seconds = duration(preview_path)
             for cue in preview.get("cues", []):
                 if cue["start"] >= preview["start"] and cue["end"] <= preview["start"]+seconds:
                     all_cues.append({"start":offset+cue["start"]-preview["start"], "end":offset+cue["end"]-preview["start"], "text":cue["text"]})
             timeline.append({"start": offset, "duration": seconds, "type": "review-preview", "film": film["title"],
-                             "source_start": preview["start"], "shots": [preview], "narration": False, "reveal_style": style})
-            parts.append(path)
+                             "source_start": preview["start"], "shots": [preview], "narration": False})
+            parts.append(preview_path)
             used_video_sources.add(str(source))
             offset += seconds
             note_visual_beat(selector, seconds, still=bool(preview.get("still")))
@@ -845,9 +882,12 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             montage = outro_recap_plan(selector, pools, shot_lookup,
                 [duration(speech[(section_index, p)]) for p in range(len(section["paragraphs"]))],
                 " ".join(section["paragraphs"]), action)
-        midpoint = max(1, len(section["paragraphs"]) // 2)
+        body_count = len(section["paragraphs"]) - (1 if is_film else 0)
+        midpoint = max(1, body_count // 2)
         beat = beats.get(section_index)
         for paragraph_index, text in enumerate(section["paragraphs"]):
+            if is_film and paragraph_index == 0:
+                continue  # The verified rank announcement already played before the native preview.
             print(f"Editing: {chapter}, paragraph {paragraph_index+1}", flush=True)
             audio = speech[(section_index, paragraph_index)]
             selector.pace_limit = pace_limit(aligned_delivery(section)[paragraph_index], section_action)
@@ -919,7 +959,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                     used_video_sources.add(native_clip["source"])
                     offset += seconds
             elif not native_plan:
-                impact = impacts.get(section_index) if paragraph_index == 0 else None
+                body_index = paragraph_index - (1 if is_film else 0)
+                impact = impacts.get(section_index) if body_index == 0 else None
                 if impact:
                     try:
                         j_cut(parts[-1], trailer, impact["start"])
@@ -934,8 +975,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                         parts.append(path)
                         used_video_sources.add(str(trailer))
                         offset += seconds
-                active_beat = (beat if paragraph_index+1 == midpoint else
-                               extra_beats.get(section_index) if paragraph_index+1 == max(midpoint+1, len(section["paragraphs"])-1) else None)
+                active_beat = (beat if body_index+1 == midpoint else
+                               extra_beats.get(section_index) if body_index+1 == max(midpoint+1, body_count-1) else None)
                 if active_beat:
                     beat = active_beat
                     try:
@@ -963,7 +1004,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             # to 'UP NEXT #4 Title' (number one stays secret), so viewers who don't care about the
             # next pick skip ahead with the chapters instead of leaving. Both vanish before the next
             # entry's rank/title box comes in.
-            label_end = section_start + preview_seconds + 0.3
+            label_end = section_start + announcement_seconds + 0.3
             switch = offset
             upcoming = next((s["film"] for s in script["sections"][section_index+1:] if s["kind"] == "film"), None)
             if upcoming is not None and offset - label_end > 9 and os.getenv("UP_NEXT", "true").strip().lower() != "false":
@@ -1057,6 +1098,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
               "genre":genre, "requested_minutes":spec.target/60, "actual_minutes":final_duration/60,
               "native_scenes_rendered":sum(e.get("type")=="trailer-audio" and e.get("native_verified",False) for e in timeline),
               "review_previews":sum(e.get("type")=="review-preview" for e in timeline),
+              "rank_announcements":sum(bool(e.get("rank_announcement")) for e in timeline),
               "accepted_sources":[{"title":film["title"],"sources":[str(p) for p in pool]} for film,pool in zip(films,pools)],
               "voice_model":os.getenv("TTS_MODEL","turbo"),"narrator":narrator})
     package = script["package"]
@@ -1126,7 +1168,9 @@ def warm_voice(sections: list[dict], ctx) -> int:
         return 0
     voiced = 0
     try:
-        for section in sections:
+        from .rank_intro import prepare_rank_intros
+        prepared = prepare_rank_intros({"sections": sections}, ctx.films)
+        for section in prepared["sections"]:
             labels = aligned_delivery(section)
             for index, text in enumerate(section.get("paragraphs", [])):
                 if section.get("kind") == "film":
