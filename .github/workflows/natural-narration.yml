@@ -58,7 +58,7 @@ jobs:
       - run: python -m pip install -e '.[test]'
       - run: bash scripts/bootstrap_ollama.sh
       - name: Generate and edit real-model samples
-        run: python -m scripts.natural_preview --writing
+        run: python -m scripts.natural_preview --writing --revise
       - uses: actions/upload-artifact@v4
         if: always()
         with:

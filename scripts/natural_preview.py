@@ -40,14 +40,16 @@ def reaction_preview(root):
     print("REACTION_IMAGE_END")
 
 
-def writing_preview(root):
+def writing_preview(root, revise=False):
     writer = Writer(cache_dir=root/"writing-cache")
     rows = []
+    saved = json.loads(Path("tests/fixtures/editorial_raw_samples.json").read_text()) if revise else []
     try:
         for index, film in enumerate(SAMPLES):
             facts = {**film_facts(film), "rank": index+1}
-            draft = writer.narration("Movie and show recommendations", film["brief"],
-                                     f"rank {index+1}: {film['title']}", facts, None)
+            draft = (saved[index]["draft"] if revise and index > 0 else
+                     writer.narration("Movie and show recommendations", film["brief"],
+                                      f"rank {index+1}: {film['title']}", facts, None))
             edited, delivery = writer.edit("Movie and show recommendations", film["brief"],
                 f"the review of {film['title']}", facts, draft, rank=index+1)
             row={"title":film["title"],"draft":draft,"edited":edited,"delivery":delivery}
@@ -62,11 +64,12 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--writing",action="store_true")
     parser.add_argument("--reactions",action="store_true")
+    parser.add_argument("--revise",action="store_true")
     parser.add_argument("--output-dir",type=Path,default=Path("natural-review"))
     args=parser.parse_args()
     args.output_dir.mkdir(parents=True,exist_ok=True)
     if args.reactions: reaction_preview(args.output_dir)
-    if args.writing: writing_preview(args.output_dir)
+    if args.writing: writing_preview(args.output_dir, args.revise)
 
 
 if __name__=="__main__":
