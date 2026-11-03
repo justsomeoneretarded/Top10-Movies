@@ -94,8 +94,9 @@ def test_voice_warm_up_records_each_paragraph_with_its_delivery(monkeypatch, tmp
     monkeypatch.setenv("VOICE_WARM", "true")
     sections = [{"kind": "film", "film": 2, "paragraphs": ["Number 3: X. Hook.", "More.", "You can find it on Hulu."],
                  "availability_text": "You can find it on Hulu.", "delivery": ["hype", "dramatic", "normal"]}]
-    ctx = SimpleNamespace(reference=tmp_path / "voice.ogg", work=tmp_path)
-    assert cli.warm_voice(sections, ctx) == 2
-    assert spoken == [("Number 3: X. Hook.", "hype"), ("More.", "dramatic")]
+    ctx = SimpleNamespace(reference=tmp_path / "voice.ogg", work=tmp_path,
+                          films=[*FILMS[:2], {"title": "X", "year": 2022}])
+    assert cli.warm_voice(sections, ctx) == 3
+    assert spoken == [("Number 3: X.", "hype"), ("Hook.", "hype"), ("More.", "dramatic")]
     monkeypatch.setenv("VOICE_WARM", "false")
     assert cli.warm_voice(sections, ctx) == 0

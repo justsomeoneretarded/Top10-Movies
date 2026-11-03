@@ -226,8 +226,10 @@ def effect_events(timeline: list[dict], speed: float, genre: str | None = None) 
         kind = entry.get("type")
         if kind == "cold-open" and index == 0:
             events.append((0.02, *pack["open"]))
-        elif kind == "review-preview":
-            # The rank label slides in over about half a second; the hit lands with it.
+        elif entry.get("rank_announcement") or (kind == "review-preview" and
+                not (index > 0 and timeline[index-1].get("rank_announcement"))):
+            # New edits reveal the rank with its spoken announcement. Legacy
+            # timelines still place the card on the preview; never add both.
             hit = start + 0.5
             name, gain = pack["pre"]
             style = entry.get("reveal_style", "punch")
