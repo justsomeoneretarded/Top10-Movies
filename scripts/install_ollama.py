@@ -173,14 +173,36 @@ def install_ollama(runner_temp: str | Path | None = None) -> Path:
     return binary_dir
 
 
-def main() -> int:
+def existing_install(runner_temp: str | Path | None = None) -> Path | None:
+    """Probe a verified prior installation without downloading or extracting."""
+    temporary_root=Path(runner_temp or os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()).resolve()
+    root=temporary_root/"movie-ranks-ollama"
+    if root.is_symlink() or (root/"releases").is_symlink():
+        raise RuntimeError("Refusing a symlinked Ollama installation directory")
+    if not root.is_dir():
+        return None
+    binary_dir=installed_bin(root)
+    if binary_dir is not None:
+        persist_path(binary_dir)
+    return binary_dir
+
+def main(arguments=()) -> int:
+    arguments=list(arguments)
+    if arguments not in ([],["--existing"]):
+        print("Usage: python -m scripts.install_ollama [--existing]",file=sys.stderr)
+        return 2
     try:
-        print(install_ollama())
+        if arguments:
+            binary_dir=existing_install()
+            if binary_dir is None:
+                return 3
+        else:
+            binary_dir=install_ollama()
+        print(binary_dir)
     except (OSError, subprocess.SubprocessError, RuntimeError) as error:
-        print(f"Ollama installation failed: {error}", file=sys.stderr)
+        print(f"Ollama installation failed: {error}",file=sys.stderr)
         return 1
     return 0
 
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

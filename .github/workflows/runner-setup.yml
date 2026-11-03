@@ -65,6 +65,7 @@ jobs:
         run: |
           python - <<'PY'
           import json,os,subprocess,urllib.request
+          from scripts.install_ollama import existing_install
           url=os.environ["OLLAMA_URL"].rstrip("/")
           payload=json.dumps({"model":os.environ["SCRIPT_MODEL"],"prompt":"Reply with READY only.",
                               "stream":False,"think":False,"keep_alive":0,
@@ -75,6 +76,11 @@ jobs:
           assert str(result.get("response","")).strip(),result
           print("CPU model response:",result["response"])
           print("Model:",result.get("model"),"done:",result.get("done"))
+          binary=existing_install()
+          assert binary is not None
+          libraries=binary.parent/"lib"/"ollama"
+          assert not any(p.name.startswith(("cuda_v","vulkan")) for p in libraries.iterdir())
+          print("Verified CPU runtime without bundled CUDA/Vulkan directories:",libraries)
           subprocess.run(["bash","scripts/bootstrap_ollama.sh"],check=True,timeout=300)
           subprocess.run(["python","-m","scripts.runner_disk","--stage","ready"],check=True)
           PY

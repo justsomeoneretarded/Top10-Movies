@@ -20,8 +20,10 @@ esac
 runner_temp="${RUNNER_TEMP:-/tmp}"
 model="${SCRIPT_MODEL:-gemma4:12b}"
 url="${OLLAMA_URL:-http://127.0.0.1:11434}"
-python3 -m scripts.runner_disk --stage ollama-install
-binary_dir="$(python3 -m scripts.install_ollama)"
+if ! binary_dir="$(python3 -m scripts.install_ollama --existing)"; then
+  python3 -m scripts.runner_disk --stage ollama-install
+  binary_dir="$(python3 -m scripts.install_ollama)"
+fi
 export PATH="$binary_dir:$PATH"
 
 server_ready() {

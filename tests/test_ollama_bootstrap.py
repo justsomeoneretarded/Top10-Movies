@@ -212,6 +212,8 @@ with open(os.environ["CALL_LOG"], "a") as log:
     }) + "\n")
 if command == "python3":
     if arguments[:2] == ["-m", "scripts.install_ollama"]:
+        if arguments[2:] == ["--existing"] and os.environ.get("INSTALL_PRESENT") != "true":
+            sys.exit(3)
         print(os.environ["MOCK_INSTALL_BIN"])
     elif arguments[:3] == ["-m", "scripts.runner_disk", "--stage"]:
         if arguments[3] == os.environ.get("FAIL_DISK_STAGE"):
@@ -272,6 +274,7 @@ def bootstrap_env(tmp_path):
         "PULL_COUNT": str(tmp_path / "pull-count"),
         "HEALTHY": "true",
         "MODEL_PRESENT": "false",
+        "INSTALL_PRESENT": "false",
         "FAIL_PULLS": "0",
         "OLLAMA_HOST": "127.0.0.1:11435",
         "OLLAMA_URL": "http://127.0.0.1:11435",
@@ -375,7 +378,7 @@ def test_disk_failure_stops_before_unsafe_next_work(bootstrap_env, stage):
     calls = bootstrap_calls(bootstrap_env)
     assert not ollama_calls(calls, "pull")
     if stage == "ollama-install":
-        assert not any(call["args"][:2] == ["-m", "scripts.install_ollama"] for call in calls)
+        assert not any(call["args"] == ["-m", "scripts.install_ollama"] for call in calls)
 
 
 def test_server_start_failure_is_reported_without_model_pull(bootstrap_env):
@@ -394,3 +397,28 @@ def test_unknown_bootstrap_stage_fails_before_mutation(bootstrap_env):
     assert result.returncode == 2
     assert bootstrap_calls(bootstrap_env) == []
     assert "Usage:" in result.stderr
+
+def test_ready_install_reuses_with_less_space_than_a_fresh_install(bootstrap_env):
+    bootstrap_env["INSTALL_PRESENT"]="true"
+    bootstrap_env["MODEL_PRESENT"]="true"
+    bootstrap_env["FAIL_DISK_STAGE"]="ollama-install"
+    result=run_bootstrap(bootstrap_env)
+    assert result.returncode==0,result.stderr
+    calls=bootstrap_calls(bootstrap_env)
+    assert disk_stages(calls)==["ready"]
+    assert not any(call["args"]==["-m","scripts.install_ollama"] for call in calls)
+    assert not ollama_calls(calls,"pull")
+
+def test_existing_probe_never_downloads_when_install_is_missing(install_env,monkeypatch,capsys):
+    fake_commands(monkeypatch,install_env)
+    assert install_ollama.main(["--existing"])==3
+    assert install_env["calls"]==[]
+    assert capsys.readouterr().out==""
+
+def test_existing_probe_reuses_verified_version(install_env,monkeypatch,capsys):
+    fake_commands(monkeypatch,install_env)
+    binary=install_ollama.install_ollama()
+    install_env["calls"].clear()
+    assert install_ollama.main(["--existing"])==0
+    assert capsys.readouterr().out==str(binary)+"\n"
+    assert all(command[-1]=="--version" for command,_ in install_env["calls"])

@@ -95,3 +95,10 @@ def test_footage_starts_same_bounded_installer_without_pulling_script_model():
     steps=workflow["jobs"]["footage"]["steps"]
     startup=next(s for s in steps if s.get("name")=="Start local Ollama for scene descriptions")
     assert startup["run"]=="bash scripts/bootstrap_ollama.sh --serve-only"
+
+def test_four_gib_is_enough_to_reuse_ready_models_but_not_to_install(monkeypatch,tmp_path):
+    monkeypatch.setattr(disk.shutil,"disk_usage",lambda p:usage(4))
+    monkeypatch.setattr(disk,"reclaim_unused_sdks",lambda workspace:[])
+    assert disk.prepare("ready",tmp_path)["enough"]
+    with pytest.raises(RuntimeError,match="before ollama-install"):
+        disk.prepare("ollama-install",tmp_path)
