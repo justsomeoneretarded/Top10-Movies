@@ -599,7 +599,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     extra_beats = {}
     for i, section in enumerate(script["sections"]):
         first = beats.get(i)
-        if section["kind"] == "film" and first and len(section["paragraphs"]) >= 3 and os.getenv("EXTRA_BEATS", "false") == "true":
+        if section["kind"] == "film" and first and len(section["paragraphs"])-1 >= 3 and os.getenv("EXTRA_BEATS", "false") == "true":
             film_index = section["film"]
             extra_beats[i] = choose_beat(trailer_cues[film_index], shot_sets[film_index],
                 duration(trailers[film_index]), action, maximum=max_beat,
@@ -614,7 +614,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     for i, section in enumerate(script["sections"]):
         # Off by default: each review plays as one uninterrupted segment (preview, narration over
         # running footage, one trailer dialogue moment). IMPACT_BEATS=true brings the extra stops back.
-        if section["kind"] != "film" or len(section["paragraphs"]) < 3 or os.getenv("IMPACT_BEATS", "false") != "true":
+        if section["kind"] != "film" or len(section["paragraphs"])-1 < 3 or os.getenv("IMPACT_BEATS", "false") != "true":
             continue
         film_index = section["film"]
         taken = [beat for beat in (beats.get(i), extra_beats.get(i)) if beat]
@@ -863,7 +863,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             note_visual_beat(selector, announcement_seconds, still=True)
 
             seconds = duration(preview_path)
-            preview_seconds = seconds
             for cue in preview.get("cues", []):
                 if cue["start"] >= preview["start"] and cue["end"] <= preview["start"]+seconds:
                     all_cues.append({"start":offset+cue["start"]-preview["start"], "end":offset+cue["end"]-preview["start"], "text":cue["text"]})
@@ -883,7 +882,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             montage = outro_recap_plan(selector, pools, shot_lookup,
                 [duration(speech[(section_index, p)]) for p in range(len(section["paragraphs"]))],
                 " ".join(section["paragraphs"]), action)
-        midpoint = max(1, len(section["paragraphs"]) // 2)
+        body_count = len(section["paragraphs"]) - (1 if is_film else 0)
+        midpoint = max(1, body_count // 2)
         beat = beats.get(section_index)
         for paragraph_index, text in enumerate(section["paragraphs"]):
             if is_film and paragraph_index == 0:
@@ -959,7 +959,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                     used_video_sources.add(native_clip["source"])
                     offset += seconds
             elif not native_plan:
-                impact = impacts.get(section_index) if paragraph_index == 0 else None
+                body_index = paragraph_index - (1 if is_film else 0)
+                impact = impacts.get(section_index) if body_index == 0 else None
                 if impact:
                     try:
                         j_cut(parts[-1], trailer, impact["start"])
@@ -974,8 +975,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                         parts.append(path)
                         used_video_sources.add(str(trailer))
                         offset += seconds
-                active_beat = (beat if paragraph_index+1 == midpoint else
-                               extra_beats.get(section_index) if paragraph_index+1 == max(midpoint+1, len(section["paragraphs"])-1) else None)
+                active_beat = (beat if body_index+1 == midpoint else
+                               extra_beats.get(section_index) if body_index+1 == max(midpoint+1, body_count-1) else None)
                 if active_beat:
                     beat = active_beat
                     try:

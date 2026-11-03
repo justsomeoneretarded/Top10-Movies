@@ -78,6 +78,7 @@ def assert_rank_introduction_sequence(events, chapters, cues, speed, count):
     (2,"false",2160,(1920,1080),"final-audio-error","Movies","Warguy"),
     (2,"false",2160,(1920,1080),"title-cards","Movies","Warguy"),
     (2,"false",2160,(1920,1080),"title-card-fails","Movies","Warguy"),
+    (2,"false",2160,(1920,1080),"fallback-beats","Movies","Warguy"),
 ])
 def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp_path, capsys, count, try_4k, source_height, expected_size, extra_mode, content_type, narrator):
     monkeypatch.chdir(tmp_path)
@@ -444,6 +445,9 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         records['end_screen'] = seconds
         make(target, seconds)
     monkeypatch.setattr(render, 'end_screen_video', end_screen)
+    if extra_mode == "fallback-beats":
+        monkeypatch.setattr(cli, "choose_beat", lambda *args, **kwargs: {"start": 30.0, "end": 32.9})
+        monkeypatch.setattr("movie_pipeline.dialogue.isolate_dialogue", lambda *args, **kwargs: None)
     if extra_mode == "native-scenes":
         def native_plan(selector,pools,lookup,films,sections,speech,dialogue,recognizer,work):
             def clip(source,start,seconds,film_index):
@@ -675,6 +679,17 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert embedded == timeline['chapters']
     assert embedded[0]['start'] == 0
     assert_rank_introduction_sequence(events, embedded, written_cues, timeline['speed'], count)
+    if extra_mode == "fallback-beats":
+        native_beats = [event for event in events if event["type"] == "trailer-audio"]
+        assert len(native_beats) == count
+        for beat in native_beats:
+            prior = events[events.index(beat)-1]
+            assert prior["type"] == "narration" and not prior.get("rank_announcement")
+            assert prior["film"] == beat["film"]
+            assert prior["start"]+prior["duration"] == pytest.approx(beat["start"])
+            assert beat["source_start"] == 30
+            assert beat["duration"] == pytest.approx(2.9)
+        assert len(records["j_cuts"]) == count
     cta_cues = [cue for cue in written_cues if cue['text'] in records['cta_text']]
     assert ' '.join(cue['text'] for cue in cta_cues) == records['cta_text']
     assert cta_cues[0]['start'] == pytest.approx(cta['start']/timeline['speed'])
