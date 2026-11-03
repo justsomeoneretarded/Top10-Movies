@@ -145,8 +145,8 @@ def test_outside_runtime_window_still_exports_complete_video(monkeypatch,tmp_pat
            'sine=frequency=220:sample_rate=48000','-t',2,'-c:v','libx264','-preset','ultrafast','-c:a','aac',source)
     target=tmp_path/'final.mp4'
     seconds,speed=finish([source],target,tmp_path,False,spec=DurationSpec(480,360,600))
-    assert speed == .85
-    assert 5 < seconds < 6
+    assert speed == 1
+    assert seconds == pytest.approx(5, abs=.08)
     assert any(stream['codec_type']=='audio' for stream in probe(target)['streams'])
     ffmpeg('-xerror','-i',target,'-f','null','-')
 

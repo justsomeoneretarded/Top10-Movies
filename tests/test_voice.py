@@ -105,3 +105,19 @@ def test_spoken_form_fixes_trouble_titles_but_coverage_still_matches():
     assert spoken_form("M3GAN vs. Se7en: Part II, 2025–2026") == "Megan versus Seven: Part Two, 2025 to 2026"
     cues = [{"text": "Megan versus Seven part two"}]
     assert spoken_coverage("M3GAN vs. Se7en Part II", cues) == 1.0
+
+
+
+def test_optional_emotion_mode_has_a_distinct_cache_without_replacing_default(monkeypatch, tmp_path):
+    speaker = setup_speaker(monkeypatch, tmp_path, 3, speech_like())
+    text = "A complete thought with enough room to breathe."
+    regular = speaker.speak(text, delivery="dramatic")
+    speaker.emotion_enabled = True
+    expressive = SimpleNamespace(sr=24000, generate=Mock(return_value=Wave(speech_like())))
+    speaker.emotional = expressive
+    emotional = speaker.speak(text, delivery="dramatic")
+    assert regular != emotional and regular.exists() and emotional.exists()
+    assert expressive.generate.call_count == 1
+    speaker.emotion_enabled = False
+    assert speaker.speak(text, delivery="dramatic") == regular
+    assert speaker.model.generate.call_count == 1

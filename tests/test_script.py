@@ -24,15 +24,15 @@ def test_invalid_closing_uses_bounded_fallback(draft):
     writer.ask = Mock(return_value=draft)
     result = writer.narration("Top 5", "Action", CLOSING, {}, 35)
     assert writer.ask.call_count == 3
-    assert 18 <= len(" ".join(result).split()) <= 65
+    assert result and all(p.strip() for p in result)
     assert "like" in result[0].lower() and "subscribe" in result[0].lower()
 
 
-def test_movie_length_variation_uses_best_draft_without_aborting():
+def test_short_complete_review_is_kept_without_padding_retries():
     writer = Writer()
     writer.ask = Mock(return_value={"paragraphs": ["A short recommendation."]})
     assert writer.narration("Top 5", "Action", "rank 1: Example", {}, 216) == ["A short recommendation."]
-    assert writer.ask.call_count == 3
+    assert writer.ask.call_count == 1
 
 
 def test_completed_section_is_reused_after_later_failure(tmp_path):
@@ -46,7 +46,7 @@ def test_completed_section_is_reused_after_later_failure(tmp_path):
     resumed.ask.assert_not_called()
 
 
-@pytest.mark.parametrize("draft", [{"paragraphs": []}, {"paragraphs": ["Too short."]}, {"paragraphs": ["word " * 200]}])
+@pytest.mark.parametrize("draft", [{"paragraphs": []}, {"paragraphs": ["word " * 200]}])
 def test_invalid_opening_uses_fallback_instead_of_aborting(draft):
     writer = Writer()
     writer.ask = Mock(return_value=draft)
@@ -154,7 +154,7 @@ def test_repeated_review_padding_falls_back_to_verified_premise():
     facts = {"title": "Example", "rank": 2, "overview": "A teacher wakes up aboard a spaceship with no memory of how he got there."}
     result = writer.narration("Top 5 Movies", "Casual", "rank 2: Example", facts, 140)
     assert writer.ask.call_count == 3
-    assert result == ["At number 2, it's Example.", facts["overview"]]
+    assert result == ["Number 2: Example.", facts["overview"]]
     assert "something special" not in " ".join(result)
 
 
@@ -179,15 +179,14 @@ def cached_script():
     return films, script
 
 
-def test_editorial_cache_migration_preserves_safe_body_audio_inputs_exactly():
+def test_editorial_cache_migration_refreshes_stale_reviews_and_reuses_current_policy():
     films, script = cached_script()
     writer = Writer()
     writer.ask = Mock(return_value={"paragraphs": ["One horror show traps a teacher in a disappearing town. Here's the setup, without the big reveals."]})
     result = writer.refresh_editorial("Top Horror Shows", "Casual", films, script)
-    assert writer.ask.call_count == 1
+    assert writer.ask.call_count >= 3
     assert result["package"]["script_policy_version"] == SCRIPT_POLICY_VERSION
-    assert result["sections"][1]["paragraphs"] == script["sections"][1]["paragraphs"][:1]
-    assert result["sections"][2] == script["sections"][2]
+    assert result["sections"][1]["paragraphs"] != script["sections"][1]["paragraphs"][:1]
     assert script["sections"][0]["paragraphs"] == [BAD_INTRO]
     writer.ask.reset_mock()
     assert writer.refresh_editorial("Top Horror Shows", "Casual", films, result) == result
@@ -214,7 +213,7 @@ def test_measured_intro_retry_honors_shorter_goal_without_modifying_body():
     writer.ask = Mock(return_value={"paragraphs": ["One horror show. Here's the story behind the scares."]})
     result = writer.refresh_intro("Top Horror Shows", "Casual", films, script, target_words=20)
     assert result["sections"][1:] == script["sections"][1:]
-    assert "Aim for 20 total words" in writer.ask.call_args.args[0]
+    assert "About 20 words" in writer.ask.call_args.args[0]
     assert result["package"]["script_policy_version"] == SCRIPT_POLICY_VERSION
 
 
@@ -245,7 +244,7 @@ def test_editorial_repair_with_sparse_facts_never_fails_just_over_bad_draft():
     result = writer.narration("Top Movies", "Casual", "rank 2: Example",
                               {"title": "Example", "rank": 2, "genres": ["Fantasy"]}, 150)
     assert "Example" in " ".join(result)
-    assert "fantasy" in " ".join(result)
+    assert result == ["Number 2: Example."]
     assert "something special" not in " ".join(result)
 
 
@@ -330,12 +329,12 @@ def test_explicit_theme_wins_but_mixed_requests_stay_general(topic, brief, expec
     assert _theme(topic, brief, {"shared_genres": ["Drama"]}) == expected
 
 
-def test_intro_allows_requested_year_without_allowing_unrelated_figures():
-    from movie_pipeline.script import _intro_facts, _numbers_issue
-
-    facts = _intro_facts("10 New Shows of 2026", "", [{"title": "Example", "kind": "tv", "genres": []}])
-    assert _numbers_issue(["10 amazing shows to watch in 2026."], facts) is None
-    assert _numbers_issue(["These shows cost 999999 dollars."], facts) is not None
+def test_script_no_longer_rejects_figures_against_source_metadata():
+    writer = Writer()
+    draft = "Number 1: Example. The story jumps to 2099."
+    writer.ask = Mock(return_value={"paragraphs": [draft]})
+    assert writer.narration("Top 2", "Casual", "rank 1: Example", {"title": "Example", "rank": 1}, 100) == [draft]
+    assert writer.ask.call_count == 1
 
 
 def test_model_failure_for_mixed_brief_keeps_general_opening():

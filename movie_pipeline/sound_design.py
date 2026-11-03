@@ -274,6 +274,22 @@ def effects_track(path: Path, timeline: list[dict], speed: float, total: float) 
 DELIVERY_PACE = {"hype": 1.05, "normal": 1.0, "dramatic": 0.94, "calm": 0.97}
 
 
-def delivery_speed(theme_rate: float, delivery: str) -> float:
-    """Narration tempo for one paragraph: the theme's pace shaped by its delivery label."""
-    return round(min(1.18, max(0.9, theme_rate * DELIVERY_PACE.get(delivery, 1.0))), 3)
+def delivery_speed(theme_rate: float, delivery: str, *, words: int | None = None,
+                   seconds: float | None = None) -> float:
+    """Use theme as direction, then respond to the actual complete recorded take.
+
+    Natural readings within a broad comfort band remain untouched. Short title
+    announcements retain their articulation. Pacing never rejects a recording.
+    """
+    preference = min(1.18, max(.9, theme_rate * DELIVERY_PACE.get(delivery, 1.0)))
+    if words is None or seconds is None:
+        return round(preference, 3)  # compatibility for local callers without measurements
+    if words < 12 or not math.isfinite(seconds) or seconds <= 0:
+        return 1.0
+    heard_rate = words * 60 / seconds
+    center = 155 * preference
+    lower, upper = center*.90, center*1.10
+    if lower <= heard_rate <= upper:
+        return 1.0
+    destination = lower if heard_rate < lower else upper
+    return round(min(1.18, max(.90, destination/max(1, heard_rate))), 3)

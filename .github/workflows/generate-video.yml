@@ -75,11 +75,6 @@ on:
         required: true
         type: boolean
         default: true
-      fact_check:
-        description: "Fact-check the script against TMDB/Wikipedia (about 10-15 minutes longer; uncheck for a faster run)"
-        required: true
-        type: boolean
-        default: true
 
   workflow_call:
     inputs:
@@ -102,9 +97,6 @@ on:
         type: string
         default: Auto
       try_4k:
-        type: boolean
-        default: true
-      fact_check:
         type: boolean
         default: true
 
@@ -136,7 +128,6 @@ jobs:
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
-      FACT_CHECK: "${{ inputs.fact_check }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       OLLAMA_HOST: 127.0.0.1:11435
       OLLAMA_URL: http://127.0.0.1:11435
@@ -187,7 +178,6 @@ jobs:
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
-      FACT_CHECK: "${{ inputs.fact_check }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       OLLAMA_HOST: 127.0.0.1:11435
       OLLAMA_URL: http://127.0.0.1:11435
@@ -309,7 +299,6 @@ jobs:
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
-      FACT_CHECK: "${{ inputs.fact_check }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       OLLAMA_HOST: 127.0.0.1:11435
       OLLAMA_URL: http://127.0.0.1:11435
@@ -396,7 +385,6 @@ jobs:
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
-      FACT_CHECK: "${{ inputs.fact_check }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       OLLAMA_HOST: 127.0.0.1:11435
       OLLAMA_URL: http://127.0.0.1:11435
@@ -483,7 +471,6 @@ jobs:
       TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
-      FACT_CHECK: "${{ inputs.fact_check }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
       THUMBNAIL_AI: 'true'
       # 'stills' (default): official TMDB stills with face-aware framing; 'ai': the generated-scene designs.

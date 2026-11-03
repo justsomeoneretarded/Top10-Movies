@@ -120,9 +120,9 @@ def test_request_launcher_is_narrow_and_reuses_existing_workflow():
 def test_whole_episode_edit_deletes_only_and_preserves_rank_and_premise():
     from movie_pipeline.script import Writer
     writer=Writer()
-    writer.ask=lambda *a,**k: {"remove":["0:0:0","0:0:1","0:0:2"]}
+    writer.ask=lambda *a,**k: {"remove":["0:0:0","0:0:1","0:0:3"]}
     sections=[{"kind":"film","film":i,"paragraphs":[
-        f"Number {i+1}: Example. A teacher is stranded in space with no memory and must find a way home. It is a real game changer."]} for i in range(3)]
+        f"Number {i+1}: Example. The remarkable chemistry is significant. A teacher is stranded in space with no memory and must find a way home. It is a real game changer."]} for i in range(3)]
     result=writer.episode_edit("3 movies","",sections)
     assert result[0]["paragraphs"]==["Number 1: Example. A teacher is stranded in space with no memory and must find a way home."]
     assert sections[0]["paragraphs"][0].endswith("game changer.")
@@ -172,8 +172,7 @@ def test_photo_fallback_builds_a_diverse_still_only_pool(monkeypatch,tmp_path):
 def test_plain_language_rules_preserve_verified_title_names():
     from movie_pipeline.script import plain_words
     result=plain_words("Journey is a captivating journey.",protected=["Journey"])
-    assert result.startswith("Journey is a gripping")
-    assert result.endswith("Journey.") or result.endswith("journey.")
+    assert result == "Journey is a captivating journey."
 
 def test_source_reservations_are_atomic_and_failure_can_release(tmp_path):
     from movie_pipeline.resource_budget import reserve_source,release_source

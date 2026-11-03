@@ -17,20 +17,15 @@ from movie_pipeline.core import PipelineError, duration, ffmpeg, probe
 def test_reaction_joke_and_asset_are_a_matching_reproducible_pair(tmp_path, title, theme, animated):
     first = cta.prepare_cta(title, "A casual countdown.", "video-seed", tmp_path)
     assert first == cta.prepare_cta(title, "A casual countdown.", "video-seed", tmp_path)
-    assert first["theme"] == theme
-    assert first["animated"] is animated
+    reaction = next(item for item in cta.REACTIONS if item["theme"] == first["theme"])
+    assert first["animated"] is reaction["animated"]
+    assert first["text"] in reaction["jokes"]
     assert len(first["text"].split()) <= 16
     assert "like" in first["text"].lower() and "subscribe" in first["text"].lower()
     assert first["source"].startswith("https://github.com/")
     assert first["attribution"]
     with Image.open(first["path"]) as picture:
-        assert (getattr(picture, "n_frames", 1) > 1) is animated
-    if theme == "high-five":
-        assert "five" in first["text"]
-    elif theme == "logical-cat":
-        assert "logical" in first["text"] and "cat" in first["text"]
-    else:
-        assert "cat" in first["text"]
+        assert (getattr(picture, "n_frames", 1) > 1) is first["animated"]
 
 
 def test_missing_asset_changes_the_joke_with_the_reaction(monkeypatch, tmp_path):
@@ -40,7 +35,7 @@ def test_missing_asset_changes_the_joke_with_the_reaction(monkeypatch, tmp_path)
     monkeypatch.setattr(cta, "ASSET_ROOT", assets)
     plan = cta.prepare_cta("Action movies", "", "seed", tmp_path / "work")
     assert plan["theme"] == "logical-cat"
-    assert "logical" in plan["text"]
+    assert plan["text"] in next(r for r in cta.REACTIONS if r["theme"] == "logical-cat")["jokes"]
     assert "high five" not in plan["text"]
 
 
@@ -139,7 +134,8 @@ def test_real_gif_stays_animated_and_complete_speech_uses_lossless_audio(monkeyp
     from movie_pipeline.shots import get_frame
 
     monkeypatch.setenv("VIDEO_RESOLUTION", "360")
-    plan = cta.prepare_cta("Top 5 Action Movies", "", "seed", tmp_path / "assets")
+    plan = cta.prepare_cta("Top 5 Action Movies", "", "seed", tmp_path / "assets",
+                           suggestion={"theme": "high-five", "text": "Like and subscribe. Virtual high five. Zero awkward eye contact."})
     audio = tmp_path / "voice.wav"
     ffmpeg("-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000", "-t", 1.4, audio)
     target = tmp_path / "cta.mp4"
