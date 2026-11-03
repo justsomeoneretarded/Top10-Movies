@@ -22,9 +22,33 @@ PRONUNCIATIONS = {
 # rather than assigned mechanically by the final punctuation mark.
 REVEAL_LEAD = 0.18
 
-# Delivery -> original Chatterbox emotion settings (exaggeration, cfg_weight, temperature).
-# 'normal' and 'calm' lines use the faster Turbo model.
-EMOTION = {"hype": (0.75, 0.35, 0.8), "dramatic": (0.62, 0.3, 0.75)}
+DEFAULT_TTS_MODEL = "original"
+TTS_MODELS = ("original", "turbo", "nano")
+# A single original model/reference voices every delivery. CFG stays positive:
+# the pinned upstream original inference requires its conditioned/unconditioned batch.
+ORIGINAL_DELIVERY = {
+    "normal": (0.50, 0.50, 0.80),
+    "calm": (0.40, 0.55, 0.75),
+    "hype": (0.65, 0.45, 0.80),
+    "dramatic": (0.60, 0.45, 0.80),
+}
+ORIGINAL_PHRASE_WORDS = 45  # upstream caps each generation at ~40 seconds of speech
+
+
+def selected_tts_model() -> str:
+    """One canonical selection for synthesis, warm-up, checkpoints and reporting."""
+    name = os.getenv("TTS_MODEL", DEFAULT_TTS_MODEL).strip().casefold()
+    if name not in TTS_MODELS:
+        raise PipelineError("TTS_MODEL must be original, turbo or nano.")
+    return name
+
+
+def generation_settings(model: str, delivery: str, expression: bool = True) -> dict:
+    if model != "original":
+        return {}
+    values = ORIGINAL_DELIVERY.get(delivery if expression else "normal", ORIGINAL_DELIVERY["normal"])
+    return dict(zip(("exaggeration", "cfg_weight", "temperature"), values))
+
 
 # Broadcast narrator chain, kept light so the voice stays natural: low cut, de-esser, gentle
 # compression, a little warmth and presence, then loudness. (No gate: it clipped breaths and
@@ -86,10 +110,10 @@ def _bounded_thoughts(text: str, maximum: int = 90) -> list[str]:
     return chunks
 
 
-def phrases(parts: list[str], reveal: bool = False, limit: int = 45) -> list[str]:
+def phrases(parts: list[str], reveal: bool = False, limit: int = 45, *, maximum: int = 90) -> list[str]:
     """Group complete thoughts; bound unusually long sentences for TTS transport."""
     grouped: list[str] = []
-    for part in (chunk for text in parts for chunk in _bounded_thoughts(text)):
+    for part in (chunk for text in parts for chunk in _bounded_thoughts(text, maximum=maximum)):
         last = grouped[-1] if grouped else None
         if (last is not None and len(re.findall(r"[.!?]", last)) < 3 and len(last.split()) + len(part.split()) <= limit):
             grouped[-1] = f"{last} {part}"
@@ -144,49 +168,36 @@ def take_score(samples, rate: int, words: int) -> float:
 class Narrator:
     def __init__(self, reference: Path, cache: Path):
         import torch
-        from chatterbox.tts_turbo import ChatterboxTurboTTS
+        self.model_name = selected_tts_model()
         torch.set_num_threads(int(os.getenv("TTS_THREADS", str(os.cpu_count() or 2))))
-        self.model_name = os.getenv("TTS_MODEL", "turbo")
-        if self.model_name not in ("turbo", "nano"):
-            raise PipelineError("TTS_MODEL must be turbo or nano.")
-        self.model = ChatterboxTurboTTS.from_pretrained(device="cpu", nano=self.model_name == "nano")
-        self.model.prepare_conditionals(str(reference))
+        if self.model_name == "original":
+            from chatterbox.tts import ChatterboxTTS
+            self.model = ChatterboxTTS.from_pretrained(device="cpu")
+        else:
+            from chatterbox.tts_turbo import ChatterboxTurboTTS
+            self.model = ChatterboxTurboTTS.from_pretrained(device="cpu", nano=self.model_name == "nano")
+        # Original conditioning uses the same reference at every delivery. Never
+        # select a separate "-dark" recording or load another model for one line.
+        with torch.inference_mode():
+            if self.model_name == "original":
+                self.model.prepare_conditionals(str(reference), exaggeration=.5)
+            else:
+                self.model.prepare_conditionals(str(reference))
         self.reference = reference
         self.reference_hash = key(reference.read_bytes().hex())
         self.cache = cache
         self.cache.mkdir(parents=True, exist_ok=True)
-        self.emotional = None  # original Chatterbox, loaded on first emotional line
-        # One model for every line keeps the narrator's timbre identical through the video; the
-        # expressive model sounded like a different speaker on hype/dramatic lines (VOICE_EMOTION=true).
-        self.emotion_enabled = os.getenv("VOICE_EMOTION", "false").strip().lower() == "true"
+        self.emotion_enabled = (self.model_name == "original"
+            and os.getenv("VOICE_EMOTION", "true").strip().lower() == "true")
         self.takes = max(1, min(3, int(os.getenv("VOICE_TAKES", "2"))))
         self.deliveries: dict[str, str] = {}
-
-    def _emotional_model(self):
-        if self.emotional is None:
-            try:
-                from chatterbox.tts import ChatterboxTTS
-                self.emotional = ChatterboxTTS.from_pretrained(device="cpu")
-                # Optional darker sample for tense lines, e.g. assets/voices/warguy-dark.ogg.
-                dark = self.reference.with_name(f"{self.reference.stem}-dark{self.reference.suffix}")
-                self.emotional.prepare_conditionals(str(dark if dark.exists() else self.reference), exaggeration=0.6)
-                print("Expressive voice model loaded for hype and dramatic lines.", flush=True)
-            except Exception as exc:  # noqa: BLE001 -- Turbo still voices every line
-                print(f"Expressive voice model unavailable ({type(exc).__name__}); using Turbo for every line.", flush=True)
-                self.emotional = False
-        return self.emotional or None
 
     def _generate(self, text: str, delivery: str, seed: int):
         import torch
         torch.manual_seed(seed)
-        settings = EMOTION.get(delivery) if self.emotion_enabled else None
-        model = self._emotional_model() if settings else None
+        settings = generation_settings(self.model_name, delivery, self.emotion_enabled)
         with torch.inference_mode():
-            if model is not None:
-                exaggeration, cfg_weight, temperature = settings
-                wave = model.generate(text, exaggeration=exaggeration, cfg_weight=cfg_weight, temperature=temperature)
-                return wave.squeeze().detach().cpu().numpy(), model.sr
-            wave = self.model.generate(text)
+            wave = self.model.generate(text, **settings)
             return wave.squeeze().detach().cpu().numpy(), self.model.sr
 
     @staticmethod
@@ -204,10 +215,10 @@ class Narrator:
         if delivery:
             self.deliveries[text] = delivery
         delivery = delivery or self.deliveries.get(text, "normal")
-        emotional = self.emotion_enabled and delivery in EMOTION
-        baseline = key("voice-v7-adaptive-thoughts", spoken_form(text), self.reference_hash, self.model_name, delivery, self.takes)
-        if emotional:
-            baseline = key("voice-expressive-mode-v1", baseline)
+        settings = generation_settings(self.model_name, delivery, self.emotion_enabled)
+        maximum = ORIGINAL_PHRASE_WORDS if self.model_name == "original" else 90
+        baseline = key("voice-v8-original-consistent", spoken_form(text), self.reference_hash,
+                       self.model_name, delivery, settings, maximum, self.takes)
         token = key("voice-retry-v1", baseline, attempt_offset) if force else baseline
         output = self.cache / f"{token}.wav"
         suffix = 0
@@ -227,10 +238,10 @@ class Narrator:
             try:
                 # Sentences are voiced in natural phrases of up to three sentences, so intonation flows
                 # across a full stop instead of resetting on every sentence.
-                for index, sentence in enumerate(phrases(sentences(spoken_form(text)), reveal)):
+                for index, sentence in enumerate(phrases(sentences(spoken_form(text)), reveal, maximum=maximum)):
                     best, best_score = None, float("-inf")
-                    # Best of N takes for each sentence (one take for the slower expressive model).
-                    for take in range(1 if emotional else self.takes):
+                    # Keep complete takes and the same selected model through bounded retries.
+                    for take in range(self.takes):
                         samples, rate = self._generate(sentence, delivery, seed_base + index * 131 + take * 17)
                         if not np.isfinite(samples).all() or not samples.size or np.max(np.abs(samples)) < 1e-5:
                             continue
@@ -267,7 +278,7 @@ class Narrator:
             # Rate is diagnostic only. Actual missing/repeated speech is checked by transcription.
             if 0.15 <= seconds <= max(30, len(text.split())*2+10):
                 wpm = len(text.split()) * 60 / seconds
-                print(f"Voice generated ({delivery}{', expressive' if emotional and self.emotional else ''}): "
+                print(f"Voice generated ({self.model_name}, {delivery}): "
                       f"{len(text.split())} words, {seconds:.1f}s, {wpm:.0f} words/min; transcript verification follows.", flush=True)
                 return output
             print(f"Voice attempt {attempt+1}: unusable audio duration {seconds:.1f}s; retrying.", flush=True)
@@ -276,7 +287,6 @@ class Narrator:
 
     def close(self):
         del self.model
-        self.emotional = None
         gc.collect()
 
 

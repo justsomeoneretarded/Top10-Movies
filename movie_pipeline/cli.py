@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+from .voice import selected_tts_model
 from .core import (
     PipelineError,
     duration,
@@ -236,7 +237,7 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v15-scene-first-movie-ranks", title, brief, movies, content_type, narrator, script_model, vars(spec), os.getenv("TTS_MODEL", "turbo"), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v15-scene-first-movie-ranks", title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -255,7 +256,7 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     max_beat = min(7.0, trailer_budget(spec, len(items))*1.5)
     expected_breaks = min(3, max_beat)*len(items) + COLD_OPEN_SECONDS + REVIEW_PREVIEW_SECONDS*len(items)
     print(f"Runtime mode: {'Auto' if spec.automatic else 'selected minutes'}; soft plan {spec.target/60:.1f} minutes.", flush=True)
-    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "content_type": content_type or "auto", "narrator": narrator, "duration": vars(spec), "script_model": script_model, "try_4k": ceiling == 2160})
+    save_json(work / "input.json", {"title": title, "brief": brief, "movies": [vars(i) for i in items], "content_type": content_type or "auto", "narrator": narrator, "duration": vars(spec), "script_model": script_model, "voice_model": selected_tts_model(), "try_4k": ceiling == 2160})
     return SimpleNamespace(items=items, content_type=content_type, ceiling=ceiling, spec=spec, max_beat=max_beat,
                            expected_breaks=expected_breaks, narrator=narrator, reference=reference, script_model=script_model,
                            work=work, research=research, films=films)
@@ -450,7 +451,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         recovery.release_voice()
     print("Subscribe speech verified before full narration generation.", flush=True)
 
-    print(f"Narration: {narrator} / {os.getenv('TTS_MODEL', 'turbo')} on CPU", flush=True)
+    print(f"Narration: {narrator} / {selected_tts_model()} on CPU", flush=True)
     word_scale = 1.0
     best_draft = None
     intro_refined = False
@@ -1105,7 +1106,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
               "review_previews":sum(e.get("type")=="review-preview" for e in timeline),
               "rank_announcements":sum(bool(e.get("rank_announcement")) for e in timeline),
               "accepted_sources":[{"title":film["title"],"sources":[str(p) for p in pool]} for film,pool in zip(films,pools)],
-              "voice_model":os.getenv("TTS_MODEL","turbo"),"narrator":narrator})
+              "voice_model":selected_tts_model(),"narrator":narrator})
     package = script["package"]
     (output / "recommended-title.txt").write_text(package["title"].strip() + "\n")
     write_upload_extras(output, package, films)

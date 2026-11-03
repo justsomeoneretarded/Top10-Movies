@@ -55,16 +55,17 @@ def test_insufficient_disk_stops_before_model_download(monkeypatch,tmp_path):
     with pytest.raises(RuntimeError,match="before script-model"):
         disk.prepare("script-model",tmp_path)
 
-def test_low_space_voice_warmup_defers_without_changing_final_model(monkeypatch,tmp_path):
+@pytest.mark.parametrize("model", ["original", "turbo", "nano"])
+def test_low_space_voice_warmup_defers_without_changing_final_model(monkeypatch,tmp_path,model):
     env=tmp_path/"job-env";env.write_text("")
     monkeypatch.setenv("GITHUB_ENV",str(env))
-    monkeypatch.setenv("TTS_MODEL","turbo")
+    monkeypatch.setenv("TTS_MODEL",model)
     monkeypatch.setattr(disk.shutil,"disk_usage",lambda p:usage(13))
     monkeypatch.setattr(disk,"reclaim_unused_sdks",lambda workspace:[])
     result=disk.prepare("voice-warm",tmp_path,optional_voice=True)
     assert not result["enough"]
     assert env.read_text()=="VOICE_WARM=false\n"
-    assert __import__("os").environ["TTS_MODEL"]=="turbo"
+    assert __import__("os").environ["TTS_MODEL"]==model
 
 def test_unknown_optional_stage_is_rejected(tmp_path):
     with pytest.raises(ValueError):

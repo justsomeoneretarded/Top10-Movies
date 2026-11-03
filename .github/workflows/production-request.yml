@@ -15,6 +15,7 @@ jobs:
       movies: ${{ steps.read.outputs.movies }}
       content_type: ${{ steps.read.outputs.content_type }}
       narrator: ${{ steps.read.outputs.narrator }}
+      tts_model: ${{ steps.read.outputs.tts_model }}
       duration_minutes: ${{ steps.read.outputs.duration_minutes }}
       try_4k: ${{ steps.read.outputs.try_4k }}
     steps:
@@ -27,8 +28,9 @@ jobs:
           import json,os
           from pathlib import Path
           request=json.loads(Path("requests/current.json").read_text())
+          request.setdefault("tts_model","original")
           required={"title":str,"description":str,"movies":str,"content_type":str,
-                    "narrator":str,"duration_minutes":str,"try_4k":bool}
+                    "narrator":str,"duration_minutes":str,"try_4k":bool,"tts_model":str}
           for key,kind in required.items():
               if type(request.get(key)) is not kind:
                   raise SystemExit(f"Invalid request field: {key}")
@@ -36,6 +38,8 @@ jobs:
               raise SystemExit("Invalid title or brief length")
           if request["content_type"] not in {"Movies","Shows"} or request["narrator"] not in {"Warguy","Kit Laser","Female"}:
               raise SystemExit("Invalid content type or narrator")
+          if request["tts_model"] not in {"original","turbo","nano"}:
+              raise SystemExit("Invalid speech model")
           if request["duration_minutes"] not in {"Auto",*[str(i) for i in range(1,31)]}:
               raise SystemExit("Invalid duration selection")
           if not 2<=len(request["movies"].split(";"))<=15:
@@ -55,5 +59,6 @@ jobs:
       movies: ${{ fromJSON(needs.request.outputs.movies) }}
       content_type: ${{ fromJSON(needs.request.outputs.content_type) }}
       narrator: ${{ fromJSON(needs.request.outputs.narrator) }}
+      tts_model: ${{ fromJSON(needs.request.outputs.tts_model) }}
       duration_minutes: ${{ fromJSON(needs.request.outputs.duration_minutes) }}
       try_4k: ${{ fromJSON(needs.request.outputs.try_4k) }}
