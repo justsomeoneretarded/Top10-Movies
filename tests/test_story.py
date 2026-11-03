@@ -1,6 +1,6 @@
 import pytest
 
-from movie_pipeline.script import (DELIVERIES, Writer, _numbers_issue, aligned_delivery, film_facts,
+from movie_pipeline.script import (DELIVERIES, Writer, aligned_delivery, film_facts,
                                    rank_weights)
 
 FILMS = [
@@ -23,10 +23,12 @@ def test_film_facts_keep_story_material_and_drop_media_records():
     assert "trailers" not in facts and "watch_availability" not in facts
 
 
-def test_unsupported_figures_are_flagged_but_supported_ones_pass():
-    facts = film_facts(FILMS[0])
-    assert _numbers_issue(["Number 1: Inception runs 148 minutes and came out in 2010."], facts) is None
-    assert "1999" in _numbers_issue(["It made $800 million in 1999."], facts)
+def test_narration_material_keeps_plot_but_omits_database_readouts():
+    from movie_pipeline.script import narration_material
+    material = narration_material({**film_facts(FILMS[0]), "tagline": "Dream bigger",
+                                   "tmdb_rating": 8.5, "tmdb_votes": 1000})
+    assert material["overview"] == FILMS[0]["overview"]
+    assert not {"tagline", "tmdb_rating", "tmdb_votes"} & material.keys()
 
 
 def test_escalation_gives_number_one_the_most_time_without_changing_the_total():
@@ -103,14 +105,14 @@ def test_write_plans_once_edits_every_section_and_records_delivery(tmp_path):
     assert script["package"]["episode_plan"]["comment_question"].startswith("Which movie")
 
 
-def test_editor_output_that_invents_figures_is_rejected_for_the_draft():
+def test_editor_does_not_apply_a_factual_rejection_gate():
     writer = Writer()
     writer.ask, _ = fake_model(edit_text=["Number 1: Inception. It earned 900 million dollars in 2011 alone, a record."])
     draft = ["Number 1: Inception. A thief plants an idea inside a dream, and the hallway fight was shot on a real rotating set."]
     facts = {**film_facts(FILMS[0]), "rank": 1, "other_titles": ["Arrival"]}
     paragraphs, delivery = writer.edit("Top 2", "Casual", "the review", facts, draft, rank=1)
-    assert paragraphs == draft
-    assert delivery == ["hype"]
+    assert paragraphs == ["Number 1: Inception. It earned 900 million dollars in 2011 alone, a record."]
+    assert delivery == ["dramatic"]
 
 
 def test_editor_output_that_passes_checks_is_used():
@@ -173,16 +175,17 @@ def test_strong_genre_openings_are_not_rejected_for_missing_the_label():
     good = ["What if time isn't a straight line? These five movies bend physics and memory until reality cracks."]
     assert _editorial_issue(good, opening=True, theme="sci-fi") is None
     vague = ["Five movies you should watch tonight. Here's why each one is worth your time."]
-    assert _editorial_issue(vague, opening=True, theme="sci-fi") is not None
+    assert _editorial_issue(vague, opening=True, theme="sci-fi") is None  # quality editing does not require genre keywords
 
 
-def test_fact_check_checkbox_off_keeps_drafts_without_model_calls(monkeypatch):
+def test_removed_fact_checkbox_does_not_disable_general_editorial_work(monkeypatch):
     monkeypatch.setenv("FACT_CHECK", "false")
     writer = Writer()
-    writer.ask = lambda *a, **k: (_ for _ in ()).throw(AssertionError("editor must not run"))
-    draft = ["Number 1: Inception. A thief plants an idea inside a dream."]
-    paragraphs, delivery = writer.edit("Top 2", "Casual", "the review", film_facts(FILMS[0]), draft, rank=1)
-    assert paragraphs == draft and delivery == ["hype"]
+    better = ["Number 1: Inception. A thief has to plant an idea inside a dream."]
+    writer.ask, _ = fake_model(edit_text=better)
+    draft = ["Number 1: Inception. A significant and compelling account of the complex dream world."]
+    result, delivery = writer.edit("Top 2", "Casual", "the review", film_facts(FILMS[0]), draft, rank=1)
+    assert result == better and delivery == ["dramatic"]
 
 
 def test_partial_write_warms_the_cache_for_the_full_script(tmp_path):
@@ -232,7 +235,7 @@ def test_optional_bridge_validation_and_legacy_filler_cleanup(tmp_path, monkeypa
     assert section["paragraphs"] == ["Review."]
 
 
-def test_plain_words_replaces_stock_ai_phrasing():
+def test_whitespace_normalization_does_not_substitute_creative_vocabulary():
     from movie_pipeline.script import plain_words
     assert plain_words("A curated list of unsettling, high-concept horror that delves into fear.") == \
-        "A hand-picked list of creepy horror that digs into fear."
+        "A curated list of unsettling, high-concept horror that delves into fear."

@@ -1,4 +1,4 @@
-"""Soft runtime planning independent of paragraph word counts."""
+"""Provisional resource/word planning; Auto never dictates finished duration."""
 from __future__ import annotations
 
 import math
@@ -18,8 +18,8 @@ class DurationSpec:
 
 
 def _auto_duration(title: str, count: int, films: list[dict] | None = None) -> DurationSpec:
-    # Roughly 80 seconds per recommendation keeps small lists concise, while
-    # allowing a ten-title countdown to naturally run around fourteen minutes.
+    # A conservative fallback budget for downloads and model resource planning.
+    # Auto writing receives no word target and is never expanded to meet this estimate.
     count = max(2, min(15, count))
     kind = selected_content_type()
     if kind:
@@ -85,20 +85,10 @@ def requested_duration(brief: str) -> DurationSpec:
 
 
 def final_tempo(original: float, spec: DurationSpec, ending_hold: float = 3) -> float:
-    """Use natural speech when possible and never fail solely over runtime.
-
-    For specified targets, only the smallest adjustment needed to reach the
-    allowed range is attempted. If that range cannot be reached naturally, the
-    bounded result is retained instead of padding, cutting, or rejecting speech.
-    """
+    """Keep the finished footage at natural speed; runtime remains guidance."""
     if not math.isfinite(original) or original <= 0 or not math.isfinite(ending_hold) or ending_hold < 0:
         raise PipelineError("Cannot time an empty or invalid media stream.")
-    total = original + ending_hold
-    if spec.automatic or spec.minimum <= total <= spec.maximum:
-        return 1.0
-    boundary = spec.minimum if total < spec.minimum else spec.maximum
-    speed = original/max(1, boundary-ending_hold)
-    return max(.85, min(1.18, speed))
+    return 1.0
 
 
 def trailer_budget(spec: DurationSpec, count: int) -> float:

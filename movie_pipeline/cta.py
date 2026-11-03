@@ -66,20 +66,22 @@ REACTIONS = (
     },
 )
 
+from .reaction_library import expand_reactions
+REACTIONS = expand_reactions(REACTIONS)
+
+
+def reaction_choices() -> list[dict]:
+    """Descriptions let the writer pair a fresh line with the actual visual."""
+    return [{"theme": r["theme"], "description": r["description"]} for r in REACTIONS]
+
 
 def _number(*values: str) -> int:
     return int(hashlib.sha256("\0".join(values).encode()).hexdigest()[:12], 16)
 
 
 def _preferred(title: str, brief: str, seed: str) -> int:
-    context = f"{title} {brief}".casefold()
-    if re.search(r"\b(?:sci[ -]?fi|science fiction|space|cosmic)\b", context):
-        return 1
-    if re.search(r"\b(?:horror|scary|creepy|drama|emotional|sad)\b", context):
-        return 2
-    if re.search(r"\b(?:action|comedy|comedies|adventure|superhero|animation)\b", context):
-        return 0
-    return _number(title, brief, seed) % len(REACTIONS)
+    """Reproducible variety across all reactions; genre does not lock an asset."""
+    return _number("cta-variety-v2", title, brief, seed) % len(REACTIONS)
 
 
 def _validate(data: bytes, animated: bool):
@@ -111,14 +113,19 @@ def _asset(reaction: dict, work: Path) -> Path:
     return decoded.resolve()
 
 
-def prepare_cta(title: str, brief: str, seed: str, work: Path) -> dict:
+def prepare_cta(title: str, brief: str, seed: str, work: Path, *, suggestion: dict | None = None) -> dict:
     """Choose a matching joke and validated local reaction before synthesizing it.
 
     The seed makes reruns reproducible. A missing/corrupt preferred asset tries the
     other bundled reactions with their own matching joke; all assets missing uses
     a movie-background intermission. No HTTP request or image model is needed.
     """
-    preferred = _preferred(title, brief, seed)
+    suggestion = suggestion if isinstance(suggestion, dict) else {}
+    proposed = " ".join(str(suggestion.get("text", "")).split())
+    matching = next((i for i, r in enumerate(REACTIONS) if r["theme"] == suggestion.get("theme")), None)
+    usable = (matching is not None and 3 <= len(proposed.split()) <= 24
+              and re.search(r"\blike\b", proposed, re.I) and re.search(r"\bsubscribe\b", proposed, re.I))
+    preferred = matching if usable else _preferred(title, brief, seed)
     order = [preferred] + [i for i in range(len(REACTIONS)) if i != preferred]
     for index in order:
         reaction = REACTIONS[index]
@@ -126,7 +133,8 @@ def prepare_cta(title: str, brief: str, seed: str, work: Path) -> dict:
             path = _asset(reaction, work)
         except (OSError, ValueError, Image.DecompressionBombError):
             continue
-        text = reaction["jokes"][_number(seed, reaction["theme"]) % len(reaction["jokes"])]
+        text = (proposed if usable and index == matching else
+                reaction["jokes"][_number(seed, reaction["theme"]) % len(reaction["jokes"])])
         return {name: reaction[name] for name in ("theme", "animated", "headline", "source", "attribution")} | {
             "path": str(path), "text": text,
         }

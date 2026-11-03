@@ -1,3 +1,7 @@
+import re
+
+import pytest
+
 from movie_pipeline.packaging import (
     MIDROLLS,
     build_description,
@@ -67,12 +71,19 @@ def test_topic_tags_are_relevant_distinct_and_bounded():
     assert featured_heading([{"kind": "movie"}, {"kind": "tv"}]) == "Featured movies and shows / series"
 
 
-def test_writer_keeps_availability_in_metadata_and_adds_outro_cta():
+@pytest.mark.parametrize("closing", [
+    "A clear and casual recommendation.",
+    "Like the video, and watch our other recommendations.",
+    "Subscribe and watch our other picks.",
+    "Like and subscribe, then watch our other videos.",
+])
+def test_writer_keeps_availability_in_metadata_and_adds_outro_cta(closing):
     from unittest.mock import Mock
 
-    from movie_pipeline.script import Writer
+    from movie_pipeline.script import CLOSING, Writer
     writer = Writer()
-    writer.narration = Mock(return_value=["A clear and casual recommendation."])
+    writer.narration = Mock(side_effect=lambda title, brief, label, facts, target: [
+        closing if label == CLOSING else "A clear and casual recommendation."])
     writer.ask = Mock(return_value={"titles": ["Two movies to watch tonight", "Top 2 Movies to Watch"], "description": "Try these two movie picks.",
                                    "thumbnail_texts": ["WATCH THESE", "GREAT MOVIES", "NEXT WATCH"]})
     writer.thumbnail_concepts = Mock(return_value=[])
@@ -85,7 +96,10 @@ def test_writer_keeps_availability_in_metadata_and_adds_outro_cta():
     assert films[0]['watch_availability']['subscription'] == ['Hulu']
     assert 'US' not in review['paragraphs'][-1]
     outro = ' '.join(result['sections'][-1]['paragraphs']).casefold()
-    assert all(word in outro for word in ('like', 'subscribe', 'other picks'))
+    assert len(re.findall(r"\blike\b", outro)) == 1
+    assert len(re.findall(r"\bsubscribe\b", outro)) == 1
+    assert "other" in outro
+    assert any(word in outro for word in ("picks", "recommendations", "videos"))
     assert result['sections'][1]['film'] == 1  # supplied best-first list plays in countdown order
     assert 'plain everyday search words' in writer.ask.call_args.args[0]
 

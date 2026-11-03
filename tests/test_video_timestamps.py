@@ -60,6 +60,9 @@ def test_mixed_reorder_delays_preserve_every_scene_and_narration_boundary(monkey
 
     original = sum(lengths)
     requested = original/speed+3
+    # Production no longer retimes footage to meet runtime. Inject legacy/custom
+    # tempo here to retain assembly coverage at every supported audio clock.
+    monkeypatch.setattr(render, "final_tempo", lambda *args, **kwargs: speed)
     spec = DurationSpec(requested, requested, requested, automatic=speed == 1)
     output = tmp_path/"final.mp4"
     actual, chosen_speed = render.finish(parts, output, tmp_path, False, spec=spec)

@@ -100,13 +100,10 @@ def test_auto_does_not_adjust_speech_even_outside_its_planning_range(monkeypatch
     assert final_tempo(1000, spec) == 1
 
 
-def test_tempo_uses_closest_boundary_and_keeps_usable_outliers():
+def test_runtime_guidance_never_retimes_finished_footage():
     spec = DurationSpec(480,360,600)
     assert final_tempo(480, spec) == 1
-    assert final_tempo(610, spec) == pytest.approx(610/597)
-    assert final_tempo(350, spec) == pytest.approx(350/357)
-    assert final_tempo(30, spec) == .85
-    assert final_tempo(2000, spec) == 1.18
+    assert all(final_tempo(seconds, spec) == 1 for seconds in (30, 350, 610, 2000))
 
 
 @pytest.mark.parametrize("seconds", [0,-1,float("nan"),float("inf")])
