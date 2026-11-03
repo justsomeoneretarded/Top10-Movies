@@ -33,6 +33,15 @@ on:
           - Warguy
           - Kit Laser
           - Female
+      tts_model:
+        description: "Speech model (original Chatterbox by default)"
+        required: true
+        type: choice
+        default: original
+        options:
+          - original
+          - turbo
+          - nano
       duration_minutes:
         description: "Video length in minutes (±25%); Auto chooses a sensible length for this list"
         required: true
@@ -93,6 +102,9 @@ on:
       narrator:
         type: string
         default: Warguy
+      tts_model:
+        type: string
+        default: original
       duration_minutes:
         type: string
         default: Auto
@@ -125,7 +137,7 @@ jobs:
       VIDEO_TYPE: ${{ inputs.content_type }}
       NARRATOR: ${{ inputs.narrator }}
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
-      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      TTS_MODEL: ${{ inputs.tts_model || 'original' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
@@ -175,7 +187,7 @@ jobs:
       VIDEO_TYPE: ${{ inputs.content_type }}
       NARRATOR: ${{ inputs.narrator }}
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
-      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      TTS_MODEL: ${{ inputs.tts_model || 'original' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
@@ -296,7 +308,7 @@ jobs:
       VIDEO_TYPE: ${{ inputs.content_type }}
       NARRATOR: ${{ inputs.narrator }}
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
-      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      TTS_MODEL: ${{ inputs.tts_model || 'original' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
@@ -311,6 +323,7 @@ jobs:
       PIPELINE_PART: ${{ matrix.part }}
       # Each section's narration is also recorded here, in parallel; the final job reuses it.
       VOICE_WARM: ${{ vars.VOICE_WARM || 'true' }}
+      HF_HUB_DISABLE_XET: '1'
       HF_HOME: ${{ github.workspace }}/work/models/huggingface
       TORCH_HOME: ${{ github.workspace }}/work/models/torch
     steps:
@@ -382,7 +395,7 @@ jobs:
       VIDEO_TYPE: ${{ inputs.content_type }}
       NARRATOR: ${{ inputs.narrator }}
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
-      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      TTS_MODEL: ${{ inputs.tts_model || 'original' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
@@ -467,8 +480,8 @@ jobs:
       VIDEO_TYPE: ${{ inputs.content_type }}
       NARRATOR: ${{ inputs.narrator }}
       TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
-      # Turbo prioritizes narration quality. Set repository variable TTS_MODEL=nano for faster CPU runs.
-      TTS_MODEL: ${{ vars.TTS_MODEL || 'turbo' }}
+      # The per-run selection is shared with every warm-up; repository variables cannot change it.
+      TTS_MODEL: ${{ inputs.tts_model || 'original' }}
       SCRIPT_MODEL: gemma4:12b
       TRY_4K: "${{ inputs.try_4k }}"
       VIDEO_MINUTES: "${{ inputs.duration_minutes }}"
@@ -487,6 +500,7 @@ jobs:
       OLLAMA_MAX_LOADED_MODELS: '1'
       OLLAMA_FLASH_ATTENTION: '1'
       OLLAMA_KV_CACHE_TYPE: q8_0
+      HF_HUB_DISABLE_XET: '1'
       HF_HOME: ${{ github.workspace }}/work/models/huggingface
       TORCH_HOME: ${{ github.workspace }}/work/models/torch
       SPEECH_VERIFY_MODEL_DIR: ${{ github.workspace }}/work/speech-verifier-model
