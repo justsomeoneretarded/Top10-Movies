@@ -15,7 +15,7 @@ import requests
 from PIL import Image
 
 SOURCE_REF = "3cd940af8cd795393388f117f4e8c091cde72d0c"
-CANDIDATES = [{"path":"homer-disappear-bush.gif","sha":"bae881b7572901037c24c0d097ed1bc923eaf563"},{"path":"picard-facepalm.gif","sha":"c7c95455aa4dbbeb351c052fbad88ccdfb90002e"},{"path":"keanu-thumbs-up.gif","sha":"4c1d2763616721428cba4f410c89fb89839660f5"},{"path":"dramatic-pug.gif","sha":"2572823fde947dd79b808167c3a9089b98d88173"},{"path":"nathan-fillion-booyah.gif","sha":"75dc494bdf5b5fca5eaf3349e6de24f3b2021c2c"},{"path":"mic-drop-bryan-cranston.gif","sha":"48c251b84357a886127fa2c074da32dc5a2ba2a3"}]
+CANDIDATES = [{"path":"homer-disappear-bush.gif","sha":"bae881b7572901037c24c0d097ed1bc923eaf563"},{"path":"picard-facepalm.gif","sha":"c7c95455aa4dbbeb351c052fbad88ccdfb90002e"},{"path":"keanu-thumbs-up.gif","sha":"4c1d2763616721428cba4f410c89fb89839660f5"},{"path":"dramatic-pug.gif","sha":"2572823fde947dd79b808167c3a9089b98d88173"},{"path":"mic-drop-bryan-cranston.gif","sha":"48c251b84357a886127fa2c074da32dc5a2ba2a3"},{"path":"dancing-carlton.gif","sha":"30b5ca262b753380f63772c6dff99dc88e329400"},{"path":"cool-story-bro.gif","sha":"f021c26dd99488f5d972372d3eca5ead152674b3"},{"path":"banging-head-on-table.gif","sha":"c1ce0fc0d95531781d447077bc609fe988b97687"}]
 
 
 def main():
@@ -39,7 +39,9 @@ def main():
         assert git_sha == item["sha"], item["path"]
         assert 0 < len(data) <= 2_000_000, item["path"]
         with Image.open(io.BytesIO(data)) as image:
-            assert min(image.size) >= 180 and image.width*image.height <= 8_000_000, (item["path"], image.size)
+            if min(image.size) < 180 or image.width*image.height > 8_000_000:
+                print("Skipping unsuitable reaction size:", item["path"], image.size)
+                continue
             assert image.format == "GIF" and image.n_frames > 1
             image.seek(image.n_frames//2)
             image.load()
@@ -51,6 +53,9 @@ def main():
             "attribution": f"Reaction GIF: {item['path']}; source: tlberglund/animated-gifs.",
             "width": dimensions[0], "height": dimensions[1], "frames": frames, "bytes": len(data)})
         print("Validated reaction:", json.dumps(rows[-1]))
+        if len(rows) >= 6:
+            break
+    assert len(rows) >= 4, "Not enough additional full-size reaction images"
     manifest.write_text(json.dumps(rows, indent=2)+"\n")
     if os.getenv("PUBLISH_REACTION_ASSETS") == "true":
         assert os.getenv("GITHUB_REF_NAME") == "fix/natural-editorial", "Feature branch only"
