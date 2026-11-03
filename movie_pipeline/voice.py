@@ -18,10 +18,9 @@ PRONUNCIATIONS = {
     r"\b(\d{4})[–-](\d{4})\b": r"\1 to \2", r"\b(\d{4})[–-](\d{2})\b": r"\1 to \2",
 }
 
-# Pause after each sentence, by its final punctuation (seconds). A reveal ('Number 3: Title.')
-# gets a short silence before it and a beat after it.
-SENTENCE_GAPS = {"?": 0.42, "!": 0.3, ".": 0.24, ":": 0.32, ";": 0.2}
-REVEAL_LEAD, REVEAL_BEAT = 0.18, 0.18
+# Complete thoughts are voiced together. Extra boundary silence is measured,
+# rather than assigned mechanically by the final punctuation mark.
+REVEAL_LEAD = 0.18
 
 # Delivery -> original Chatterbox emotion settings (exaggeration, cfg_weight, temperature).
 # 'normal' and 'calm' lines use the faster Turbo model.
@@ -79,6 +78,25 @@ def phrases(parts: list[str], reveal: bool = False, limit: int = 45) -> list[str
     return grouped
 
 
+def thought_pause(previous, following, rate: int, text: str, delivery: str = "normal") -> float:
+    """Add only the breath room missing between two complete model phrases."""
+    import numpy as np
+
+    if rate <= 0 or not len(previous) or not len(following):
+        return 0.0
+
+    def margins(samples):
+        signal = np.asarray(samples)
+        loud = np.flatnonzero(np.abs(signal) > max(1e-4, float(np.max(np.abs(signal)))*.02))
+        return (len(signal)/rate, len(signal)/rate) if not loud.size else (loud[0]/rate, (len(signal)-1-loud[-1])/rate)
+
+    existing = margins(previous)[1] + margins(following)[0]
+    word_seconds = len(previous)/rate/max(1, len(text.split()))
+    preference = {"calm": 1.15, "dramatic": 1.1, "hype": .9}.get(delivery, 1.0)
+    desired = min(.28, max(.10, word_seconds*.55*preference))
+    return max(0.0, desired-existing)
+
+
 def take_score(samples, rate: int, words: int) -> float:
     """Higher is better: natural speed, no long dead air inside, lively (not flat) energy."""
     import numpy as np
@@ -98,7 +116,7 @@ def take_score(samples, rate: int, words: int) -> float:
     wpm = words * 60 / max(0.3, seconds)
     liveliness = float(np.std(energy[first:last][voiced[first:last]])) if voiced[first:last].any() else 0.0
     # Prefer clean, complete speech; do not reward forced excitement or one exact speaking rate.
-    pace_cost = max(0, 135-wpm, wpm-190) / 35
+    pace_cost = max(0, 90-wpm, wpm-230) / 70
     clipping_cost = float(np.mean(np.abs(samples) >= .99)) * 40
     return -pace_cost - clipping_cost - max(0, longest / 50 - 0.9) * 3 + min(liveliness, 5) / 10
 
@@ -167,7 +185,7 @@ class Narrator:
             self.deliveries[text] = delivery
         delivery = delivery or self.deliveries.get(text, "normal")
         emotional = self.emotion_enabled and delivery in EMOTION
-        baseline = key("voice-v6-coherent-clean", spoken_form(text), self.reference_hash, self.model_name, delivery if emotional else "turbo", self.takes)
+        baseline = key("voice-v7-adaptive-thoughts", spoken_form(text), self.reference_hash, self.model_name, delivery, self.takes)
         token = key("voice-retry-v1", baseline, attempt_offset) if force else baseline
         output = self.cache / f"{token}.wav"
         suffix = 0
@@ -182,6 +200,7 @@ class Narrator:
         reveal = bool(re.match(r"\s*Number\s+\w+\s*:", text))
         for attempt in range(3):
             pieces, rate = [], None
+            previous_text = ""
             seed_base = int(baseline[:8], 16) + attempt * 7919 + attempt_offset + suffix * 1009
             try:
                 # Sentences are voiced in natural phrases of up to three sentences, so intonation flows
@@ -199,14 +218,16 @@ class Narrator:
                             best, best_score = samples, score
                     if best is None:
                         raise ValueError("silent take")
-                    gap = SENTENCE_GAPS.get(sentence.rstrip("\"'”’)")[-1:], 0.24)
-                    if index == 0 and reveal:
-                        gap = REVEAL_BEAT
-                    pieces += [best, np.zeros(int(rate * gap), dtype=np.float32)]
+                    if pieces:
+                        gap = thought_pause(pieces[-1], best, rate, previous_text, delivery)
+                        if gap:
+                            pieces.append(np.zeros(round(rate*gap), dtype=np.float32))
+                    pieces.append(best)
+                    previous_text = sentence
             except (ValueError, RuntimeError) as exc:
                 print(f"Voice attempt {attempt+1}: unusable take ({type(exc).__name__}); retrying.", flush=True)
                 continue
-            samples = np.concatenate(pieces[:-1]) if len(pieces) > 1 else pieces[0]
+            samples = np.concatenate(pieces) if len(pieces) > 1 else pieces[0]
             raw = output.with_suffix(".raw.wav")
             sf.write(raw, samples, rate, subtype="PCM_24")
             # Keep the first/last phonemes clear of encoder and edit boundaries; a reveal gets a

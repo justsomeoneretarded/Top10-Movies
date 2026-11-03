@@ -17,7 +17,6 @@ jobs:
       narrator: ${{ steps.read.outputs.narrator }}
       duration_minutes: ${{ steps.read.outputs.duration_minutes }}
       try_4k: ${{ steps.read.outputs.try_4k }}
-      fact_check: ${{ steps.read.outputs.fact_check }}
     steps:
       - uses: actions/checkout@v4
       - id: read
@@ -29,7 +28,7 @@ jobs:
           from pathlib import Path
           request=json.loads(Path("requests/current.json").read_text())
           required={"title":str,"description":str,"movies":str,"content_type":str,
-                    "narrator":str,"duration_minutes":str,"try_4k":bool,"fact_check":bool}
+                    "narrator":str,"duration_minutes":str,"try_4k":bool}
           for key,kind in required.items():
               if type(request.get(key)) is not kind:
                   raise SystemExit(f"Invalid request field: {key}")
@@ -58,4 +57,3 @@ jobs:
       narrator: ${{ fromJSON(needs.request.outputs.narrator) }}
       duration_minutes: ${{ fromJSON(needs.request.outputs.duration_minutes) }}
       try_4k: ${{ fromJSON(needs.request.outputs.try_4k) }}
-      fact_check: ${{ fromJSON(needs.request.outputs.fact_check) }}

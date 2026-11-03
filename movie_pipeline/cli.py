@@ -63,7 +63,7 @@ def number_one_tease_shot(shots: list[dict], is_card, taken: list[tuple[float, f
         return None
     _, start, end = max(options)
     return {"start": start, "end": end}
-END_SCREEN_SECONDS = 17.0  # plus the final three-second hold: about 20 seconds for YouTube end-screen elements
+END_SCREEN_SECONDS = 10.0  # plus the existing three-second final hold
 INTRO_TARGET_SECONDS = 8.0
 
 
@@ -404,7 +404,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     writer = Writer(cache_dir=work / "script-sections")
     print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
-    script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks)
+    script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
     script = writer.refresh_editorial(title, brief, films, script)
     refresh_availability(script, films)
     from .rank_intro import prepare_rank_intros
@@ -483,8 +483,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             print("Timing revision unavailable; retaining the earlier complete narration.", flush=True)
             break
         estimated = spoken_seconds+expected_breaks+11
-        # Auto uses a broad editorial guide, not a required runtime window.
-        comfortable = .5*spec.target <= estimated <= 1.6*spec.target if spec.automatic else spec.minimum <= estimated <= spec.maximum
+        # Auto accepts the actual useful draft. A short selected-duration draft is
+        # also kept complete rather than padded to reach a planning formula.
+        comfortable = spec.automatic or estimated <= spec.maximum
         distance = abs(estimated-spec.target)+(0 if comfortable else spec.target)
         if best_draft is None or distance < best_draft[0]:
             best_draft = (distance, script, speech)
@@ -493,7 +494,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         print(f"Refining an unusually {'long' if estimated > spec.target else 'short'} draft; measured {estimated/60:.1f} minutes.", flush=True)
         word_scale *= max(.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
         try:
-            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks)
+            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
             refresh_availability(script, films)
             script = prepare_rank_intros(script, films)
             writer.unload()
@@ -537,7 +538,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         section = script["sections"][coordinate[0]]
         label = aligned_delivery(section)[coordinate[1]]
         # Hooks and reveals move a little faster; tense or emotional lines breathe.
-        paragraph_speed = delivery_speed(voice_speed, label)
+        paragraph_speed = delivery_speed(voice_speed, label,
+            words=len(section["paragraphs"][coordinate[1]].split()), seconds=duration(audio))
         delivery_report[label] = delivery_report.get(label, 0) + 1
         if (audio, paragraph_speed) not in paced:
             paced[(audio, paragraph_speed)] = paced_take(audio, paragraph_speed)
@@ -547,10 +549,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Narration delivery: {delivery_report}.", flush=True)
     notice("Narration", f"Delivery labels {delivery_report}; {sum(duration(a) for a in set(speech.values()))/60:.1f} min of speech. "
            f"Elapsed {(time.time()-started)/60:.0f} min.")
-    if voice_speed != 1:
-        cta_audio = paced_take(cta_audio, voice_speed)
-        cta_cues = [{**cue, "start": cue["start"]/voice_speed,
-                    "end": cue["end"]/voice_speed} for cue in cta_cues]
+    cta_speed = delivery_speed(voice_speed, "normal", words=len(cta_text.split()), seconds=duration(cta_audio))
+    if cta_speed != 1:
+        cta_audio = paced_take(cta_audio, cta_speed)
+        cta_cues = [{**cue, "start": cue["start"]/cta_speed,
+                    "end": cue["end"]/cta_speed} for cue in cta_cues]
     paced_example = next(iter(speech.values()), None)
     if paced_example is not None:
         ffmpeg("-i", paced_example, "-t", 12, "-c:a", "pcm_s24le", work / "voice-after-pacing.wav")
@@ -1226,7 +1229,7 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
         return parts
     if stage == "script":
         writer = Writer(cache_dir=ctx.work / "script-sections")
-        result = writer.write(title, brief, films, target_seconds=ctx.spec.target, trailer_seconds=ctx.expected_breaks, only={part})
+        result = writer.write(title, brief, films, target_seconds=ctx.spec.target, trailer_seconds=ctx.expected_breaks, only={part}, automatic=ctx.spec.automatic)
         writer.unload()
         print(f"Warmed script section {part}.", flush=True)
         voiced = warm_voice(result.get("sections", []), ctx)

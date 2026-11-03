@@ -1,0 +1,29 @@
+name: Natural narration review
+on:
+  push:
+    branches: [fix/natural-editorial]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: natural-editorial-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  reactions:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/natural-editorial
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install Pillow requests
+      - run: python -m compileall -q movie_pipeline scripts
+      - name: Bundle checked reaction assets on this feature branch
+        env:
+          PUBLISH_REACTION_ASSETS: 'true'
+        run: python -m scripts.prepare_reactions
