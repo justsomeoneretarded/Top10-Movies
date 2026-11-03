@@ -150,7 +150,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         def unload(self):
             pass
 
-        def refresh_editorial(self, title, brief, values, draft):
+        def refresh_editorial(self, title, brief, values, draft, **kwargs):
             records['editorial_refreshed'] = True
             draft['package']['editorial_test_marker'] = True
             return draft

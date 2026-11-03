@@ -66,10 +66,30 @@ def sentences(text: str) -> list[str]:
     return merged or [text]
 
 
+def _bounded_thoughts(text: str, maximum: int = 90) -> list[str]:
+    """Bound exceptional TTS input without dropping words or editing the script."""
+    if len(text.split()) <= maximum:
+        return [text]
+    clauses = re.split(r"(?<=[,;:—])\s+", text)
+    chunks: list[str] = []
+    for clause in clauses:
+        words = clause.split()
+        while words:
+            if chunks and len(chunks[-1].split()) + len(words) <= maximum:
+                chunks[-1] += " " + " ".join(words)
+                break
+            if len(words) <= maximum:
+                chunks.append(" ".join(words))
+                break
+            chunks.append(" ".join(words[:maximum]))
+            words = words[maximum:]
+    return chunks
+
+
 def phrases(parts: list[str], reveal: bool = False, limit: int = 45) -> list[str]:
-    """Join up to three complete sentences within a bounded coherent TTS phrase."""
+    """Group complete thoughts; bound unusually long sentences for TTS transport."""
     grouped: list[str] = []
-    for index, part in enumerate(parts):
+    for part in (chunk for text in parts for chunk in _bounded_thoughts(text)):
         last = grouped[-1] if grouped else None
         if (last is not None and len(re.findall(r"[.!?]", last)) < 3 and len(last.split()) + len(part.split()) <= limit):
             grouped[-1] = f"{last} {part}"
@@ -186,6 +206,8 @@ class Narrator:
         delivery = delivery or self.deliveries.get(text, "normal")
         emotional = self.emotion_enabled and delivery in EMOTION
         baseline = key("voice-v7-adaptive-thoughts", spoken_form(text), self.reference_hash, self.model_name, delivery, self.takes)
+        if emotional:
+            baseline = key("voice-expressive-mode-v1", baseline)
         token = key("voice-retry-v1", baseline, attempt_offset) if force else baseline
         output = self.cache / f"{token}.wav"
         suffix = 0

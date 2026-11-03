@@ -141,3 +141,32 @@ def test_end_screen_shortens_without_changing_final_hold():
     from movie_pipeline.render import finish
     assert END_SCREEN_SECONDS == 10
     assert signature(finish).parameters["ending_hold"].default == 3
+
+
+
+def test_stale_auto_checkpoint_migrates_without_old_word_quota():
+    writer = Writer()
+    writer.narration = Mock(return_value=["Number 1: Example. Two friends lose their car."])
+    writer.edit = lambda *args, **kwargs: (args[4], ["normal"])
+    draft = {"sections": [{"kind": "film", "film": 0, "paragraphs": ["Old review."]}],
+             "package": {"script_policy_version": 1}}
+    result = writer.refresh_editorial("Top movies", "Casual",
+                                      [{"title": "Example", "year": 2025}], draft, automatic=True)
+    assert result["sections"][0]["automatic_runtime"] is True
+    assert writer.narration.call_args.args[4] is None
+    assert "automatic_runtime" not in draft["sections"][0]
+
+
+def test_exceptionally_long_sentence_is_bounded_without_losing_words():
+    from movie_pipeline.voice import phrases
+    text = " ".join(f"word{i}" for i in range(245))+"."
+    chunks = phrases([text])
+    assert all(len(chunk.split()) <= 90 for chunk in chunks)
+    assert " ".join(chunks) == text
+
+
+def test_exceptionally_long_sentence_prefers_existing_clause_boundaries():
+    from movie_pipeline.voice import phrases
+    clause = " ".join(["one"]*50)+","
+    text = clause+" "+" ".join(["two"]*50)+"."
+    assert phrases([text]) == [clause, " ".join(["two"]*50)+"."]

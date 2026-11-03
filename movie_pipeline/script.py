@@ -352,7 +352,7 @@ class Writer:
         refreshed.setdefault("package", {})["script_policy_version"] = SCRIPT_POLICY_VERSION
         return refreshed
 
-    def refresh_editorial(self, title: str, brief: str, films: list[dict], script: dict) -> dict:
+    def refresh_editorial(self, title: str, brief: str, films: list[dict], script: dict, *, automatic: bool | None = None) -> dict:
         """Migrate a stale opening and repair clear defects without rewriting safe reviews."""
         refreshed = deepcopy(script)
         stale = refreshed.get("package", {}).get("script_policy_version") != SCRIPT_POLICY_VERSION
@@ -367,6 +367,8 @@ class Writer:
                     section["paragraphs"] = self.narration(title, brief, OPENING, facts, 28)
                     section.pop("delivery", None)
             elif kind == "film" and 0 <= section.get("film", -1) < len(films):
+                if automatic is not None:
+                    section["automatic_runtime"] = automatic
                 index = section["film"]
                 facts = narration_material(film_facts(films[index]))
                 facts.update(rank=index+1, other_titles=[film["title"] for i, film in enumerate(films) if i != index])
@@ -871,9 +873,13 @@ class Writer:
         sections = self.episode_edit(title, brief, sections)
         ending = sections[-1]["paragraphs"]
         ending_text = " ".join(ending).casefold()
-        if not all(word in ending_text for word in ("like", "subscribe")) or not ("other" in ending_text and any(word in ending_text for word in ("recommendations", "picks", "videos"))):
-            ending.append("Like, subscribe, and watch our other picks. Save your next movie night from bad decisions.")
-            sections[-1]["delivery"] = aligned_delivery(sections[-1])
+        missing_actions = [word for word in ("like", "subscribe") if not re.search(rf"\b{word}\b", ending_text)]
+        if missing_actions:
+            ending.append(" and ".join(missing_actions).capitalize()+".")
+        if not (any(word in ending_text for word in ("other", "more", "another"))
+                and any(word in ending_text for word in ("recommendations", "picks", "videos", "movies", "shows"))):
+            ending.append("Watch our other recommendations on the channel.")
+        sections[-1]["delivery"] = aligned_delivery(sections[-1])
         from .cta import reaction_choices
         reactions = reaction_choices()
         schema = {"type": "object", "properties": {

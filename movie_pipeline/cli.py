@@ -405,7 +405,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
     script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
-    script = writer.refresh_editorial(title, brief, films, script)
+    script = writer.refresh_editorial(title, brief, films, script, automatic=spec.automatic)
     refresh_availability(script, films)
     from .rank_intro import prepare_rank_intros
     script = prepare_rank_intros(script, films)
