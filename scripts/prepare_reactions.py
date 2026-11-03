@@ -7,8 +7,6 @@ import base64
 import hashlib
 import io
 import json
-import os
-import subprocess
 from pathlib import Path
 
 import requests
@@ -57,13 +55,7 @@ def main():
             break
     assert len(rows) >= 4, "Not enough additional full-size reaction images"
     manifest.write_text(json.dumps(rows, indent=2)+"\n")
-    if os.getenv("PUBLISH_REACTION_ASSETS") == "true":
-        assert os.getenv("GITHUB_REF_NAME") == "fix/natural-editorial", "Feature branch only"
-        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
-        subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
-        subprocess.run(["git", "add", "assets/memes"], check=True)
-        subprocess.run(["git", "commit", "-m", "Bundle validated reaction GIFs for subscribe variety"], check=True)
-        subprocess.run(["git", "push", "origin", "HEAD:refs/heads/fix/natural-editorial"], check=True)
+
 
 
 if __name__ == "__main__":

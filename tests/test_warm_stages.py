@@ -8,7 +8,7 @@ FILMS = [{"title": "A", "year": 2020}, {"title": "B", "year": 2021}, {"title": "
 
 
 def context(tmp_path):
-    return SimpleNamespace(films=FILMS, work=tmp_path / "job", spec=SimpleNamespace(target=300), expected_breaks=40)
+    return SimpleNamespace(films=FILMS, work=tmp_path / "job", spec=SimpleNamespace(target=300, automatic=False), expected_breaks=40)
 
 
 class FakeWriter:

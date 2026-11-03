@@ -120,9 +120,9 @@ def test_request_launcher_is_narrow_and_reuses_existing_workflow():
 def test_whole_episode_edit_deletes_only_and_preserves_rank_and_premise():
     from movie_pipeline.script import Writer
     writer=Writer()
-    writer.ask=lambda *a,**k: {"remove":["0:0:0","0:0:1","0:0:2"]}
+    writer.ask=lambda *a,**k: {"remove":["0:0:0","0:0:1","0:0:3"]}
     sections=[{"kind":"film","film":i,"paragraphs":[
-        f"Number {i+1}: Example. A teacher is stranded in space with no memory and must find a way home. It is a real game changer."]} for i in range(3)]
+        f"Number {i+1}: Example. The remarkable chemistry is significant. A teacher is stranded in space with no memory and must find a way home. It is a real game changer."]} for i in range(3)]
     result=writer.episode_edit("3 movies","",sections)
     assert result[0]["paragraphs"]==["Number 1: Example. A teacher is stranded in space with no memory and must find a way home."]
     assert sections[0]["paragraphs"][0].endswith("game changer.")

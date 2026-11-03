@@ -5,25 +5,63 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-concurrency:
-  group: natural-editorial-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
-  reactions:
+  checks:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: fix/natural-editorial
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install Pillow requests
+          cache: pip
+      - run: bash scripts/install_system_packages.sh ffmpeg fonts-dejavu-core
+      - run: python -m pip install -e '.[test]'
       - run: python -m compileall -q movie_pipeline scripts
-      - name: Bundle checked reaction assets on this feature branch
-        env:
-          PUBLISH_REACTION_ASSETS: 'true'
-        run: python -m scripts.prepare_reactions
+      - run: pytest -q tests/test_natural_narration.py tests/test_script.py tests/test_story.py tests/test_cta.py tests/test_voice.py tests/test_voice_boundaries.py tests/test_timing.py tests/test_workflow.py tests/test_warm_stages.py tests/test_production.py tests/test_movie_ranks_upgrade.py
+      - name: Check workflow syntax
+        run: |
+          curl -fLsS --retry 2 https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/actionlint.tgz"
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
+      - name: Render reaction contact sheet
+        if: ${{ !cancelled() }}
+        run: python -m scripts.natural_preview --reactions
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reaction-quality-preview
+          path: natural-review/
+          retention-days: 2
+  writing:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[script-audit]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      SCRIPT_MODEL: gemma4:12b
+      OLLAMA_HOST: 127.0.0.1:11435
+      OLLAMA_URL: http://127.0.0.1:11435
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_FLASH_ATTENTION: '1'
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_MODELS: ${{ github.workspace }}/work/ollama-models
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m scripts.runner_disk --stage script
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: bash scripts/install_system_packages.sh ffmpeg zstd
+      - run: python -m pip install -e '.[test]'
+      - run: bash scripts/bootstrap_ollama.sh
+      - name: Generate and edit real-model samples
+        run: python -m scripts.natural_preview --writing
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-script-samples
+          path: natural-review/
+          retention-days: 2

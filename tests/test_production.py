@@ -431,7 +431,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     monkeypatch.setattr(render, 'finish', finish)
     monkeypatch.setattr(render, 'j_cut', lambda *args, **kwargs: records.setdefault('j_cuts', []).append(args[2]))
     monkeypatch.setattr('movie_pipeline.soundtrack.narration_rate', lambda theme: 1)
-    monkeypatch.setattr('movie_pipeline.sound_design.delivery_speed', lambda rate, label: rate)
+    monkeypatch.setattr('movie_pipeline.sound_design.delivery_speed', lambda rate, label, **measurements: rate)
     monkeypatch.setattr('movie_pipeline.cta_animation.add_cta_animation', Mock())
     def augmented(source, target, work, *, protected_intervals=None):
         assert protected_intervals and all(end > start for start, end in protected_intervals)
@@ -543,7 +543,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         added_visual_seconds += (count-(extra_mode == 'title-card-fails'))*1.5
     # All rendered parts, final hold and metadata use the same measured timebase.
     assert records['final_duration'] == pytest.approx((sum(durations[part] for part in records['parts'])+3)/1.02)
-    assert records['writes'] == (2 if extra_mode == "rewrite-fails" else 1)
+    assert records['writes'] == 1  # useful short drafts are not expanded to fill the selected runtime
     # The short joke is generated and verified before any full-length narration.
     events = records['speech_events']
     first_body_generation = events.index(('generate', first))

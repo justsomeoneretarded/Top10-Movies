@@ -428,7 +428,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         work / "speech-checks", fallback_factory=lambda: WhisperModel(
             "small.en", device="cpu", compute_type="int8", cpu_threads=min(os.cpu_count() or 2, 4),
             download_root=os.getenv("SPEECH_VERIFY_MODEL_DIR") or None))
-    cta_plan = prepare_cta(title, brief, title+brief+movies, work / "memes")
+    cta_suggestion = script.get("package", {}).get("subscribe")
+    cta_plan = (prepare_cta(title, brief, title+brief+movies, work / "memes", suggestion=cta_suggestion)
+                if cta_suggestion else prepare_cta(title, brief, title+brief+movies, work / "memes"))
     cta_error = None
     try:
         for candidate in cta_variants(cta_plan):

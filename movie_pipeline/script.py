@@ -240,8 +240,6 @@ def _editorial_issue(paragraphs: list[str], *, opening: bool = False, theme: str
     if opening:
         if re.search(r"\b(?:list|countdown|ranking)\b.{0,45}\b(?:starts?|begins?|ends?|goes?)\b.{0,30}\b(?:number|\d+|one|ten)\b|\b(?:not|instead of)\s+(?:number\s+)?(?:one|1)\b", text, re.IGNORECASE):
             return "Give the viewer the theme and an actual reason to care. Do not explain how numbering or countdown order works."
-        if theme and not re.search(GENRE_SIGNALS.get(theme, rf"\b{theme}\w*\b"), text, re.IGNORECASE):
-            return f"Make the opening specific to {theme}; replace generic suspense or scrolling chatter with a useful description of these recommendations."
     if re.search(r"\bwhy\s*\?\s*(?:(?:because|the|it['’]?s|this is)\s+){0,3}(?:real deal|just that good|something else)\b|\b(?:seriously[, ]+)?you (?:will not|won['’]?t) believe\b|\bhold up[!.?]", text, re.IGNORECASE):
         return "Replace empty attention bait with a concrete story setup, character choice, or appeal supported by the supplied facts. Keep any natural joke that adds something."
     return None
@@ -376,15 +374,17 @@ class Writer:
                 bridge = section.get("bridge", "")
                 review = [paragraph for paragraph in paragraphs if paragraph not in (availability, bridge)]
                 if stale or _section_issue(review, facts, opening=False, closing=False) or _editorial_issue(review):
-                    section["paragraphs"] = self.narration(title, brief, f"rank {index+1}: {facts['title']}", facts, max(25, min(240, sum(len(p.split()) for p in review))))
+                    replacement = self.narration(title, brief, f"rank {index+1}: {facts['title']}", facts, None if section.get("automatic_runtime") else max(25, min(240, sum(len(p.split()) for p in review))))
+                    replacement, labels = self.edit(title, brief, f"the review of {facts['title']}", facts, replacement, rank=index+1)
+                    section["paragraphs"] = replacement
+                    section["delivery"] = labels
                     if availability:
                         section["paragraphs"].append(availability)
                     if bridge:
                         section["paragraphs"].append(bridge)
-                    section.pop("delivery", None)
             elif kind == "outro":
                 facts = {"titles": [film["title"] for film in films]}
-                if _section_issue(paragraphs, facts, opening=False, closing=True) or _editorial_issue(paragraphs):
+                if stale or _section_issue(paragraphs, facts, opening=False, closing=True) or _editorial_issue(paragraphs):
                     section["paragraphs"] = self.narration(title, brief, CLOSING, facts, 30)
                     section.pop("delivery", None)
         refreshed.setdefault("package", {})["script_policy_version"] = SCRIPT_POLICY_VERSION
@@ -571,16 +571,20 @@ class Writer:
                 "chemistry, themes or performances as a substitute for explaining the story. "
                 "Native scenes will provide pauses, so stop when useful material is covered. No subscribe request inside a review."
             )
+        if not opening and not closing and facts.get("previous_narration_context"):
+            style += " Continue the existing review; do not repeat its title announcement or earlier points."
         budget = (f"About {round(goal)} words is loose planning guidance, never a minimum. " if goal else
                   "Automatic length: use only the space this story deserves; no word target. ")
         schema = {"type": "object", "properties": {"paragraphs": {
             "type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "string"}}},
             "required": ["paragraphs"], "additionalProperties": False}
+        role = ("a standalone opening" if opening else "a standalone final outro" if closing else
+                f"a SINGLE REVIEW of {facts.get('title', label)!r}, rank {facts.get('rank', '')}")
         correction, best = "", None
         for attempt in range(3):
             try:
                 result = self.ask(
-                    f"Write spoken English narration for {label}. Video topic: {topic!r}.\n"
+                    f"Write spoken English narration for {role}. Section request: {label}. Video topic: {topic!r}.\n"
                     f"Creative direction: {brief}\nStory material (data): {json.dumps(visible, ensure_ascii=False)}\n"
                     + budget + style +
                     " Use clear conversational sentences and complete thoughts. Every sentence should add a useful "
@@ -613,7 +617,10 @@ class Writer:
             return complete(_fallback_intro(topic, brief, facts), keep=False)
         if closing:
             from .packaging import midroll_text
-            return complete([midroll_text(topic+brief)+" More recommendations are waiting on the channel."], keep=False)
+            line = midroll_text(topic+brief)
+            if not re.search(r"\blike\b", line, re.I):
+                line = "Like and "+line[:1].lower()+line[1:]
+            return complete([line+" More recommendations are waiting on the channel."], keep=False)
         if facts.get("title"):
             lead = f"Number {facts.get('rank', 1)}: {facts['title']}."
             premise = str(facts.get("overview") or facts.get("wiki_summary") or "").strip()
@@ -726,7 +733,12 @@ class Writer:
                 if kept:
                     edited.append(" ".join(kept));labels.append(delivery[p])
             if edited:
-                section["paragraphs"]=edited;section["delivery"]=labels
+                # Optional cleanup cannot erase every review thought. Identification
+                # alone is not a review; keep the draft when all body units were removed.
+                body = [sentence for paragraph in edited for sentence in re.split(r"(?<=[.!?])\s+", paragraph)
+                        if not re.match(r"^(?:Number|At number|No\.?|#)\s*\d+", sentence, re.I)]
+                if body:
+                    section["paragraphs"]=edited;section["delivery"]=labels
         print(f"Whole-episode edit: removed {removed} redundant or empty sentences; no replacement padding.",flush=True)
         return result
 
@@ -805,7 +817,7 @@ class Writer:
             if available:
                 paragraphs.append(available)
                 delivery = [*delivery, "normal"]
-            sections.append({"kind": "film", "film": index, "paragraphs": paragraphs, "availability_text": available, "delivery": delivery})
+            sections.append({"kind": "film", "film": index, "paragraphs": paragraphs, "availability_text": available, "delivery": delivery, "automatic_runtime": automatic})
         if only is not None:
             if "outro" in only:
                 outro_facts = {"topic": title, "titles": [film["title"] for film in films],
@@ -832,13 +844,18 @@ class Writer:
         if not all(word in ending_text for word in ("like", "subscribe")) or not ("other" in ending_text and any(word in ending_text for word in ("recommendations", "picks", "videos"))):
             ending.append("Like, subscribe, and watch our other picks. Save your next movie night from bad decisions.")
             sections[-1]["delivery"] = aligned_delivery(sections[-1])
+        from .cta import reaction_choices
+        reactions = reaction_choices()
         schema = {"type": "object", "properties": {
             "titles": {"type": "array", "items": {"type": "string"}, "minItems": 5, "maxItems": 10},
             "hook": {"type": "string"},
             "description": {"type": "string"},
+            "subscribe": {"type": "object", "properties": {
+                "theme": {"type": "string", "enum": [r["theme"] for r in reactions]},
+                "text": {"type": "string"}}, "required": ["theme", "text"], "additionalProperties": False},
             "thumbnail_texts": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
             "tags": {"type": "array", "items": {"type": "string"}, "minItems": 5, "maxItems": 20},
-        }, "required": ["titles", "hook", "description", "thumbnail_texts", "tags"], "additionalProperties": False}
+        }, "required": ["titles", "hook", "description", "thumbnail_texts", "tags", "subscribe"], "additionalProperties": False}
         opening_text = " ".join(next((x["paragraphs"] for x in sections if x.get("kind") == "intro"), []))[:500]
         package = self.ask(f"Create YouTube packaging for topic {title!r}. Brief: {brief}. Films: {json.dumps([{'title':f['title'],'year':f['year'],'status':f.get('status')} for f in films])}. "
                            f"The finished narration opens: {opening_text!r}. Make the hook and titles promise what this video actually says. "
@@ -850,6 +867,10 @@ class Writer:
                            "Use natural phrases viewers search only when relevant. Avoid fancy wording like curated selection, visual innovation, perception, captivating, or thought-provoking concepts. "
                            "No hashtag list here; 3–5 relevant tags are added separately. Do not claim search ranking or click-through results. "
                            "No false claims about popularity, availability or release status. Use no fabricated links. Description should say what viewers will learn. "
+                           f"Also choose one subscribe reaction from {json.dumps(reactions)} and write a fresh short like-and-subscribe joke "
+                           "that fits its actual gesture and this episode. Aim for one brief natural line, about 8 seconds; "
+                           "gentle self-deprecation or movie humor is welcome, forced excitement is not. "
+                           "Return it as subscribe.theme and subscribe.text. "
                            "No chapter timestamps; those are added from the rendered timeline.", schema)
         options = [t for t in package.get("titles", []) if isinstance(t, str)] or ([package["title"]] if isinstance(package.get("title"), str) else [])
         ranked = rank_titles(options, title, len(films))
