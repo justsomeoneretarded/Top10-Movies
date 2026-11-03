@@ -218,7 +218,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         if extra_mode in {'missing', 'rewrite-fails', 'shared-audio-retry', 'cta-vad-retry',
                           'cta-joke-fallback', 'intro-partial', 'initial-speaker-error',
                           'final-audio-rejected', 'final-audio-error', 'title-cards',
-                          'title-card-fails'}:
+                          'title-card-fails', 'fallback-beats'}:
             return None
         suffix = "extra" if slot == 2 else f"extra-{slot}"
         path = make(root / f"movie-{film['id']}-{suffix}.mp4", 150)
