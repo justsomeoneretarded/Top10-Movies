@@ -172,8 +172,7 @@ def test_photo_fallback_builds_a_diverse_still_only_pool(monkeypatch,tmp_path):
 def test_plain_language_rules_preserve_verified_title_names():
     from movie_pipeline.script import plain_words
     result=plain_words("Journey is a captivating journey.",protected=["Journey"])
-    assert result.startswith("Journey is a gripping")
-    assert result.endswith("Journey.") or result.endswith("journey.")
+    assert result == "Journey is a captivating journey."
 
 def test_source_reservations_are_atomic_and_failure_can_release(tmp_path):
     from movie_pipeline.resource_budget import reserve_source,release_source

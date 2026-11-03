@@ -387,6 +387,24 @@ class Writer:
                 if stale or _section_issue(paragraphs, facts, opening=False, closing=True) or _editorial_issue(paragraphs):
                     section["paragraphs"] = self.narration(title, brief, CLOSING, facts, 30)
                     section.pop("delivery", None)
+        if stale and refreshed.get("package", {}).get("title"):
+            # Migrate older saved episodes without discarding their footage or
+            # packaging. Optional wording failure retains the local paired jokes.
+            from .cta import reaction_choices
+            choices = reaction_choices()
+            schema = {"type": "object", "properties": {
+                "theme": {"type": "string", "enum": [r["theme"] for r in choices]},
+                "text": {"type": "string"}}, "required": ["theme", "text"], "additionalProperties": False}
+            try:
+                suggestion = self.ask(
+                    f"Write one brief like-and-subscribe joke for {title!r}. Creative direction: {brief}. "
+                    f"Choose a matching reaction from {json.dumps(choices)}. Pair the joke with its actual gesture; "
+                    "use natural movie humor or gentle self-deprecation. Aim for about eight seconds. "
+                    "Return theme and text only.", schema, temperature=.8, num_predict=160)
+                if isinstance(suggestion, dict) and suggestion.get("theme") in {r["theme"] for r in choices} and suggestion.get("text"):
+                    refreshed["package"]["subscribe"] = suggestion
+            except (requests.RequestException, ValueError, TypeError, KeyError):
+                pass
         refreshed.setdefault("package", {})["script_policy_version"] = SCRIPT_POLICY_VERSION
         from .packaging import refresh_availability
         return refresh_availability(refreshed, films)
@@ -620,7 +638,7 @@ class Writer:
             line = midroll_text(topic+brief)
             if not re.search(r"\blike\b", line, re.I):
                 line = "Like and "+line[:1].lower()+line[1:]
-            return complete([line+" More recommendations are waiting on the channel."], keep=False)
+            return complete([line+" Watch our other recommendations on the channel."], keep=False)
         if facts.get("title"):
             lead = f"Number {facts.get('rank', 1)}: {facts['title']}."
             premise = str(facts.get("overview") or facts.get("wiki_summary") or "").strip()
@@ -650,7 +668,7 @@ class Writer:
                   "items": {"type": "string"}}}, "required": ["bridges"], "additionalProperties": False}
         prompt = (f"You edit a YouTube countdown called {title!r}. Creative direction: {brief}\n"
                   f"The reviews in the order they play (number one last): {json.dumps(summary, ensure_ascii=False)}\n"
-                  f"Write {len(order) - 1} bridges, one spoken line (8 to 16 words) for the end of every review except the last, "
+                  f"Optionally connect these reviews where a short spoken transition adds something useful. Return up to {len(order)-1} bridges; an empty list is fine. "
                   "handing over to the next review. Make the energy rise toward number one: call back to what the viewer just saw, "
                   "contrast it with what's coming (darker, stranger, bigger), and never name the next title or the next rank. "
                   f"Bridges number {', '.join(str(i) for i in retention)} must tease that number one is still ahead, without naming it. "
@@ -668,7 +686,7 @@ class Writer:
                 text += "."
             words = len(text.split())
             next_title = titles[order[position + 1]]
-            if (not 5 <= words <= 22 or _mentioned_titles(text, [next_title]) or re.search(r"\b(?:like|subscribe)\b", text, re.I)
+            if (not text or _mentioned_titles(text, [next_title]) or re.search(r"\b(?:like|subscribe)\b", text, re.I)
                     or re.search(r"\bnumber\s+(?!one\b)(?:\w+)", text, re.I)):
                 continue
             result[order[position]] = text
