@@ -31,6 +31,35 @@ from movie_pipeline.packaging import MIDROLLS
 from movie_pipeline.video_settings import export_size
 
 
+
+def assert_rank_introduction_sequence(events, chapters, cues, speed, count):
+    """The complete announcement and its captions precede native preview and review body."""
+    announcements = [event for event in events if event.get('rank_announcement')]
+    previews = [event for event in events if event['type'] == 'review-preview']
+    assert len(announcements) == len(previews) == count
+    for position, (announcement, preview, chapter) in enumerate(zip(announcements, previews, chapters[1:-1])):
+        rank = count - position
+        assert announcement['type'] == 'narration'
+        assert announcement['section_kind'] == 'film'
+        assert announcement['text'] == f'Number {rank}: Movie {rank}.'
+        assert announcement['film'] == preview['film'] == f'Movie {rank}'
+        index = events.index(announcement)
+        assert events[index+1] == preview
+        assert preview.get('narration') is False
+        assert announcement['start'] + announcement['duration'] == pytest.approx(preview['start'])
+        body = events[index+2]
+        assert body['type'] == 'narration' and not body.get('rank_announcement')
+        assert body['film'] == announcement['film']
+        assert body['text'] == f'Review number {rank} is easy to follow.'
+        assert body['start'] == pytest.approx(preview['start']+preview['duration'])
+        assert chapter['start'] == pytest.approx(announcement['start']/speed)
+        spoken_cues = [cue for cue in cues
+                       if cue['start'] >= announcement['start']/speed-.001
+                       and cue['end'] <= (announcement['start']+announcement['duration'])/speed+.001]
+        assert ' '.join(cue['text'] for cue in spoken_cues) == announcement['text']
+        assert spoken_cues[0]['start'] == pytest.approx(announcement['start']/speed)
+        assert spoken_cues[-1]['end'] <= preview['start']/speed+.001
+
 @pytest.mark.parametrize("count,try_4k,source_height,expected_size,extra_mode,content_type,narrator", [
     (2,"true",2160,(3840,2160),"found",None,None),
     (2,"false",1080,(1920,1080),"native-scenes","Movies","Warguy"),
@@ -142,6 +171,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 raise RuntimeError('Initial narration generation unavailable')
             if text in {first, second}:
                 seconds = 6
+            elif text.startswith("Number "):
+                seconds = 2.5  # a short, separately verified rank/title announcement
             elif text.startswith("Review number"):
                 seconds = 120 if count == 2 else 47
             elif text.startswith(("It's listed", "You can find it")):
@@ -235,13 +266,20 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                 for i, seconds in enumerate(lengths)]
 
     def speech_video(source, audio, selected, target, label, work, **kwargs):
-        if extra_mode == 'render-fails' and any('-extra' in cut.get('source', '') for cut in selected):
+        if extra_mode == 'render-fails' and label is None and any('-extra' in cut.get('source', '') for cut in selected):
             records['render_fallbacks'] = records.get('render_fallbacks', 0)+1
             raise PipelineError('Optional decoder failed')
         render_sizes.append(export_size())
         text = text_for_audio[str(audio)]
-        assert label is None  # Rank labels belong to previews, never the spoken review.
-        records.setdefault('spoken_renders', []).append({'text': text, 'target': str(target)})
+        announcing = text.startswith("Number ")
+        assert bool(label) is announcing, 'Only the rank announcement carries the rank/title/year box'
+        if announcing:
+            assert selected and all(cut.get('still') for cut in selected)
+            assert kwargs.get('label_seconds', 0) >= durations[str(audio)]
+        records.setdefault('spoken_renders', []).append({
+            'text': text, 'target': str(target), 'label': str(label) if label else None,
+            'selected': copy.deepcopy(selected), **kwargs,
+        })
         make(target, durations[str(audio)])
 
     def trailer_video(source, start, seconds, target, **kwargs):
@@ -418,7 +456,8 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
                     index=section["film"]
                     assert len(pools[index])==5
                     previews[i]=clip(pools[index][4],60,8,index)
-                    inserts[i]={0:clip(pools[index][3],90,8,index)}
+                    assert section.get("rank_intro_version") == 1
+                    inserts[i]={1:clip(pools[index][3],90,8,index)}
             return {"opening":[clip(pools[0][2],20,5,0)],"previews":previews,"inserts":inserts,"report":{}}
         monkeypatch.setattr("movie_pipeline.moments.plan_episode",native_plan)
     monkeypatch.setattr(render, 'thumbnails', thumbnails)
@@ -474,11 +513,10 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         assert all("extra-5" in event["shots"][0]["source"] for event in previews)
         assert len([cue for cue in written_cues if cue["text"]=="A complete scene sentence."])==1+count*2
         assert all(a["end"]<=b["start"]+.001 for a,b in pairwise(written_cues))
-        for preview,chapter in zip(previews,embedded[1:-1]):
-            assert chapter["start"]==pytest.approx(preview["start"]/timeline["speed"])
+        assert_rank_introduction_sequence(events, embedded, written_cues, timeline["speed"], count)
         cta_index=next(i for i,e in enumerate(events) if e["type"]=="subscribe")
         assert events[cta_index-1]["type"]=="trailer-audio"
-        assert events[cta_index+1]["type"]=="review-preview"
+        assert events[cta_index+1].get("rank_announcement") is True
         assert records["final_duration"]==pytest.approx((sum(durations[p] for p in records["parts"])+3)/1.02)
         assert events[0]["type"]=="brand-ident"
         return
@@ -496,7 +534,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert saved_input['content_type'] == (expected_kind if content_type else 'auto')
     assert saved_input['narrator'] == expected_narrator
     # Cold opening and title previews add intentional screen time to the old plan.
-    added_visual_seconds = 2.3 + 5 + count*5.0 + cli.END_SCREEN_SECONDS
+    added_visual_seconds = 2.3 + 5 + count*(2.5+5.0) + cli.END_SCREEN_SECONDS
     if extra_mode in {'title-cards', 'title-card-fails'}:
         added_visual_seconds += (count-(extra_mode == 'title-card-fails'))*1.5
     # All rendered parts, final hold and metadata use the same measured timebase.
@@ -570,16 +608,20 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     previews = [event for event in events if event['type'] == 'review-preview']
     assert len(previews) == count
     assert all(event['duration'] == pytest.approx(5.0) for event in previews)
-    labelled = [event for event in records['trailer_renders'] if event.get('label') is not None
-                and Path(event['label']).name != 'number-one-tease.png']
+    assert all(event.get('label') is None for event in records['trailer_renders']), \
+        'Native previews play after the labelled announcement, without a duplicate reveal'
+    labelled = [event for event in records['spoken_renders'] if event.get('label') is not None]
     assert len(labelled) == count
+    assert [event['text'] for event in labelled] == [
+        f'Number {i+1}: Movie {i+1}.' for i in reversed(range(count))
+    ]
     teasers = [event for event in events if event['type'] == 'teaser']
     assert len(teasers) == 0  # short lists have no countdown to tease
     if teasers:
         assert teasers[0]['duration'] == pytest.approx(3.0)
         intro_end = max(e['start'] + e['duration'] for e in events if e.get('section_kind') == 'intro')
         assert teasers[0]['start'] == pytest.approx(intro_end)  # right after the intro, before the countdown
-    assert all(event['label_seconds'] == 5.0 for event in labelled)
+    assert all(event['label_seconds'] >= 2.5 for event in labelled)
     ctas = [(i, event) for i, event in enumerate(events) if event.get('type') == 'subscribe']
     assert len(ctas) == 1
     index, cta = ctas[0]
@@ -589,8 +631,9 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert events[index-1]['film'] != events[index+1]['film']
     preceding_review = next(e for e in reversed(events[:index]) if e.get('type')=='narration' and e.get('section_kind')=='film')
     assert preceding_review['text'].startswith("Review number")  # preceding review completed
-    assert events[index+1]['type'] == 'review-preview'  # next review begins after the CTA
-    assert events[index+2]['text'].startswith('Review number')
+    assert events[index+1].get('rank_announcement') is True
+    assert events[index+2]['type'] == 'review-preview'
+    assert events[index+3]['text'].startswith('Review number')  # body starts after the full preview
     cards = [(i, event) for i, event in enumerate(events) if event['type'] == 'title-card']
     if extra_mode in {'title-cards', 'title-card-fails'}:
         assert len(records['title_card_plans']) == count
@@ -618,7 +661,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
             assert previous["type"] in {"narration","trailer-audio"}
             assert previous["film"] == card["film"]
             following = events[card_index+1]
-            assert following['type'] in {'subscribe', 'review-preview'} or following.get('section_kind') == 'outro'
+            assert following['type'] == 'subscribe' or following.get('rank_announcement') or following.get('section_kind') == 'outro'
             card_start = card['start']/timeline['speed']
             card_end = (card['start']+card['duration'])/timeline['speed']
             assert all(cue['end'] <= card_start+.001 or cue['start'] >= card_end-.001
@@ -631,14 +674,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
     assert not any('subscribe' in chapter['title'].casefold() for chapter in embedded)
     assert embedded == timeline['chapters']
     assert embedded[0]['start'] == 0
-    for preview, chapter in zip(previews, embedded[1:-1]):
-        assert chapter['start'] == pytest.approx(preview['start']/timeline['speed'])
-        following = next(event for event in events if event['type'] == 'narration'
-                         and event.get('section_kind') == 'film' and event['film'] == preview['film'])
-        assert following['start'] == pytest.approx(preview['start']+5.0)
-        cue = next(cue for cue in written_cues if cue['start'] >= following['start']/timeline['speed'] - .001)
-        assert following['text'].startswith(cue['text'])
-        assert cue['start'] == pytest.approx(following['start']/timeline['speed'])
+    assert_rank_introduction_sequence(events, embedded, written_cues, timeline['speed'], count)
     cta_cues = [cue for cue in written_cues if cue['text'] in records['cta_text']]
     assert ' '.join(cue['text'] for cue in cta_cues) == records['cta_text']
     assert cta_cues[0]['start'] == pytest.approx(cta['start']/timeline['speed'])

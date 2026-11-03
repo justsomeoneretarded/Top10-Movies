@@ -150,3 +150,13 @@ def test_no_automatic_genre_music_for_an_unspecified_episode(monkeypatch):
 def test_transition_fx_are_opt_in(monkeypatch):
     monkeypatch.delenv("TRANSITION_FX", raising=False)
     assert effect_events(TIMELINE, 1.0) == []
+
+
+def test_optional_reveal_sound_follows_announcement_not_native_scene(monkeypatch):
+    from movie_pipeline.sound_design import effect_events
+    monkeypatch.setenv("TRANSITION_FX", "true")
+    announcement = {"start": 10, "duration": 3, "type": "narration",
+                    "section_kind": "film", "rank_announcement": True}
+    preview = {"start": 13, "duration": 8, "type": "review-preview"}
+    assert effect_events([announcement, preview], 1) == effect_events([announcement], 1)
+    assert effect_events([announcement], 1)
