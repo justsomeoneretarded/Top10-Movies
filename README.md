@@ -26,7 +26,7 @@ Open **[Actions → Generate Video](https://github.com/justsomeoneretarded/Top10
 
 After a code update, start a **new run** with branch **main** selected. GitHub's **Re-run jobs** button repeats the original run's commit; it does not use the latest fixes from main.
 
-There are seven inputs: title, description / creative brief, movies, a **Movies or Shows** dropdown, a **Narrator** dropdown, a **Video length in minutes** selector, and a **Try 4K** checkbox. Defaults are Movies, Warguy, Auto and Try 4K checked. The script fact-check checkbox and factual/spoiler gates have been removed. A general writing editor still improves clarity and removes filler; it does not enforce source-claim or spoiler checks. Movie identity, audio completeness and timing checks remain separate.
+There are eight inputs: title, description / creative brief, movies, a **Movies or Shows** dropdown, a **Narrator** dropdown, a **Speech model** dropdown, a **Video length in minutes** selector, and a **Try 4K** checkbox. Defaults are Movies, Warguy, original Chatterbox, Auto and Try 4K checked. The script fact-check checkbox and factual/spoiler gates have been removed. A general writing editor still improves clarity and removes filler; it does not enforce source-claim or spoiler checks. Movie identity, audio completeness and timing checks remain separate.
 
 ```text
 Title:
@@ -46,6 +46,9 @@ Movies (default), or Shows for a list of TV / streaming series
 
 Narrator:
 Kit Laser (Warguy is the default; Female is also available)
+
+Speech model:
+original (default)
 
 Video length in minutes:
 Auto (default), or choose a number such as 8
@@ -89,7 +92,7 @@ Upload the SRT separately in YouTube Studio. Captions cover narration and retain
 4. Fetch primary footage in a first round: download one usable primary trailer for every title before looking for second trailers. Choose the highest shared export resolution up to the checkbox ceiling. In separate second and third rounds, try to add trailers with different scenes for each title at that resolution. Finish each round for all titles before starting the next; parallel footage warm-ups fetch primary trailers only. Discovery and retries are bounded; keep at most three trailers per title temporarily in `work/footage/`. One usable trailer is enough, and missing or rejected extra trailers never fail production. No user-supplied URLs or footage are required. Only accessible non-DRM footage is supported.
 5. Look up US streaming providers using TMDB's JustWatch-powered watch listings, with a 24-hour cache. Keep subscription, free, ads, rental, and purchase options distinct. Missing or unavailable listings are skipped without failing production.
 6. Plan the whole episode with `gemma4:12b` through local Ollama, then write plot-led reviews with varied openings and a general spoken-language editing pass. Story context is separated from ratings, taglines and database readouts. There is no adjective-replacement dictionary, mandatory opening rotation, retained-length percentage, or rank-based narration quota. Editing may shorten a section substantially. Auto supplies no review word target; selected minutes remain soft ±25% guidance.
-7. Clone the selected reference with **Chatterbox Turbo on CPU**, preserving the same narrator and processing chain. Generate bounded complete thoughts, account for existing silence between phrases, and choose pitch-preserving pacing from the measured take rather than blindly stacking speed multipliers. Short title announcements keep their articulation. Retry incomplete or invalid speech with the same voice.
+7. Clone the selected reference with **original Chatterbox on CPU**, using one model and the same selected voice reference throughout the episode. Preserve the existing audio processing chain. Generate bounded complete thoughts, account for existing silence between phrases, and choose pitch-preserving pacing from the measured take rather than blindly stacking speed multipliers. Short title announcements keep their articulation. Retry incomplete or invalid speech with the same voice.
 8. Transcribe narration and primary-trailer dialogue with CPU/int8 faster-whisper. Verify overall narration and its opening/closing words, retrying incomplete speech. Place one funny like/subscribe break at a review boundary around 30–50% of measured runtime; shorten its audio to keep it below 10 seconds after final tempo adjustment.
 9. Match frames from the accepted source pool loosely to the current narration using CLIP. Use up to three trailers when useful. Shot length follows each line's delivery: hype lines cut at up to about 4.5 seconds (3.8 for action lists), normal lines about 7, calm 9 and dramatic 10, with spaced face holds and a multi-title intro. Weak visual matches never cause a relevance-validation failure.
 10. Open with a 2.3-second animated MOVIE RANKS ident: colored light ribbons resolve into the glossy red M with an original two-hit sting. The footage-led cold open stays brief unless genuinely compelling action justifies more time. Every ranked entry first speaks “Number N: Title” over a matching trailer still and animated rank/title/year card. A complete narration-free preview follows, then the review begins without repeating the announcement. Native scene audio takes priority over the music bed during suitable previews. Chapters begin at the spoken reveal, and subtitles use each separately verified speech take. Close with the existing end screen and final hold.
@@ -120,7 +123,7 @@ Set these in **Settings → Secrets and variables → Actions → Variables**. N
 
 | Variable | Default | Effect |
 |---|---|---|
-| `TTS_MODEL` | `turbo` | `nano` uses the smaller Chatterbox model for faster CPU runs. |
+| Speech model input / local `TTS_MODEL` | `original` | Select original Chatterbox, `turbo`, or `nano` for the whole run. |
 | `THUMBNAIL_SOURCE` | `stills` | `ai` uses the generated-scene thumbnail designs instead of TMDB stills. |
 | `THUMBNAIL_TEXT` | `none` | `minimal` adds a 2–3 word label along the bottom of the panels thumbnail. |
 | `COMPARISON_EXPORT` | `false` | `true` also exports the augmented comparison video (roughly doubles final encode time). |
@@ -144,7 +147,7 @@ These are best-effort workarounds, not guarantees; the clear bot-check failure m
 
 ## CPU performance and reliability
 
-Turbo is the quality-oriented default, **not a benchmarked speed promise**. To use the smaller CPU-focused model, set repository **variable** `TTS_MODEL` to `nano`. Both use the same voice reference, and the pipeline never switches voices silently.
+Original Chatterbox is the default for future runs. The **Speech model** input applies to all warm-up and final jobs; it does not read the old repository `TTS_MODEL` variable. Explicit Turbo/Nano choices remain available. Local CLI runs use `TTS_MODEL=original` by default. All deliveries use one selected model and reference, without a separate emotional model or darker recording. Original's expression changes gently by delivery; local `VOICE_EMOTION=false` keeps its neutral settings without changing models. Generation stays bounded to about 45 words per original-model request to leave room below its speech-token limit, preserving the full text across requests. Original can take longer on CPU; incomplete speech retains same-model retries and transcript verification. Its own weights are downloaded by the existing pinned `chatterbox-tts` dependency and cached under the selected model. Speech caches include model, reference, delivery settings and phrase policy, so Turbo recordings cannot be returned for original Chatterbox. Existing model/Python caches are preserved.
 
 Public and private GitHub-hosted runners have different resource allowances. The workflow has a 350-minute timeout; first runs download several GB of models and dependencies. Model and job caches accelerate later runs, but GitHub may evict them. Free storage/minute quotas are finite; inspect your account's billing settings. Standard GitHub runners do not provide a free GPU. A failed/timed-out run delivers no partial package. Re-running a failed job can restore checkpoints saved by the failure handler; runner cancellation/timeouts may prevent cache saving.
 
@@ -321,7 +324,7 @@ The reference direction is expressive close-ups, intense genre-appropriate scene
 - **Fallback:** provider failure, blank images, or duplicate winners use local artwork and trailer subject cutouts. CPU rembg/U2Net and OpenCV extraction are now fallback tools only; successful complete scenes never get pasted trailer subjects over them.
 - **Outputs:** three 1280×720 JPEGs below 2 MB each. Candidate scores, selected seeds, fallback methods, and concepts are recorded in `thumbnail-work/thumbnail-report.json`, outside the downloadable package. Updated concept/image cache versions prevent old background-only plans from being reused.
 
-Audio stays Chatterbox Turbo by default; Pocket TTS remains excluded. Only generated visual prompts are sent to the public image provider, not voice recordings, tokens, or the whole script. Free service availability and quality are not guaranteed. Live provider quality must be checked on the GitHub runner; offline tests cover selection, composition, cache behavior, fallback, and file constraints.
+Audio uses original Chatterbox by default; Pocket TTS remains excluded. Only generated visual prompts are sent to the public image provider, not voice recordings, tokens, or the whole script. Free service availability and quality are not guaranteed. Live provider quality must be checked on the GitHub runner; offline tests cover selection, composition, cache behavior, fallback, and file constraints.
 
 
 ### Clean and augmented comparison exports
