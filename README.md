@@ -156,6 +156,8 @@ Automated shot matching, trailer dialogue selection, factual accuracy, and narra
 
 ## Resolution, disk space, and downloaded footage
 
+Model setup now frees only unused SDKs on GitHub-hosted runners, preserves Python/model caches, and checks working-disk headroom before large installs. Ollama uses a pinned, checksum-verified archive with CPU runtime extraction and bounded retries. If optional voice pre-generation would leave too little space for the script model, the main job records that narration later with the same voice and quality. See [runner setup and disk safeguards](docs/RUNNER-SETUP.md). Start a new run from **main** to use updates; re-running a historical run uses its historical code.
+
 The **Try 4K** checkbox is checked by default. Checked means “choose the best shared quality up to **3840×2160**”; unchecked caps the search and export at **1920×1080**. The brief no longer controls resolution, and no `VIDEO_RESOLUTION` repository variable is needed. Thumbnails remain 1280×720 JPEGs.
 
 The pipeline downloads the best primary trailer for each title, checks their actual dimensions, then chooses the highest export resolution all primary sources support. All-4K sources can produce 4K; a mix of 4K and 1080p produces 1080p; 1440p, 720p, or lower sources lower the shared export accordingly. A weaker source is not stretched to force a 4K-sized file. If a low-resolution candidate would lower the result, the downloader first checks other candidate trailers for that movie and prefers a better source when available. It retains at most three trailers per title, with an 800 MB cap for each file.
