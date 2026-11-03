@@ -88,3 +88,20 @@ def test_native_insert_planner_never_inserts_between_announcement_and_preview(mo
         {(0, 0): Path("name.wav"), (0, 1): Path("one.wav"), (0, 2): Path("two.wav")}, {}, None, tmp_path)
     assert result["previews"][0]["duration"] == 8
     assert set(result["inserts"][0]) == {1, 2}
+
+
+@pytest.mark.parametrize("title", ["Air!", "Who Framed Roger Rabbit?"])
+def test_title_punctuation_ends_the_announcement_without_repeating_it(title):
+    script = {"sections": [{"kind": "film", "film": 0,
+                           "paragraphs": [f"Number 1: {title} A detective needs answers."]}]}
+    result = prepare_rank_intros(script, [{"title": title}])["sections"][0]
+    assert result["paragraphs"] == [f"Number 1: {title}", "A detective needs answers."]
+    assert prepare_rank_intros({"sections": [result]}, [{"title": title}])["sections"][0] == result
+
+
+def test_punctuated_title_as_subject_keeps_the_review_verb():
+    title = "Air!"
+    script = {"sections": [{"kind": "film", "film": 0,
+                           "paragraphs": [f"Number 1: {title} follows two friends."]}]}
+    result = prepare_rank_intros(script, [{"title": title}])["sections"][0]
+    assert result["paragraphs"] == [f"Number 1: {title}", "Air! follows two friends."]

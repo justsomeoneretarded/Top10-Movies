@@ -48,6 +48,9 @@ def _body_after_lead(text: str, title: str) -> str:
         return ""
     if boundary:
         return tail[boundary.end():].strip()
+    if title.endswith((".", "!", "?")) and re.match(r"^\s+[A-Z0-9]", tail):
+        # The title itself may supply the sentence-ending punctuation.
+        return tail.strip()
     # A bare title can be part of the actual review; remove only a ranking prefix.
     return text[offset:].strip() if match else text
 
