@@ -15,7 +15,7 @@ import requests
 from PIL import Image
 
 SOURCE_REF = "3cd940af8cd795393388f117f4e8c091cde72d0c"
-CANDIDATES = [{"path":"homer-disappear-bush.gif","sha":"bae881b7572901037c24c0d097ed1bc923eaf563"},{"path":"picard-facepalm.gif","sha":"c7c95455aa4dbbeb351c052fbad88ccdfb90002e"},{"path":"keanu-thumbs-up.gif","sha":"4c1d2763616721428cba4f410c89fb89839660f5"},{"path":"dramatic-pug.gif","sha":"2572823fde947dd79b808167c3a9089b98d88173"},{"path":"baby-owls.gif","sha":"98bf70a8cacda679fd4e5e3de0e9a8e75ef2ec73"},{"path":"inception-top.gif","sha":"de610aa13bad25a3da2baedfd3f6748a7d84f4a1"}]
+CANDIDATES = [{"path":"homer-disappear-bush.gif","sha":"bae881b7572901037c24c0d097ed1bc923eaf563"},{"path":"picard-facepalm.gif","sha":"c7c95455aa4dbbeb351c052fbad88ccdfb90002e"},{"path":"keanu-thumbs-up.gif","sha":"4c1d2763616721428cba4f410c89fb89839660f5"},{"path":"dramatic-pug.gif","sha":"2572823fde947dd79b808167c3a9089b98d88173"},{"path":"nathan-fillion-booyah.gif","sha":"75dc494bdf5b5fca5eaf3349e6de24f3b2021c2c"},{"path":"mic-drop-bryan-cranston.gif","sha":"48c251b84357a886127fa2c074da32dc5a2ba2a3"}]
 
 
 def main():
