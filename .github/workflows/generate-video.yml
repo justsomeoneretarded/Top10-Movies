@@ -199,13 +199,15 @@ jobs:
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare disk before model tools and caches
+        run: python3 -m scripts.runner_disk --stage plan
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
       - name: System dependencies
         timeout-minutes: 35
-        run: bash scripts/install_system_packages.sh ffmpeg
+        run: bash scripts/install_system_packages.sh ffmpeg zstd
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -324,13 +326,15 @@ jobs:
       TORCH_HOME: ${{ github.workspace }}/work/models/torch
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare disk before model tools and caches
+        run: python3 -m scripts.runner_disk --stage script
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
       - name: System dependencies
         timeout-minutes: 35
-        run: bash scripts/install_system_packages.sh ffmpeg
+        run: bash scripts/install_system_packages.sh ffmpeg zstd
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -342,6 +346,9 @@ jobs:
           path: work/models
           key: models-cpu-v3-thumbnails-${{ runner.os }}-${{ env.TTS_MODEL }}-${{ env.SCRIPT_MODEL }}
           restore-keys: models-cpu-v2-${{ runner.os }}-${{ env.TTS_MODEL }}-${{ env.SCRIPT_MODEL }}
+      - name: Keep script-model space before optional voice setup
+        if: env.VOICE_WARM == 'true'
+        run: python3 -m scripts.runner_disk --stage voice-warm --optional-voice
       - name: Install the voice model
         if: env.VOICE_WARM == 'true'
         continue-on-error: true
@@ -405,6 +412,8 @@ jobs:
       SCENE_SAMPLE_FRAMES: '6'
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare disk before model tools and caches
+        run: python3 -m scripts.runner_disk --stage footage
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -414,7 +423,7 @@ jobs:
           node-version: '22'
       - name: System dependencies
         timeout-minutes: 35
-        run: bash scripts/install_system_packages.sh ffmpeg tesseract-ocr
+        run: bash scripts/install_system_packages.sh ffmpeg tesseract-ocr zstd
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -443,11 +452,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/warp_proxy.sh
       - name: Start local Ollama for scene descriptions
-        run: |
-          curl --fail --show-error --location --retry 3 https://ollama.com/install.sh -o "$RUNNER_TEMP/ollama.sh"
-          sh "$RUNNER_TEMP/ollama.sh"
-          (ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &)
-          for i in $(seq 1 60); do curl -sf "$OLLAMA_URL/api/tags" >/dev/null && break; sleep 1; done
+        run: bash scripts/bootstrap_ollama.sh --serve-only
       - name: Download and analyse one title's trailer
         run: bash scripts/run_logged.sh "Footage" python -m movie_pipeline.cli --stage footage
       - name: Package the footage
@@ -505,6 +510,8 @@ jobs:
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare disk before model tools and caches
+        run: python3 -m scripts.runner_disk --stage produce
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
