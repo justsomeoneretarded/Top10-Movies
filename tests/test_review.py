@@ -36,3 +36,52 @@ def test_intro_and_recap_repeats_are_not_counted():
     frames = [(0, pattern), (10, other), (40, pattern)]
     assert repeated_shots(frames, ignore_after=100, ignore=[(35, 45)]) == []
     assert repeated_shots(frames, ignore_after=100, ignore=[(0, 5)]) == []
+
+
+
+def test_thumbnail_scores_cover_all_numbered_options_in_numeric_order(tmp_path, monkeypatch):
+    from movie_pipeline import scenes
+    from movie_pipeline.review import thumbnail_scores
+
+    monkeypatch.setattr(scenes, "enabled", lambda: False)
+    for name in ("thumbnail-01.jpg", "thumbnail-02.jpg", "thumbnail-09.jpg",
+                 "thumbnail-10.jpg", "thumbnail-11.jpg", "thumbnail-02-backup.jpg"):
+        Image.new("RGB", (64, 36), (90, 20, 20)).save(tmp_path / name)
+    (tmp_path / "thumbnail-12.jpg").mkdir()  # Ignore a similarly named directory.
+    rows = thumbnail_scores(tmp_path, "horror")
+    assert [row["file"] for row in rows] == [
+        "thumbnail-01.jpg", "thumbnail-02.jpg", "thumbnail-09.jpg",
+        "thumbnail-10.jpg", "thumbnail-11.jpg",
+    ]
+
+
+def test_repeat_review_reports_when_sampled_comparison_is_unavailable(tmp_path, monkeypatch):
+    from movie_pipeline import review
+
+    monkeypatch.setattr(review, "duration", lambda video: 30.0)
+    monkeypatch.setattr(review, "_frames", lambda *args: [])
+    monkeypatch.setattr(review, "black_frames", lambda video: [])
+    monkeypatch.setattr(review, "loudness_profile", lambda video: np.zeros(0))
+    monkeypatch.setattr(review, "thumbnail_scores", lambda *args: [])
+    review.build_review(tmp_path, [], [], "neutral", ending_seconds=5)
+    page = (tmp_path / "review.html").read_text()
+    assert "Not enough comparable frames" in page
+    assert "samples one frame every two seconds" in page
+    assert "can miss shorter or visually different repeats" in page
+
+
+def test_repeat_review_describes_the_limit_of_a_zero_result(tmp_path, monkeypatch):
+    from movie_pipeline import review
+
+    first = Image.effect_mandelbrot((320, 180), (-2, -1, 1, 1), 60).convert("RGB")
+    second = Image.linear_gradient("L").resize((320, 180)).convert("RGB")
+    monkeypatch.setattr(review, "duration", lambda video: 90.0)
+    monkeypatch.setattr(review, "_frames", lambda *args: [(2.0, first), (42.0, second)])
+    monkeypatch.setattr(review, "black_frames", lambda video: [])
+    monkeypatch.setattr(review, "loudness_profile", lambda video: np.zeros(0))
+    monkeypatch.setattr(review, "thumbnail_scores", lambda *args: [])
+    summary = review.build_review(tmp_path, [], [], "neutral", ending_seconds=5)
+    page = (tmp_path / "review.html").read_text()
+    assert summary["repeated_shots"] == 0
+    assert "No matching sampled frames" in page
+    assert "can miss shorter or visually different repeats" in page
