@@ -206,6 +206,57 @@ def transcript_from_file(path: Path) -> dict:
                             "Captions may include narration or other dialogue; speaker identity is not inferred."]}
 
 
+
+def summarize_transcript(transcript: dict, media_seconds: float) -> dict:
+    """Summarize speech timestamps without inferring speakers or quality."""
+    if not transcript.get("available"):
+        return {"available": False, "reason": "No transcript available."}
+    segments = transcript.get("segments", [])
+    words = sum(len(re.findall(r"\b[\w']+\b", str(segment.get("text", ""))))
+                for segment in segments if isinstance(segment, dict))
+    intervals = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        start, end = segment.get("start"), segment.get("end")
+        if (isinstance(start, bool) or isinstance(end, bool)
+                or not isinstance(start, (int, float)) or not isinstance(end, (int, float))
+                or not math.isfinite(start) or not math.isfinite(end)):
+            continue
+        start, end = max(0.0, float(start)), min(float(media_seconds), float(end))
+        if end > start:
+            intervals.append((start, end))
+    if not intervals:
+        return {"available": True, "word_count": words, "timed": False,
+                "limitations": ["Untimed text does not establish when speech occurs."]}
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    spoken = sum(end - start for start, end in merged)
+    gaps = []
+    previous = 0.0
+    for start, end in merged:
+        if start - previous >= 2.0:
+            gaps.append({"start": round(previous, 3), "end": round(start, 3)})
+        previous = end
+    if media_seconds - previous >= 2.0:
+        gaps.append({"start": round(previous, 3), "end": round(media_seconds, 3)})
+    return {"available": True, "timed": True, "word_count": words,
+            "first_caption_seconds": round(merged[0][0], 3),
+            "captioned_speech_seconds": round(spoken, 3),
+            "captioned_fraction": round(spoken / media_seconds, 3),
+            "approximate_words_per_captioned_minute": round(words * 60 / spoken, 1),
+            "uncaptioned_intervals_at_least_two_seconds": gaps,
+            "limitations": [
+                "Speech may include movie dialogue, narration, or other speakers.",
+                "ASR and captions can omit or mis-time speech; gaps are not confirmed silence.",
+                "Word rate and caption coverage depend on the source and do not measure delivery quality.",
+            ]}
+
+
 def _comparable(reference, production):
     """Only compare metrics measured in both; do not imply a causal or quality verdict."""
     values = {
@@ -307,6 +358,7 @@ def analyze(video: Path, output: Path, *, transcribe: bool = False, voice_stem: 
         report["transcript"] = transcript_from_file(Path(transcript_path))
     elif transcribe and report["mixed_audio"]["available"]:
         report["transcript"] = transcribe_audio(video)
+    report["transcript_summary"] = summarize_transcript(report["transcript"], seconds)
     save_json(output / "reference-analysis.json", report)
     write_report(output / "reference-analysis.md", report)
     return report
@@ -328,6 +380,20 @@ def write_report(path: Path, report: dict):
         lines.extend(f"- {segment['start']:.1f}–{segment['end']:.1f}s: {segment['text']}" if segment["start"] is not None else f"- {segment['text']}" for segment in transcript["segments"])
     else:
         lines.append(str(transcript.get("reason", "Unavailable.")))
+    stats = report.get("transcript_summary", {})
+    if stats.get("available"):
+        lines.extend(["", "## Approximate speech timing", "",
+                      f"Words in transcript: {stats.get('word_count')}."])
+        if stats.get("timed"):
+            lines.extend([
+                f"First caption: {stats['first_caption_seconds']} seconds.",
+                f"Captioned fraction: {stats['captioned_fraction']:.1%}.",
+                f"Approximate words per captioned minute: {stats['approximate_words_per_captioned_minute']}.",
+                "Uncaptioned intervals of at least two seconds (not confirmed silence): "
+                + (", ".join(f"{gap['start']}–{gap['end']}s"
+                             for gap in stats['uncaptioned_intervals_at_least_two_seconds'][:30]) or "none"),
+            ])
+        lines.extend("- " + item for item in stats.get("limitations", []))
     lines.extend(["", "## Interpretation limits", ""])
     lines.extend("- " + item for item in report["limitations"] + visual["limitations"] +
                  sound.get("limitations", []) + transcript.get("limitations", []))

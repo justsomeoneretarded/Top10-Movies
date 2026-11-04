@@ -50,7 +50,7 @@ narrator or music track. Diagnostic snippets do not represent a whole episode.
   plus a contact sheet with timestamps.
 - Integrated loudness and true peak of the mixed soundtrack, and intervals where
   the whole mixed soundtrack falls below the reported silence threshold.
-- A provided or optionally recognized transcript with timestamps when available.
+- A provided or optionally recognized transcript with timestamps when available, plus approximate captioned speech coverage and longer uncaptioned intervals. Gaps are not confirmed silence and can include missed narration or dialogue.
 - Direct measurements from genuinely isolated voice or music stems, if supplied.
 
 Cuts may be missed, and a sudden camera move can be mistaken for a cut. Fades,

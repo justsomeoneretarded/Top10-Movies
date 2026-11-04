@@ -126,3 +126,27 @@ def test_contact_sheet_falls_back_to_ffmpeg_when_opencv_cannot_decode(reference_
     output = tmp_path / "contact.jpg"
     timestamps = ref._contact_sheet(reference_video, 4.0, output)
     assert timestamps and output.is_file()
+
+
+def test_transcript_summary_merges_overlaps_and_labels_uncaptioned_gaps():
+    transcript = {"available": True, "segments": [
+        {"start": 1.0, "end": 3.0, "text": "One two"},
+        {"start": 2.0, "end": 4.0, "text": "Three"},
+        {"start": 8.0, "end": 9.0, "text": "Four"},
+    ]}
+    stats = ref.summarize_transcript(transcript, 12.0)
+    assert stats["word_count"] == 4
+    assert stats["captioned_speech_seconds"] == 4.0
+    assert stats["first_caption_seconds"] == 1.0
+    assert stats["uncaptioned_intervals_at_least_two_seconds"] == [
+        {"start": 4.0, "end": 8.0}, {"start": 9.0, "end": 12.0},
+    ]
+    assert "not confirmed silence" in " ".join(stats["limitations"])
+
+
+def test_untimed_or_missing_transcript_does_not_invent_speech_timing():
+    assert ref.summarize_transcript({"available": False}, 10)["available"] is False
+    stats = ref.summarize_transcript(
+        {"available": True, "segments": [{"start": None, "end": None, "text": "Two words."}]}, 10)
+    assert stats["word_count"] == 2 and stats["timed"] is False
+    assert "first_caption_seconds" not in stats
