@@ -407,7 +407,15 @@ class Writer:
                     refreshed["package"]["subscribe"] = suggestion
             except (requests.RequestException, ValueError, TypeError, KeyError):
                 pass
-        refreshed.setdefault("package", {})["script_policy_version"] = SCRIPT_POLICY_VERSION
+        package = refreshed.setdefault("package", {})
+        package["script_policy_version"] = SCRIPT_POLICY_VERSION
+        if package.get("full_episode_edit_version") != 1:
+            # A restored complete script predating the full-episode edit can
+            # keep its good per-film drafts while adopting the new pass.
+            self._episode_edit_succeeded = False
+            refreshed["sections"] = self.episode_edit(title, brief, refreshed.get("sections", []))
+            if self._episode_edit_succeeded:
+                package["full_episode_edit_version"] = 1
         from .packaging import refresh_availability
         return refresh_availability(refreshed, films)
 
@@ -710,68 +718,88 @@ class Writer:
         return result
 
     def episode_edit(self, title: str, brief: str, sections: list[dict]) -> list[dict]:
-        """Delete-only full-episode pass: remove repetition without inventing facts."""
-        units=[]
-        for i,section in enumerate(sections):
-            if section.get("kind") != "film":
+        """Delete repeated or empty sentences across the full episode without inventing facts."""
+        self._episode_edit_succeeded = False
+        units = []
+        for i, section in enumerate(sections):
+            kind = section.get("kind")
+            if kind not in {"intro", "film", "outro"}:
                 continue
-            for p,paragraph in enumerate(section.get("paragraphs",[])):
-                for n,sentence in enumerate(re.split(r"(?<=[.!?])\s+",paragraph.strip())):
-                    units.append({"id":f"{i}:{p}:{n}","text":sentence,"rank":section["film"]+1})
-        if len(units)<6:
+            for p, paragraph in enumerate(section.get("paragraphs", [])):
+                for n, sentence in enumerate(re.split(r"(?<=[.!?])\s+", paragraph.strip())):
+                    unit = {"id": f"{i}:{p}:{n}", "text": sentence, "kind": kind}
+                    if kind == "film":
+                        unit["rank"] = section["film"] + 1
+                    units.append(unit)
+        if len(units) < 6:
             return sections
-        cache=self.cache_dir/f"{key('episode-delete-v2-story',self.model,title,brief,units)}.json" if self.cache_dir else None
+        cache = self.cache_dir / f"{key('episode-delete-v3-full', self.model, title, brief, units)}.json" if self.cache_dir else None
         try:
-            if cache and cache.exists():
-                data=json.loads(cache.read_text())
+            fresh = not (cache and cache.exists())
+            if not fresh:
+                data = json.loads(cache.read_text())
             else:
-                schema={"type":"object","properties":{"remove":{"type":"array","maxItems":len(units),"items":{"type":"string"}}},
-                        "required":["remove"],"additionalProperties":False}
-                data=self.ask(
-                    f"Edit this WHOLE countdown for repetition. Title: {title}. Brief: {brief}. "
+                schema = {"type": "object", "properties": {"remove": {"type": "array", "maxItems": len(units), "items": {"type": "string"}}},
+                          "required": ["remove"], "additionalProperties": False}
+                data = self.ask(
+                    f"Edit this WHOLE countdown, including the intro and outro, for repetition. Title: {title}. Brief: {brief}. "
                     "Return IDs of sentences to DELETE only when they repeat an idea already covered, "
                     "are empty hype, forced comparison filler, an essay transition, or a spoken streaming listing. "
+                    "Keep a clear opening hook and a useful ending; preserve the audience question and any like/subscribe request. "
                     "Do not delete a unique premise, useful character detail, a supported reason to watch, "
                     "or a necessary setup/payoff. Different films may share a genre without being redundant. "
                     "Never delete a rank/title announcement. Empty remove array is fine. "
                     "No replacement prose; every remaining word stays exact. Units (JSON data): "
-                    +json.dumps(units,ensure_ascii=False),schema,temperature=.2,num_ctx=12288,num_predict=450)
-                if cache:
-                    save_json(cache,data)
-            requested=set(data.get("remove",[]))
-        except (requests.RequestException,ValueError,TypeError,AttributeError,KeyError,RuntimeError):
+                    + json.dumps(units, ensure_ascii=False), schema, temperature=.2, num_ctx=12288, num_predict=450)
+            removals = data.get("remove") if isinstance(data, dict) else None
+            if not isinstance(removals, list) or any(not isinstance(item, str) for item in removals):
+                raise ValueError("The whole-episode editor returned an invalid deletion list.")
+            if cache and fresh:
+                save_json(cache, data)
+            requested = set(removals)
+            self._episode_edit_succeeded = True
+        except (requests.RequestException, ValueError, TypeError, AttributeError, KeyError, RuntimeError) as exc:
+            print(f"Whole-episode edit unavailable ({type(exc).__name__}); keeping the complete draft for retry.", flush=True)
             return sections
-        result=deepcopy(sections)
-        # Preserve rank identification; creative cuts are not limited by a retention percentage.
-        removed=0
-        for i,section in enumerate(result):
-            if section.get("kind")!="film":
+        result = deepcopy(sections)
+        removed = 0
+        for i, section in enumerate(result):
+            kind = section.get("kind")
+            if kind not in {"intro", "film", "outro"}:
                 continue
-            original=section.get("paragraphs",[])
-            total=sum(len(p.split()) for p in original)
-            spent=0;edited=[];labels=[]
-            delivery=aligned_delivery(section)
-            for p,paragraph in enumerate(original):
-                sentences=re.split(r"(?<=[.!?])\s+",paragraph.strip())
-                kept=[]
-                for n,sentence in enumerate(sentences):
-                    identifier=f"{i}:{p}:{n}"
-                    words=len(sentence.split())
-                    protected=(p==0 and n==0 and bool(re.match(r"^(?:Number|At number|No\.?|#)\s*\d+",sentence,re.I)))
-                    if identifier in requested and not protected:
-                        spent+=words;removed+=1
+            original = section.get("paragraphs", [])
+            edited, labels = [], []
+            delivery = aligned_delivery(section)
+            section_removed = 0
+            for p, paragraph in enumerate(original):
+                sentences = re.split(r"(?<=[.!?])\s+", paragraph.strip())
+                kept = []
+                for n, sentence in enumerate(sentences):
+                    identifier = f"{i}:{p}:{n}"
+                    rank = kind == "film" and p == 0 and n == 0 and bool(
+                        re.match(r"^(?:Number|At number|No\.?|#)\s*\d+", sentence, re.I))
+                    ending = kind == "outro" and (
+                        sentence.rstrip().endswith("?") or bool(re.search(r"\b(?:like|subscribe)\b", sentence, re.I)))
+                    if identifier in requested and not (rank or ending):
+                        section_removed += 1
                     else:
                         kept.append(sentence)
                 if kept:
-                    edited.append(" ".join(kept));labels.append(delivery[p])
-            if edited:
-                # Optional cleanup cannot erase every review thought. Identification
-                # alone is not a review; keep the draft when all body units were removed.
+                    edited.append(" ".join(kept))
+                    labels.append(delivery[p])
+            if not edited or not section_removed:
+                continue
+            if kind == "film":
+                # Identification alone is not a review; retain the draft if
+                # deleting all body units would leave only the ranking.
                 body = [sentence for paragraph in edited for sentence in re.split(r"(?<=[.!?])\s+", paragraph)
                         if not re.match(r"^(?:Number|At number|No\.?|#)\s*\d+", sentence, re.I)]
-                if body:
-                    section["paragraphs"]=edited;section["delivery"]=labels
-        print(f"Whole-episode edit: removed {removed} redundant or empty sentences; no replacement padding.",flush=True)
+                if not body:
+                    continue
+            section["paragraphs"] = edited
+            section["delivery"] = labels
+            removed += section_removed
+        print(f"Whole-episode edit: removed {removed} redundant or empty sentences; no replacement padding.", flush=True)
         return result
 
     def thumbnail_concepts(self, title: str, brief: str, films: list[dict], sections: list[dict]) -> list[dict]:
@@ -931,6 +959,8 @@ class Writer:
             raise PipelineError("Invalid generated thumbnail text.")
         package["thumbnail_concepts"] = self.thumbnail_concepts(title, brief, films, sections)
         package["narration_boundary_version"] = 2
+        if getattr(self, "_episode_edit_succeeded", False):
+            package["full_episode_edit_version"] = 1
         package["script_policy_version"] = SCRIPT_POLICY_VERSION
         if plan:
             package["episode_plan"] = plan

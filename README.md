@@ -351,3 +351,10 @@ The procedural sine-instrument bed has been removed entirely. Three bundled, has
 Narration uses a gentle 65 Hz rumble filter, low-level downward expansion, a small presence adjustment, and pitch-preserving `atempo` pacing without formant reconstruction. The final mix uses a fixed gain and peak limiter instead of a second dynamic loudness normalization pass. Music receives a small reduction in the voice range. Speech is protected from time/formant augmentation in the comparison, including at overlapping processing-window boundaries. Isolated before/after pacing samples join the bounded inspection artifact; final videos and diagnostics still expire after 48 hours. These changes do not repair an intrinsically poor TTS take; a reported problem in an expired export needs an uploaded audio excerpt for exact diagnosis.
 
 Character freezes use actual source timestamps in that film's trailers, with restrained motion. External actor portraits have been removed. A weak or ambiguous face/character match is skipped instead of substituting a headshot or stopping the job.
+
+
+## Optional development and reference review
+
+**Actions → Developer code graph** builds an isolated, code-only Graphify map for development; it does not run during video production. See [code graph documentation](docs/code-graph.md).
+
+**Actions → Analyze Reference Video** measures a permitted example video or an existing production and optionally compares it with another output. Reports are advisory and do not automatically change editing. See [reference analysis documentation](docs/reference-video-analysis.md).

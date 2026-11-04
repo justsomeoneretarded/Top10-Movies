@@ -525,8 +525,10 @@ class ShotSelector:
                 from .scenes import embed
                 sentence = embed([text])[0]
                 values = self.scene_embeddings[str(path)] @ sentence
-                known = np.linalg.norm(self.scene_embeddings[str(path)], axis=1) > .01
-                if known.any():
+                known = (np.linalg.norm(self.scene_embeddings[str(path)], axis=1) > .01) & np.isfinite(values)
+                # One known description, or identical scores for every known frame,
+                # cannot rank shots. Adding a flat signal would only dilute SigLIP.
+                if np.count_nonzero(known) >= 2 and np.ptp(values[known]) > 1e-8:
                     values = np.where(known, values, float(values[known].mean()))
                     signals.append((0.4, values))
             except Exception:  # noqa: BLE001 -- image matching alone is fine
