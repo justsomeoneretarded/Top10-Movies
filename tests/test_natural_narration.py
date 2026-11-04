@@ -221,9 +221,10 @@ def test_restored_script_runs_full_episode_edit_once_without_rewriting_reviews(m
     from movie_pipeline import script as script_module, packaging
     writer = Writer()
     writer.narration = Mock(side_effect=AssertionError("complete drafts should be reused"))
-    writer.episode_edit = Mock(side_effect=lambda title, brief, sections: [
-        {**sections[0], "paragraphs": ["A clear opening."]}, *deepcopy(sections[1:])
-    ])
+    def successful_edit(title, brief, sections):
+        writer._episode_edit_succeeded = True
+        return [{**sections[0], "paragraphs": ["A clear opening."]}, *deepcopy(sections[1:])]
+    writer.episode_edit = Mock(side_effect=successful_edit)
     monkeypatch.setattr(script_module, "is_fallback_opening", lambda *a, **kw: False)
     monkeypatch.setattr(script_module, "_section_issue", lambda *a, **kw: False)
     monkeypatch.setattr(script_module, "_editorial_issue", lambda *a, **kw: False)
@@ -242,3 +243,27 @@ def test_restored_script_runs_full_episode_edit_once_without_rewriting_reviews(m
     assert writer.episode_edit.call_count == 1
     assert writer.refresh_editorial("Movies", "Casual", films, refreshed) == refreshed
     assert writer.episode_edit.call_count == 1
+
+
+@pytest.mark.parametrize("first_response", [ValueError("temporarily offline"), {"remove": None}])
+def test_restored_episode_retries_the_edit_after_failure_but_accepts_no_deletions(monkeypatch, first_response):
+    from movie_pipeline import script as script_module, packaging
+    writer = Writer()
+    writer.ask = Mock(side_effect=[first_response, {"remove": []}])
+    monkeypatch.setattr(script_module, "is_fallback_opening", lambda *a, **kw: False)
+    monkeypatch.setattr(script_module, "_section_issue", lambda *a, **kw: False)
+    monkeypatch.setattr(script_module, "_editorial_issue", lambda *a, **kw: False)
+    monkeypatch.setattr(packaging, "refresh_availability", lambda script, films: script)
+    draft = {"sections": [
+        {"kind": "intro", "paragraphs": ["First sentence. Second sentence."]},
+        {"kind": "film", "film": 0, "paragraphs": ["Number 1: Example. A spy escapes. She leaves town."]},
+        {"kind": "outro", "paragraphs": ["Which would you watch? Like and subscribe."]},
+    ], "package": {"script_policy_version": script_module.SCRIPT_POLICY_VERSION}}
+    films = [{"title": "Example", "year": 2025}]
+    first = writer.refresh_editorial("Movies", "", films, draft)
+    assert first["sections"] == draft["sections"]
+    assert "full_episode_edit_version" not in first["package"]
+    second = writer.refresh_editorial("Movies", "", films, first)
+    assert second["sections"] == first["sections"]
+    assert second["package"]["full_episode_edit_version"] == 1
+    assert writer.ask.call_count == 2

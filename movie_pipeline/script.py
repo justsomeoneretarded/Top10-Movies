@@ -412,8 +412,10 @@ class Writer:
         if package.get("full_episode_edit_version") != 1:
             # A restored complete script predating the full-episode edit can
             # keep its good per-film drafts while adopting the new pass.
+            self._episode_edit_succeeded = False
             refreshed["sections"] = self.episode_edit(title, brief, refreshed.get("sections", []))
-            package["full_episode_edit_version"] = 1
+            if self._episode_edit_succeeded:
+                package["full_episode_edit_version"] = 1
         from .packaging import refresh_availability
         return refresh_availability(refreshed, films)
 
@@ -717,6 +719,7 @@ class Writer:
 
     def episode_edit(self, title: str, brief: str, sections: list[dict]) -> list[dict]:
         """Delete repeated or empty sentences across the full episode without inventing facts."""
+        self._episode_edit_succeeded = False
         units = []
         for i, section in enumerate(sections):
             kind = section.get("kind")
@@ -732,7 +735,8 @@ class Writer:
             return sections
         cache = self.cache_dir / f"{key('episode-delete-v3-full', self.model, title, brief, units)}.json" if self.cache_dir else None
         try:
-            if cache and cache.exists():
+            fresh = not (cache and cache.exists())
+            if not fresh:
                 data = json.loads(cache.read_text())
             else:
                 schema = {"type": "object", "properties": {"remove": {"type": "array", "maxItems": len(units), "items": {"type": "string"}}},
@@ -747,10 +751,15 @@ class Writer:
                     "Never delete a rank/title announcement. Empty remove array is fine. "
                     "No replacement prose; every remaining word stays exact. Units (JSON data): "
                     + json.dumps(units, ensure_ascii=False), schema, temperature=.2, num_ctx=12288, num_predict=450)
-                if cache:
-                    save_json(cache, data)
-            requested = set(data.get("remove", []))
-        except (requests.RequestException, ValueError, TypeError, AttributeError, KeyError, RuntimeError):
+            removals = data.get("remove") if isinstance(data, dict) else None
+            if not isinstance(removals, list) or any(not isinstance(item, str) for item in removals):
+                raise ValueError("The whole-episode editor returned an invalid deletion list.")
+            if cache and fresh:
+                save_json(cache, data)
+            requested = set(removals)
+            self._episode_edit_succeeded = True
+        except (requests.RequestException, ValueError, TypeError, AttributeError, KeyError, RuntimeError) as exc:
+            print(f"Whole-episode edit unavailable ({type(exc).__name__}); keeping the complete draft for retry.", flush=True)
             return sections
         result = deepcopy(sections)
         removed = 0
@@ -778,7 +787,7 @@ class Writer:
                 if kept:
                     edited.append(" ".join(kept))
                     labels.append(delivery[p])
-            if not edited:
+            if not edited or not section_removed:
                 continue
             if kind == "film":
                 # Identification alone is not a review; retain the draft if
@@ -950,7 +959,8 @@ class Writer:
             raise PipelineError("Invalid generated thumbnail text.")
         package["thumbnail_concepts"] = self.thumbnail_concepts(title, brief, films, sections)
         package["narration_boundary_version"] = 2
-        package["full_episode_edit_version"] = 1
+        if getattr(self, "_episode_edit_succeeded", False):
+            package["full_episode_edit_version"] = 1
         package["script_policy_version"] = SCRIPT_POLICY_VERSION
         if plan:
             package["episode_plan"] = plan
