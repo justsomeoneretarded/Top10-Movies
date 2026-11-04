@@ -101,3 +101,28 @@ def test_comparison_only_contains_measured_values(reference_video, tmp_path):
     assert "do not establish" in " ".join(comparison["limitations"])
     assert (tmp_path / "comparison" / "comparison.json").is_file()
     assert (tmp_path / "comparison" / "comparison.md").is_file()
+
+
+def test_reference_workflow_configures_supported_javascript_runtime():
+    """The yt-dlp Python API must explicitly enable the Node runner."""
+    import yaml
+    from pathlib import Path
+    data = yaml.load(Path(".github/workflows/reference-analysis.yml").read_text(), Loader=yaml.BaseLoader)
+    steps = data["jobs"]["review"]["steps"]
+    assert any(step.get("uses", "").startswith("actions/setup-node@") for step in steps)
+    download = next(step for step in steps if step.get("name") == "Download external reference when supplied")
+    assert '"js_runtimes":{"node":{}}' in download["run"]
+
+
+def test_contact_sheet_falls_back_to_ffmpeg_when_opencv_cannot_decode(reference_video, tmp_path, monkeypatch):
+    class UnavailableCapture:
+        def set(self, *args):
+            pass
+        def read(self):
+            return False, None
+        def release(self):
+            pass
+    monkeypatch.setattr(ref.cv2, "VideoCapture", lambda *args: UnavailableCapture())
+    output = tmp_path / "contact.jpg"
+    timestamps = ref._contact_sheet(reference_video, 4.0, output)
+    assert timestamps and output.is_file()

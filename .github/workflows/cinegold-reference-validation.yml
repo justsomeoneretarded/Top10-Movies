@@ -57,6 +57,7 @@ jobs:
       - name: Measure reference and baseline
         run: |
           python - <<'PY'
+          import base64
           import json
           import subprocess
           from pathlib import Path
@@ -78,6 +79,11 @@ jobs:
                   "true_peak_dbfs":data["mixed_audio"].get("true_peak_dbfs"),
                   "transcript_source":data["transcript"].get("source"),
                   "transcript_available":data["transcript"].get("available")}),flush=True)
+              sheet=Path("cinegold-analysis")/label/"contact-sheet.jpg"
+              if sheet.is_file():
+                  print(label.upper()+"_CONTACT_BEGIN",flush=True)
+                  print(base64.b64encode(sheet.read_bytes()).decode("ascii"),flush=True)
+                  print(label.upper()+"_CONTACT_END",flush=True)
           PY
       - name: Upload analysis only
         if: always()
