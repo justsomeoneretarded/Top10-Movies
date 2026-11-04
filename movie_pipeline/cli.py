@@ -402,10 +402,21 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     notice("Footage", f"Export {width}x{height}; {len(sources)} trailers accepted; route: {download_access.routes()[0]}. {per_title}. "
            f"Elapsed {(time.time()-started)/60:.0f} min.")
 
+    from .footage_context import collect_visual_hints
+    visual_hints = collect_visual_hints(pools, shot_lookup)
+    hinted = sum(bool(hints) for hints in visual_hints)
+    print(f"Optional footage context available for {hinted} of {len(films)} titles.", flush=True)
+
     writer = Writer(cache_dir=work / "script-sections")
     print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
-    script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
+    if script_path.exists():
+        if hinted:
+            print("Resuming the saved script unchanged; new footage hints apply to fresh scripts.", flush=True)
+        script = json.loads(script_path.read_text())
+    else:
+        script = writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks,
+                              automatic=spec.automatic, visual_hints=visual_hints)
     script = writer.refresh_editorial(title, brief, films, script, automatic=spec.automatic)
     refresh_availability(script, films)
     from .rank_intro import prepare_rank_intros
@@ -497,7 +508,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         print(f"Refining an unusually {'long' if estimated > spec.target else 'short'} draft; measured {estimated/60:.1f} minutes.", flush=True)
         word_scale *= max(.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
         try:
-            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
+            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic, visual_hints=visual_hints)
             refresh_availability(script, films)
             script = prepare_rank_intros(script, films)
             writer.unload()

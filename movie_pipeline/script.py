@@ -543,6 +543,9 @@ class Writer:
             "material only supports a few useful points. Do not lengthen the draft to sound more polished. "
             "Shortening substantially is welcome; there is no minimum length or percentage to retain. "
             "Use everyday spoken English without forced slang, invented excitement, or compulsory bridges. "
+            "Visual hints, when supplied, are uncertain single-frame descriptions, not confirmed plot, "
+            "people, dialogue, or a promise that a scene will appear. Never use them as factual "
+            "evidence or narrate them as directions; rely on the story material for claims. "
             "Keep this section's role; do not turn one review into a whole countdown. "
             + ("Keep the short opening 'Number N: Title' announcement intact. " if rank else "")
             + ("Finish with like and subscribe and a pointer to other recommendations. " if closing else "")
@@ -633,6 +636,9 @@ class Writer:
                     " Use clear conversational sentences and complete thoughts. Every sentence should add a useful "
                     "story detail, explanation, observation or natural joke. Vary the structure across recommendations. "
                     "Avoid empty hype, essay language, forced slang and generic transitions. Do not pad short material. "
+                    "Optional visual_hints are uncertain single-frame guesses, not confirmed plot, "
+                    "characters, dialogue or guaranteed selected scenes. Do not invent facts from them "
+                    "or narrate them as instructions; use verified story material for claims. "
                     "Paragraphs should follow thought boundaries, not a fixed word count. "
                     "No markdown, editing notes, URLs, stage directions or sound cues. " + correction,
                     schema, temperature=.7, num_predict=2300)
@@ -831,7 +837,8 @@ class Writer:
         return concepts
 
     def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0, target_seconds: float = 540, trailer_seconds: float = 0,
-              only: set[str] | None = None, automatic: bool = False) -> dict:
+              only: set[str] | None = None, automatic: bool = False,
+              visual_hints: list[list[str]] | None = None) -> dict:
         """Write the whole script, or (with ``only``) just some sections to warm the cache in parallel jobs.
 
         Section names for ``only``: "intro", "outro" and "film-<index>" (0 is number one).
@@ -856,6 +863,8 @@ class Writer:
                 continue
             print(f"Script: #{index+1} {films[index]['title']}", flush=True)
             facts = narration_material(film_facts(films[index]))
+            if visual_hints and index < len(visual_hints) and visual_hints[index]:
+                facts["visual_hints"] = visual_hints[index]
             facts["rank"] = index + 1
             facts["other_titles"] = [film["title"] for i, film in enumerate(films) if i != index]
             if plan.get("entries", {}).get(str(index + 1)):
