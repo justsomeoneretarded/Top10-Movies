@@ -174,3 +174,58 @@ def test_thumbnail_vision_failure_is_reported_without_leaking_details(monkeypatc
     log = capsys.readouterr().out
     assert "ReadTimeout" in log and "image-based ranking" in log
     assert "private.example" not in log
+
+
+def _selector_for_relevance(scores):
+    """A lightweight CLIP stand-in so coverage does not require a torch install."""
+    from contextlib import nullcontext
+
+    class ScoreTensor:
+        def squeeze(self, _):
+            return self
+        def numpy(self):
+            return np.asarray(scores, dtype=np.float32)
+
+    class FeatureTensor:
+        def __matmul__(self, _):
+            return ScoreTensor()
+
+    class TextTensor:
+        @property
+        def T(self):
+            return self
+
+    selector = object.__new__(ShotSelector)
+    selector.torch = SimpleNamespace(inference_mode=nullcontext)
+    selector.siglip = SimpleNamespace(text=lambda _: TextTensor())
+    selector.siglip_features = {"movie.mp4": FeatureTensor()}
+    selector.scene_embeddings = {}
+    return selector
+
+
+def test_single_or_constant_description_does_not_dilute_image_ranking(monkeypatch):
+    selector = _selector_for_relevance([0.1, 0.3, 0.2])
+    monkeypatch.setattr(scenes, "embed", lambda _: np.array([[1.0, 0.0]], dtype=np.float32))
+    baseline = selector.relevance("movie.mp4", "a chase")
+    selector.scene_embeddings["movie.mp4"] = np.array([[1, 0], [0, 0], [0, 0]], dtype=np.float32)
+    np.testing.assert_allclose(selector.relevance("movie.mp4", "a chase"), baseline)
+    selector.scene_embeddings["movie.mp4"] = np.array([[1, 0], [1, 0], [0, 0]], dtype=np.float32)
+    np.testing.assert_allclose(selector.relevance("movie.mp4", "a chase"), baseline)
+
+
+def test_multiple_distinct_descriptions_can_change_scene_ranking(monkeypatch):
+    selector = _selector_for_relevance([0.1, 0.3, 0.2])
+    monkeypatch.setattr(scenes, "embed", lambda _: np.array([[1.0, 0.0]], dtype=np.float32))
+    baseline = selector.relevance("movie.mp4", "a chase")
+    selector.scene_embeddings["movie.mp4"] = np.array([[1, 0], [0, 1], [0, 0]], dtype=np.float32)
+    mixed = selector.relevance("movie.mp4", "a chase")
+    assert not np.allclose(mixed, baseline)
+    assert mixed[0] > baseline[0]
+
+
+def test_relevance_falls_back_when_image_and_description_matching_are_unavailable(monkeypatch):
+    selector = _selector_for_relevance([0.1, 0.3, 0.2])
+    selector.siglip = None
+    expected = np.array([0.25, 0.3, 0.2], dtype=np.float32)
+    monkeypatch.setattr(selector, "identity_relevance", lambda path, text: expected)
+    np.testing.assert_allclose(selector.relevance("movie.mp4", "a chase"), expected)
