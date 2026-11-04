@@ -1,0 +1,112 @@
+name: Reference analysis validation
+on:
+  push:
+    branches: [feature/reference-video-analysis]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: bash scripts/install_system_packages.sh ffmpeg
+      - run: python -m pip install -e '.[test]'
+      - run: pytest -q tests/test_reference_analysis.py
+      - name: Validate workflow syntax
+        run: |
+          curl -fLsS --retry 3 https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/actionlint.tgz"
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
+  real_baseline:
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: bash scripts/install_system_packages.sh ffmpeg
+      - run: python -m pip install -e .
+      - name: Download finished spy production
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: "41789170701"
+          name: movie-video-44
+          path: baseline-spy
+      - name: Download finished war production
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: "41743582952"
+          name: movie-video-43
+          path: baseline-war
+      - name: Download optional audio inspection samples
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: "41789170701"
+          name: audio-inspection-44
+          path: audio-inspection
+      - name: Inventory diagnostic audio
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import subprocess
+          for path in sorted(Path("audio-inspection").rglob("*.wav"))[:30]:
+              command=["ffprobe","-v","error","-show_entries","format=duration","-of","json",str(path)]
+              item=subprocess.run(command,capture_output=True,text=True,check=False)
+              duration=json.loads(item.stdout).get("format",{}).get("duration") if item.returncode==0 else None
+              print("Diagnostic audio:",path.name,"duration_seconds:",duration)
+          PY
+      - name: Compare existing outputs as baselines, not external style references
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          def find_video(root):
+              videos=list(Path(root).rglob("final-video.mp4"))
+              if len(videos)!=1: raise SystemExit(f"Expected one video in {root}, found {len(videos)}")
+              return videos[0]
+          def find_srt(root):
+              captions=list(Path(root).rglob("subtitles.srt"))
+              return captions[0] if len(captions)==1 else None
+          command=["python","-m","movie_pipeline.reference_analysis","--video",str(find_video("baseline-spy")),
+              "--compare-video",str(find_video("baseline-war")),"--output-dir","reference-analysis"]
+          for root,flag in (("baseline-spy","--transcript"),("baseline-war","--comparison-transcript")):
+              path=find_srt(root)
+              if path: command.extend([flag,str(path)])
+          subprocess.run(command,check=True)
+          print("These are prior channel outputs, not independently provided reference videos.")
+          for label in ("reference","production"):
+              report=json.loads((Path("reference-analysis")/label/"reference-analysis.json").read_text())
+              transcript=report["transcript"]
+              print("BASELINE_METRICS",label,json.dumps({
+                  "duration":report["duration_seconds"],
+                  "approximate_cuts":len(report["visual"]["approximate_abrupt_boundaries_seconds"]),
+                  "estimated_median_segment":report["visual"]["estimated_segment_median_seconds"],
+                  "mixed_lufs":report["mixed_audio"].get("integrated_lufs"),
+                  "true_peak":report["mixed_audio"].get("true_peak_dbfs"),
+                  "first_three_speech_segments":transcript.get("segments",[])[:3],
+                  "transcript_source":transcript.get("source"),
+                  "narrator_stem":report["narrator_audio"],
+                  "music_stem":report["music_audio"]},ensure_ascii=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reference-baseline-analysis
+          path: reference-analysis/
+          retention-days: 2
+          if-no-files-found: warn
