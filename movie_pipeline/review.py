@@ -217,7 +217,7 @@ img.sheet{{width:100%;border-radius:8px}}ul{{columns:2;padding-left:18px}}
 <h1>Video review</h1><p class="sub">{_time(length)} · genre {html.escape(genre)} · checks are automatic and advisory</p>
 <h2>Checks</h2><table>{rows}</table>
 <p class="sub">Repeat check samples one frame every two seconds and compares frames at least 25 seconds apart.
-The selected intro montage and ending are excluded. It can miss shorter or visually different repeats.</p>
+Any supplied montage intervals and the ending are excluded. It can miss shorter or visually different repeats.</p>
 <h2>Thumbnails</h2><div class="thumbs">{thumb_cards}</div>
 <h2>Chapters</h2><ul>{chapter_list}</ul>
 <h2>Contact sheet</h2><img class="sheet" src="{_data_uri(contact_sheet(frames))}" alt="Frames across the whole video">
