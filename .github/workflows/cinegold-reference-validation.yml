@@ -37,7 +37,7 @@ jobs:
           opts={"format":"bestvideo[height<=720]+bestaudio/best[height<=720]/best",
                 "outtmpl":"reference-input/reference.%(ext)s","merge_output_format":"mp4",
                 "noplaylist":True,"max_filesize":400*1024*1024,"retries":2,
-                "fragment_retries":2,"socket_timeout":20,"quiet":True}
+                "fragment_retries":2,"socket_timeout":20,"quiet":True,"js_runtimes":{"node":{}}}
           if os.environ.get("YOUTUBE_COOKIE_FILE"):
               opts["cookiefile"]=os.environ["YOUTUBE_COOKIE_FILE"]
           with YoutubeDL(opts) as ydl:
