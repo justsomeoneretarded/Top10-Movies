@@ -7,6 +7,7 @@ narrator-only or music-only loudness; supply separately isolated stems for that.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import re
@@ -139,9 +140,22 @@ def _contact_sheet(path: Path, seconds: float, output: Path) -> list[float]:
         for index, stamp in enumerate(times):
             cap.set(cv2.CAP_PROP_POS_MSEC, stamp * 1000)
             ok, frame = cap.read()
-            if not ok:
-                continue
-            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if ok:
+                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            else:
+                # OpenCV may lack a codec that the system FFmpeg can decode.
+                # Fall back per frame rather than silently omitting the sheet.
+                command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", str(stamp),
+                           "-i", str(path), "-frames:v", "1", "-f", "image2pipe",
+                           "-vcodec", "mjpeg", "pipe:1"]
+                try:
+                    extracted = subprocess.run(command, capture_output=True, timeout=30, check=False)
+                    if extracted.returncode or not extracted.stdout:
+                        continue
+                    with Image.open(io.BytesIO(extracted.stdout)) as loaded:
+                        image = loaded.convert("RGB")
+                except (OSError, subprocess.TimeoutExpired, ValueError):
+                    continue
             image.thumbnail((320, 180), Image.Resampling.LANCZOS)
             x, y = (index % 3) * 320, (index // 3) * 189
             sheet.paste(image, (x + (320-image.width)//2, y + (180-image.height)//2))

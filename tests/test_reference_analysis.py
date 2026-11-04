@@ -112,3 +112,17 @@ def test_reference_workflow_configures_supported_javascript_runtime():
     assert any(step.get("uses", "").startswith("actions/setup-node@") for step in steps)
     download = next(step for step in steps if step.get("name") == "Download external reference when supplied")
     assert '"js_runtimes":{"node":{}}' in download["run"]
+
+
+def test_contact_sheet_falls_back_to_ffmpeg_when_opencv_cannot_decode(reference_video, tmp_path, monkeypatch):
+    class UnavailableCapture:
+        def set(self, *args):
+            pass
+        def read(self):
+            return False, None
+        def release(self):
+            pass
+    monkeypatch.setattr(ref.cv2, "VideoCapture", lambda *args: UnavailableCapture())
+    output = tmp_path / "contact.jpg"
+    timestamps = ref._contact_sheet(reference_video, 4.0, output)
+    assert timestamps and output.is_file()
