@@ -162,6 +162,7 @@ jobs:
                    "outtmpl":str(target / "reference.%(ext)s"), "noplaylist":True,
                    "max_filesize":400*1024*1024, "retries":2, "fragment_retries":2,
                    "socket_timeout":20, "merge_output_format":"mp4", "quiet":True,
+                   "js_runtimes":{"node":{}},
                    "no_warnings":True}
           if cookie:
               options["cookiefile"]=str(cookie)
