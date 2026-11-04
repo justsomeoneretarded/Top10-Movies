@@ -10,6 +10,7 @@ without descriptions the edit uses SigLIP image matching alone.
 from __future__ import annotations
 
 import base64
+from collections import Counter
 import io
 import json
 import os
@@ -27,6 +28,7 @@ VERSION = 2
 _DEADLINE = None
 _READY = False
 _UNAVAILABLE = False
+_VISION_READY = False
 PROMPT = ("Describe this movie frame in at most 14 words for a video editor: who or what is shown, "
           "the action, the mood and the setting. Plain words, no names, no quotes.")
 
@@ -67,7 +69,28 @@ def embed(texts: list[str]) -> np.ndarray:
     return vectors / np.maximum(norms, 1e-9)
 
 
+def _vision_timeout(*, deadline=None) -> float:
+    """Allow a cold CPU model more time while keeping requests bounded.
+
+    The first useful response can include model loading. Once the vision model
+    has returned a valid result, a shorter warm timeout keeps retries bounded.
+    """
+    name = "SCENE_WARM_TIMEOUT_SECONDS" if _VISION_READY else "SCENE_COLD_TIMEOUT_SECONDS"
+    default = 60.0 if _VISION_READY else 90.0
+    try:
+        configured = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        configured = default
+    if not np.isfinite(configured):
+        configured = default
+    timeout = max(5.0, min(180.0, configured))
+    if deadline is not None:
+        timeout = min(timeout, max(0.1, deadline - time.monotonic()))
+    return timeout
+
+
 def _describe(image) -> str:
+    global _VISION_READY
     small = image.convert("RGB").copy()
     small.thumbnail((448, 252))
     buffer = io.BytesIO()
@@ -75,10 +98,13 @@ def _describe(image) -> str:
     response = requests.post(_url() + "/api/generate", json={
         "model": VISION_MODEL, "prompt": PROMPT, "images": [base64.b64encode(buffer.getvalue()).decode()],
         "stream": False, "think": False, "keep_alive": "10m",
-        "options": {"temperature": 0.2, "num_predict": 40, "num_ctx": 2048}}, timeout=25)
+        "options": {"temperature": 0.2, "num_predict": 40, "num_ctx": 2048}}, timeout=_vision_timeout(deadline=_DEADLINE))
     response.raise_for_status()
     text = " ".join(str(response.json().get("response", "")).replace("\n", " ").split())
-    return text.strip(" \"'")[:160]
+    text = text.strip(" \"'")[:160]
+    if text:
+        _VISION_READY = True
+    return text
 
 
 def describe_trailer(trailer: Path, shots: list[dict]) -> dict | None:
@@ -107,14 +133,24 @@ def describe_trailer(trailer: Path, shots: list[dict]) -> dict | None:
         ranked = sorted(range(len(shots)), key=lambda i: -float(shots[i].get("peak", 0)))[:limit//2]
         indices = list(dict.fromkeys([*ranked, *spread]))[:limit]
         descriptions = [""] * len(shots)
+        failures = Counter()
         for index in indices:
             if time.monotonic() >= _DEADLINE:
                 break
             try:
                 descriptions[index] = _describe(shot_frame(trailer, shots, index))
-            except (PipelineError, requests.RequestException, ValueError):
+                if not descriptions[index]:
+                    failures["EmptyResponse"] += 1
+            except (PipelineError, requests.RequestException, ValueError) as exc:
+                # Do not log exception text: request URLs can contain credentials.
+                failures[type(exc).__name__] += 1
                 continue
         known = [i for i, text in enumerate(descriptions) if text]
+        if failures:
+            details = ", ".join(f"{name}: {count}" for name, count in sorted(failures.items()))
+            print(f"Scene analysis for {trailer.name}: {len(known)} descriptions; "
+                  f"skipped {sum(failures.values())} frames ({details}). "
+                  "Image matching remains available.", flush=True)
         if not known:
             return None
         embedded = embed([descriptions[i] for i in known])
@@ -131,6 +167,8 @@ def describe_trailer(trailer: Path, shots: list[dict]) -> dict | None:
 
 
 def unload():
+    global _VISION_READY
+    _VISION_READY = False
     for model in (VISION_MODEL,):
         try:
             requests.post(_url() + "/api/generate", json={"model": model, "keep_alive": 0}, timeout=30)
@@ -146,6 +184,7 @@ def rate_thumbnail(image, genre: str = "", genre_hint: str = "") -> dict | None:
     ``genre_hint`` describes what the genre looks like ("fear, screaming, creatures, masks,
     blood, darkness"), so the model rates how instantly the frame reads as that genre.
     """
+    global _VISION_READY
     small = image.convert("RGB").copy()
     small.thumbnail((512, 288))
     buffer = io.BytesIO()
@@ -165,16 +204,26 @@ def rate_thumbnail(image, genre: str = "", genre_hint: str = "") -> dict | None:
         response = requests.post(_url() + "/api/generate", json={
             "model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(buffer.getvalue()).decode()],
             "format": schema, "stream": False, "think": False, "keep_alive": "10m",
-            "options": {"temperature": 0.1, "num_predict": 100, "num_ctx": 2048}}, timeout=25)
+            "options": {"temperature": 0.1, "num_predict": 100, "num_ctx": 2048}}, timeout=_vision_timeout())
         response.raise_for_status()
         data = json.loads(response.json().get("response", "{}"))
+        # An empty or malformed verdict is not evidence that a frame has no
+        # logo or a low score. Keep the existing image-based fallback instead.
+        numeric = ("emotion_intensity", "action_or_spectacle", "genre_fit", "thumbnail_score")
+        if (not isinstance(data, dict)
+                or any(type(data.get(field)) is not bool for field in ("large_face", "logo_or_text"))
+                or any(type(data.get(field)) is not int or not 0 <= data[field] <= 10 for field in numeric)):
+            raise ValueError("Invalid thumbnail vision verdict")
+        _VISION_READY = True
         return {"large_face": bool(data.get("large_face")),
                 "emotion": max(0, min(10, int(data.get("emotion_intensity", 0)))),
                 "action": max(0, min(10, int(data.get("action_or_spectacle", 0)))),
                 "genre_fit": max(0, min(10, int(data.get("genre_fit", 5)))),
                 "logo": bool(data.get("logo_or_text")),
                 "score": max(0, min(10, int(data.get("thumbnail_score", 0))))}
-    except (requests.RequestException, ValueError, TypeError, KeyError):
+    except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+        print(f"Optional thumbnail vision unavailable ({type(exc).__name__}); "
+              "retaining image-based ranking.", flush=True)
         return None
 
 
