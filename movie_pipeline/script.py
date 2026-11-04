@@ -407,6 +407,10 @@ class Writer:
                     refreshed["package"]["subscribe"] = suggestion
             except (requests.RequestException, ValueError, TypeError, KeyError):
                 pass
+        # Remove stale availability/bridge narration before the whole-episode
+        # editor sees it, preserving the existing no-spoken-provider behavior.
+        from .packaging import refresh_availability
+        refreshed = refresh_availability(refreshed, films)
         package = refreshed.setdefault("package", {})
         package["script_policy_version"] = SCRIPT_POLICY_VERSION
         if package.get("full_episode_edit_version") != 1:
@@ -416,8 +420,7 @@ class Writer:
             refreshed["sections"] = self.episode_edit(title, brief, refreshed.get("sections", []))
             if self._episode_edit_succeeded:
                 package["full_episode_edit_version"] = 1
-        from .packaging import refresh_availability
-        return refresh_availability(refreshed, films)
+        return refreshed
 
     def ask(self, prompt: str, schema: dict, *, temperature: float = 0.65, num_ctx: int = 8192, num_predict: int = 2300) -> dict:
         response = requests.post(self.url + "/api/chat", json={
