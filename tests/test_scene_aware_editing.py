@@ -40,9 +40,9 @@ def test_expansion_updates_cut_density_and_empty_cues_are_not_verified_dialogue(
 
 
 def test_insert_placement_prefers_stronger_paragraph_match_and_falls_back():
-    shots = {"film.mp4": [{"start": 0., "end": 5.}, {"start": 5., "end": 10.}]}
+    shots = {"film.mp4": [{"start": 0., "end": 5.}, {"start": 25., "end": 30.}]}
     clips = [{"source": "film.mp4", "start": 0., "duration": 5.},
-             {"source": "film.mp4", "start": 5., "duration": 5.}]
+             {"source": "film.mp4", "start": 25., "duration": 5.}]
 
     class Selector:
         def identity_relevance(self, path, text):
@@ -55,6 +55,18 @@ def test_insert_placement_prefers_stronger_paragraph_match_and_falls_back():
     assert _match_inserts(Selector(), clips, [0, 1], ["chase", "talk"], shots) == clips[::-1]
     assert _match_inserts(Flat(), clips, [0, 1], ["chase", "talk"], shots) == clips
     assert _match_inserts(object(), clips, [0, 1], ["chase", "talk"], shots) == clips
+
+
+def test_insert_matching_does_not_reverse_a_nearby_source_sequence():
+    shots = {"film.mp4": [{"start": 0., "end": 5.}, {"start": 5., "end": 10.}]}
+    clips = [{"source": "film.mp4", "start": 0., "duration": 5.},
+             {"source": "film.mp4", "start": 5., "duration": 5.}]
+
+    class Selector:
+        def identity_relevance(self, path, text):
+            return np.array([.1, .8]) if text == "chase" else np.array([.8, .1])
+
+    assert _match_inserts(Selector(), clips, [0, 1], ["chase", "talk"], shots) == clips
 
 
 def test_visual_hints_are_bounded_deduplicated_and_isolated_per_title(monkeypatch):

@@ -525,9 +525,13 @@ class Writer:
                 "text": {"type": "string"}, "delivery": {"type": "string", "enum": list(DELIVERIES)}},
                 "required": ["text", "delivery"], "additionalProperties": False}}},
             "required": ["paragraphs"], "additionalProperties": False}
+        material = narration_material(facts)
+        visual_notes = material.get("visual_hints", [])
+        story_material = {name: value for name, value in material.items() if name != "visual_hints"}
         prompt = (
             f"You are the spoken-script editor for {role} in {topic!r}. Creative direction: {brief}\n"
-            f"Story material: {json.dumps(narration_material(facts), ensure_ascii=False)}\n"
+            f"Story material: {json.dumps(story_material, ensure_ascii=False)}\n"
+            f"Uncertain visual hints, not verified facts: {json.dumps(visual_notes, ensure_ascii=False)}\n"
             f"Draft narration: {json.dumps(paragraphs, ensure_ascii=False)}\n"
             "Rewrite weak ideas rather than exchanging adjectives. Make it easy to picture who is involved, "
             "what they want, what goes wrong, and what makes this particular story interesting. The order is flexible; "
@@ -626,12 +630,15 @@ class Writer:
             "required": ["paragraphs"], "additionalProperties": False}
         role = ("a standalone opening" if opening else "a standalone final outro" if closing else
                 f"a SINGLE REVIEW of {facts.get('title', label)!r}, rank {facts.get('rank', '')}")
+        visual_notes = visible.get("visual_hints", [])
+        story_visible = {name: value for name, value in visible.items() if name != "visual_hints"}
         correction, best = "", None
         for attempt in range(3):
             try:
                 result = self.ask(
                     f"Write spoken English narration for {role}. Section request: {label}. Video topic: {topic!r}.\n"
-                    f"Creative direction: {brief}\nStory material (data): {json.dumps(visible, ensure_ascii=False)}\n"
+                    f"Creative direction: {brief}\nStory material (data): {json.dumps(story_visible, ensure_ascii=False)}\n"
+                    f"Uncertain visual hints, not verified facts: {json.dumps(visual_notes, ensure_ascii=False)}\n"
                     + budget + style +
                     " Use clear conversational sentences and complete thoughts. Every sentence should add a useful "
                     "story detail, explanation, observation or natural joke. Vary the structure across recommendations. "

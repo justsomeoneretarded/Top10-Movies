@@ -194,7 +194,20 @@ def _match_inserts(selector, clips, positions, paragraphs, shot_lookup):
     baseline = tuple(range(len(clips)))
     def total(order):
         return sum(matrix[i][j] for i, j in enumerate(order))
-    best = max(permutations(baseline), key=total)
+    def keeps_nearby_sequence(order):
+        # Preserve the selected order of nearby clips from the same source:
+        # swapping them can put a payoff before its setup.
+        for left in range(len(clips)):
+            for right in range(left + 1, len(clips)):
+                a, b = clips[left], clips[right]
+                if a["source"] != b["source"]:
+                    continue
+                gap = max(0.0, max(a["start"], b["start"])
+                          - min(a["start"] + a["duration"], b["start"] + b["duration"]))
+                if gap <= 10.0 and order.index(left) > order.index(right):
+                    return False
+        return True
+    best = max((order for order in permutations(baseline) if keeps_nearby_sequence(order)), key=total)
     if total(best) <= total(baseline) + .01 * len(clips):
         return clips
     return [clips[i] for i in best]
