@@ -1,0 +1,39 @@
+name: Inspect CineGold analysis evidence
+on:
+  push:
+    branches: [feature/cinegold-evidence-review]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: "41927658622"
+          name: cinegold-reference-evidence
+          path: evidence
+      - name: Show measured frames and limited transcript excerpts
+        run: |
+          python - <<'PY'
+          import base64,json
+          from pathlib import Path
+          root=Path("evidence")
+          for name in ("reference","production"):
+              path=root/name
+              sheet=path/"contact-sheet.jpg"
+              if sheet.is_file():
+                  print(name.upper()+"_CONTACT_BEGIN",flush=True)
+                  print(base64.b64encode(sheet.read_bytes()).decode("ascii"),flush=True)
+                  print(name.upper()+"_CONTACT_END",flush=True)
+              report=json.loads((path/"reference-analysis.json").read_text())
+              segments=report.get("transcript",{}).get("segments",[])
+              print(name.upper()+"_TRANSCRIPT_SOURCE",report.get("transcript",{}).get("source"),flush=True)
+              for stamp in (0,15,36,90,180,300,450):
+                  candidates=[s for s in segments if s.get("start") is not None and s["start"]>=stamp]
+                  if candidates:
+                      print(name.upper()+"_TRANSCRIPT_SAMPLE",stamp,json.dumps(candidates[:2],ensure_ascii=False),flush=True)
+          PY
