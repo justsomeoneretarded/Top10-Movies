@@ -176,7 +176,9 @@ def build_review(output: Path, cues: list[dict], chapters: list[dict], genre: st
     thumbs = thumbnail_scores(output, genre)
     summary = {"seconds": round(length, 1), "black_frames": len(blacks), "repeated_shots": len(repeats),
                "loudness_spikes": len(spikes), "captions_on_silence": len(drift),
-               "thumbnails": [{k: v for k, v in row.items() if k != "image"} for row in thumbs]}
+               "thumbnails": [{k: v for k, v in row.items() if k != "image"} for row in thumbs],
+               "repeat_detection": {"available": repeat_check_available, "sample_interval_seconds": 2.0,
+                                    "minimum_gap_seconds": 25.0, "usable_samples": len(eligible_times)}}
 
     def status(count: int, warn: int = 1) -> str:
         return "ok" if count < warn else "check"
@@ -223,6 +225,7 @@ Any supplied montage intervals and the ending are excluded. It can miss shorter 
 <h2>Contact sheet</h2><img class="sheet" src="{_data_uri(contact_sheet(frames))}" alt="Frames across the whole video">
 </body></html>"""
     (output / "review.html").write_text(page, encoding="utf-8")
-    print(f"Review report: {summary['black_frames']} black, {summary['repeated_shots']} possible sampled repeats, "
+    repeat_summary = f"{summary['repeated_shots']} possible sampled repeats" if repeat_check_available else "repeat scan unavailable"
+    print(f"Review report: {summary['black_frames']} black, {repeat_summary}, "
           f"{summary['loudness_spikes']} spikes, {summary['captions_on_silence']} drifting captions.", flush=True)
     return summary

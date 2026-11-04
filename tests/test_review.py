@@ -63,8 +63,9 @@ def test_repeat_review_reports_when_sampled_comparison_is_unavailable(tmp_path, 
     monkeypatch.setattr(review, "black_frames", lambda video: [])
     monkeypatch.setattr(review, "loudness_profile", lambda video: np.zeros(0))
     monkeypatch.setattr(review, "thumbnail_scores", lambda *args: [])
-    review.build_review(tmp_path, [], [], "neutral", ending_seconds=5)
+    summary = review.build_review(tmp_path, [], [], "neutral", ending_seconds=5)
     page = (tmp_path / "review.html").read_text()
+    assert summary["repeat_detection"]["available"] is False
     assert "Not enough comparable frames" in page
     assert "samples one frame every two seconds" in page
     assert "can miss shorter or visually different repeats" in page
@@ -83,5 +84,6 @@ def test_repeat_review_describes_the_limit_of_a_zero_result(tmp_path, monkeypatc
     summary = review.build_review(tmp_path, [], [], "neutral", ending_seconds=5)
     page = (tmp_path / "review.html").read_text()
     assert summary["repeated_shots"] == 0
+    assert summary["repeat_detection"]["available"] is True
     assert "No matching sampled frames" in page
     assert "can miss shorter or visually different repeats" in page
