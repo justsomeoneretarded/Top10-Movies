@@ -214,3 +214,31 @@ def test_episode_edit_leaves_non_editorial_sections_untouched_and_fails_open():
         {"kind": "subscribe", "paragraphs": ["Do not touch."]},
     ]
     assert writer.episode_edit("Top", "", sections) == sections
+
+
+def test_restored_script_runs_full_episode_edit_once_without_rewriting_reviews(monkeypatch):
+    from copy import deepcopy
+    from movie_pipeline import script as script_module, packaging
+    writer = Writer()
+    writer.narration = Mock(side_effect=AssertionError("complete drafts should be reused"))
+    writer.episode_edit = Mock(side_effect=lambda title, brief, sections: [
+        {**sections[0], "paragraphs": ["A clear opening."]}, *deepcopy(sections[1:])
+    ])
+    monkeypatch.setattr(script_module, "is_fallback_opening", lambda *a, **kw: False)
+    monkeypatch.setattr(script_module, "_section_issue", lambda *a, **kw: False)
+    monkeypatch.setattr(script_module, "_editorial_issue", lambda *a, **kw: False)
+    monkeypatch.setattr(packaging, "refresh_availability", lambda script, films: script)
+    draft = {"sections": [
+        {"kind": "intro", "paragraphs": ["A clear opening. Redundant opening."]},
+        {"kind": "film", "film": 0, "paragraphs": ["Number 1: Example. A spy escapes."]},
+        {"kind": "outro", "paragraphs": ["Which one? Like and subscribe."]},
+    ], "package": {"script_policy_version": script_module.SCRIPT_POLICY_VERSION}}
+    films = [{"title": "Example", "year": 2025}]
+    refreshed = writer.refresh_editorial("Movies", "Casual", films, draft)
+    assert refreshed["sections"][0]["paragraphs"] == ["A clear opening."]
+    assert refreshed["sections"][1]["paragraphs"] == draft["sections"][1]["paragraphs"]
+    assert refreshed["package"]["full_episode_edit_version"] == 1
+    assert draft["sections"][0]["paragraphs"][0].endswith("Redundant opening.")
+    assert writer.episode_edit.call_count == 1
+    assert writer.refresh_editorial("Movies", "Casual", films, refreshed) == refreshed
+    assert writer.episode_edit.call_count == 1

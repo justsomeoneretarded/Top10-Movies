@@ -407,7 +407,13 @@ class Writer:
                     refreshed["package"]["subscribe"] = suggestion
             except (requests.RequestException, ValueError, TypeError, KeyError):
                 pass
-        refreshed.setdefault("package", {})["script_policy_version"] = SCRIPT_POLICY_VERSION
+        package = refreshed.setdefault("package", {})
+        package["script_policy_version"] = SCRIPT_POLICY_VERSION
+        if package.get("full_episode_edit_version") != 1:
+            # A restored complete script predating the full-episode edit can
+            # keep its good per-film drafts while adopting the new pass.
+            refreshed["sections"] = self.episode_edit(title, brief, refreshed.get("sections", []))
+            package["full_episode_edit_version"] = 1
         from .packaging import refresh_availability
         return refresh_availability(refreshed, films)
 
@@ -944,6 +950,7 @@ class Writer:
             raise PipelineError("Invalid generated thumbnail text.")
         package["thumbnail_concepts"] = self.thumbnail_concepts(title, brief, films, sections)
         package["narration_boundary_version"] = 2
+        package["full_episode_edit_version"] = 1
         package["script_policy_version"] = SCRIPT_POLICY_VERSION
         if plan:
             package["episode_plan"] = plan
