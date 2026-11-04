@@ -1,0 +1,222 @@
+name: Analyze Reference Video
+run-name: "Reference video analysis #${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      reference_url:
+        description: "YouTube or Vimeo reference video URL (leave blank if using a run artifact)"
+        type: string
+        required: false
+      reference_run_id:
+        description: "Existing Generate Video run ID to analyze (leave blank for an external URL)"
+        type: string
+        required: false
+      reference_artifact:
+        description: "Reference artifact name or pattern (default movie-video-*)"
+        type: string
+        required: false
+      reference_filename:
+        description: "Optional relative video path inside reference artifact when it has multiple videos"
+        type: string
+        required: false
+      comparison_run_id:
+        description: "Optional Generate Video run ID to compare"
+        type: string
+        required: false
+      comparison_artifact:
+        description: "Comparison artifact name or pattern (default movie-video-*)"
+        type: string
+        required: false
+      comparison_filename:
+        description: "Optional relative video path inside comparison artifact when it has multiple videos"
+        type: string
+        required: false
+      transcribe:
+        description: "Transcribe when no subtitle file is available (CPU, may take time)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      REFERENCE_URL: ${{ inputs.reference_url }}
+      REFERENCE_RUN: ${{ inputs.reference_run_id }}
+      REFERENCE_FILE: ${{ inputs.reference_filename }}
+      REFERENCE_PATTERN: ${{ inputs.reference_artifact || 'movie-video-*' }}
+      COMPARISON_RUN: ${{ inputs.comparison_run_id }}
+      COMPARISON_FILE: ${{ inputs.comparison_filename }}
+      COMPARISON_PATTERN: ${{ inputs.comparison_artifact || 'movie-video-*' }}
+      REFERENCE_TRANSCRIBE: "${{ inputs.transcribe }}"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: bash scripts/install_system_packages.sh ffmpeg
+      - run: python -m pip install -e .
+      - name: Validate reference selection
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+          url=os.environ["REFERENCE_URL"].strip()
+          run=os.environ["REFERENCE_RUN"].strip()
+          if bool(url)==bool(run):
+              raise SystemExit("Provide either one YouTube/Vimeo URL or one existing reference run ID.")
+          if run and not run.isdecimal():
+              raise SystemExit("Reference run ID must contain digits only.")
+          if url:
+              parsed=urlsplit(url)
+              if parsed.scheme!="https" or parsed.username or parsed.password or parsed.hostname not in {
+                  "youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "vimeo.com", "www.vimeo.com"}:
+                  raise SystemExit("Reference URL must be an HTTPS YouTube or Vimeo URL.")
+          other=os.environ["COMPARISON_RUN"].strip()
+          if other and not other.isdecimal():
+              raise SystemExit("Comparison run ID must contain digits only.")
+          PY
+      - name: Check artifact sizes and runner disk reserve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import fnmatch
+          import json
+          import os
+          import shutil
+          import urllib.request
+          total=0
+          api=os.environ["GITHUB_API_URL"].rstrip("/")
+          repo=os.environ["GITHUB_REPOSITORY"]
+          for run,pattern in ((os.environ["REFERENCE_RUN"],os.environ["REFERENCE_PATTERN"]),
+                              (os.environ["COMPARISON_RUN"],os.environ["COMPARISON_PATTERN"])):
+              if not run: continue
+              found=[]
+              for page in range(1,6):
+                  url=f"{api}/repos/{repo}/actions/runs/{run}/artifacts?per_page=100&page={page}"
+                  request=urllib.request.Request(url,headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                      "Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"})
+                  with urllib.request.urlopen(request,timeout=30) as response:
+                      items=json.load(response).get("artifacts",[])
+                  found.extend(item for item in items if not item.get("expired") and fnmatch.fnmatchcase(item["name"],pattern))
+                  if len(items)<100: break
+              if not found:
+                  raise SystemExit("No unexpired matching video artifact found for run "+run+".")
+              if len(found)>3:
+                  raise SystemExit("More than three artifacts match; specify one exact artifact name.")
+              total+=sum(int(item["size_in_bytes"]) for item in found)
+          gib=1024**3
+          if total>3*gib:
+              raise SystemExit("Selected compressed artifacts exceed the 3 GiB analysis budget.")
+          free=shutil.disk_usage(".").free
+          required=4*gib+3*total+(1*gib if os.environ["REFERENCE_URL"] else 0)
+          if free<required:
+              raise SystemExit(f"Not enough free runner disk for selected artifacts and a 4 GiB reserve ({free/gib:.1f} GiB free).")
+          print(f"Selected compressed artifacts: {total/gib:.2f} GiB; free runner disk: {free/gib:.2f} GiB.")
+          PY
+      - name: Download previous output used as reference
+        if: inputs.reference_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reference_run_id }}
+          pattern: ${{ inputs.reference_artifact || 'movie-video-*' }}
+          path: reference-input
+          merge-multiple: false
+      - name: Download comparison output
+        if: inputs.comparison_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.comparison_run_id }}
+          pattern: ${{ inputs.comparison_artifact || 'movie-video-*' }}
+          path: comparison-input
+          merge-multiple: true
+      - name: Download external reference when supplied
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        if: github.event_name == 'workflow_dispatch' && inputs.reference_url != ''
+        run: |
+          python - <<'PY'
+          import math
+          import os
+          from pathlib import Path
+          from yt_dlp import YoutubeDL
+          from movie_pipeline.auth import prepare_cookies
+          url=os.environ["REFERENCE_URL"].strip()
+          target=Path("reference-input")
+          target.mkdir(exist_ok=True)
+          cookie=prepare_cookies(os.environ.get("YOUTUBE_COOKIES",""), Path(os.environ["RUNNER_TEMP"]))
+          options={"format":"bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                   "outtmpl":str(target / "reference.%(ext)s"), "noplaylist":True,
+                   "max_filesize":400*1024*1024, "retries":2, "fragment_retries":2,
+                   "socket_timeout":20, "merge_output_format":"mp4", "quiet":True,
+                   "js_runtimes":{"node":{}},
+                   "no_warnings":True}
+          if cookie:
+              options["cookiefile"]=str(cookie)
+          with YoutubeDL(options) as downloader:
+              info=downloader.extract_info(url,download=False)
+              duration=info.get("duration")
+              if not isinstance(duration,(float,int)) or not math.isfinite(duration) or not 0<duration<=1800:
+                  raise SystemExit("Reference must be a single video with known duration up to 30 minutes.")
+              downloader.download([url])
+          PY
+      - name: Analyze actual videos and optional captions
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+          def select(root, selected):
+              directory=Path(root).resolve()
+              if selected:
+                  name=Path(selected)
+                  if name.is_absolute() or ".." in name.parts:
+                      raise SystemExit(f"Selected filename must be relative to {root}.")
+                  video=(directory/name).resolve()
+                  if not video.is_relative_to(directory) or not video.is_file() or video.suffix.lower() not in {".mp4",".mkv",".webm",".mov"}:
+                      raise SystemExit(f"Selected video does not exist inside {root}.")
+                  return video
+              videos=[p.resolve() for p in directory.rglob("*") if p.is_file()
+                      and p.suffix.lower() in {".mp4",".mkv",".webm",".mov"} and p.resolve().is_relative_to(directory)]
+              preferred=[p for p in videos if p.name in ("final-video.mp4","reference.mp4")]
+              if len(preferred)==1: return preferred[0]
+              if len(videos)==1: return videos[0]
+              raise SystemExit(f"Expected one video in {root}; found {len(videos)}. Provide its relative filename.")
+          def subtitles(root):
+              files=list(Path(root).rglob("subtitles.srt"))
+              return files[0] if len(files)==1 else None
+          ref=select("reference-input",os.environ.get("REFERENCE_FILE","").strip())
+          command=["python","-m","movie_pipeline.reference_analysis","--video",str(ref),"--output-dir","reference-analysis"]
+          ref_srt=subtitles("reference-input")
+          if ref_srt: command.extend(["--transcript",str(ref_srt)])
+          if os.environ.get("REFERENCE_TRANSCRIBE")=="true": command.append("--transcribe")
+          if Path("comparison-input").exists():
+              command.extend(["--compare-video",str(select("comparison-input",os.environ.get("COMPARISON_FILE","").strip()))])
+              own_srt=subtitles("comparison-input")
+              if own_srt: command.extend(["--comparison-transcript",str(own_srt)])
+          subprocess.run(command,check=True)
+          PY
+      - name: Upload evidence and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-analysis
+          path: reference-analysis/
+          retention-days: 2
+          if-no-files-found: warn
+      - name: Remove temporary cookies
+        if: always()
+        run: rm -f "$RUNNER_TEMP/youtube-cookies.txt"

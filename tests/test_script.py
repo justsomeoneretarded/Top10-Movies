@@ -182,7 +182,11 @@ def cached_script():
 def test_editorial_cache_migration_refreshes_stale_reviews_and_reuses_current_policy():
     films, script = cached_script()
     writer = Writer()
-    writer.ask = Mock(return_value={"paragraphs": ["One horror show traps a teacher in a disappearing town. Here's the setup, without the big reveals."]})
+    def response_for_task(prompt, schema, **kwargs):
+        if "remove" in schema.get("properties", {}):
+            return {"remove": []}
+        return {"paragraphs": ["One horror show traps a teacher in a disappearing town. Here's the setup, without the big reveals."]}
+    writer.ask = Mock(side_effect=response_for_task)
     result = writer.refresh_editorial("Top Horror Shows", "Casual", films, script)
     assert writer.ask.call_count >= 3
     assert result["package"]["script_policy_version"] == SCRIPT_POLICY_VERSION
