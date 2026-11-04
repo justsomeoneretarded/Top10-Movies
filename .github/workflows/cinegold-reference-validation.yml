@@ -1,0 +1,92 @@
+name: CineGold reference validation
+on:
+  push:
+    branches: [feature/cinegold-input-validation]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: bash scripts/install_system_packages.sh ffmpeg
+      - run: python -m pip install -e .
+      - name: Configure the existing optional YouTube authentication
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: python -m scripts.prepare_cookies
+      - name: Download matching public reference for analysis
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from yt_dlp import YoutubeDL
+          url="https://www.youtube.com/watch?v=yzzouH9Dezc"
+          Path("reference-input").mkdir(exist_ok=True)
+          opts={"format":"bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                "outtmpl":"reference-input/reference.%(ext)s","merge_output_format":"mp4",
+                "noplaylist":True,"max_filesize":400*1024*1024,"retries":2,
+                "fragment_retries":2,"socket_timeout":20,"quiet":True}
+          if os.environ.get("YOUTUBE_COOKIE_FILE"):
+              opts["cookiefile"]=os.environ["YOUTUBE_COOKIE_FILE"]
+          with YoutubeDL(opts) as ydl:
+              info=ydl.extract_info(url, download=False)
+              if info.get("id")!="yzzouH9Dezc" or "highest rated movies of 2026 so far" not in (info.get("title") or "").casefold() or "cinegold" not in (info.get("channel") or info.get("uploader") or "").casefold():
+                  raise SystemExit("Public video identity did not match the uploaded reference title and channel.")
+              print("Reference identity:", info.get("id"),info.get("title"),"duration seconds:",info.get("duration"),flush=True)
+              ydl.download([url])
+          PY
+      - name: Download previous spy-video output for comparison
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: "41789170701"
+          name: movie-video-44
+          path: baseline-spy
+      - name: Measure reference and baseline
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          samples=[p for p in Path("reference-input").rglob("*") if p.suffix.lower() in {".mp4",".mkv",".webm",".mov"}]
+          outputs=list(Path("baseline-spy").rglob("final-video.mp4"))
+          if len(samples)!=1 or len(outputs)!=1:
+              raise SystemExit(f"Expected one sample and one prior output, found {len(samples)} and {len(outputs)}.")
+          command=["python","-m","movie_pipeline.reference_analysis","--video",str(samples[0]),
+                   "--compare-video",str(outputs[0]),"--output-dir","cinegold-analysis","--transcribe"]
+          subs=list(Path("baseline-spy").rglob("subtitles.srt"))
+          if len(subs)==1: command.extend(["--comparison-transcript",str(subs[0])])
+          subprocess.run(command,check=True)
+          for label in ("reference","production"):
+              data=json.loads((Path("cinegold-analysis")/label/"reference-analysis.json").read_text())
+              print("REFERENCE_METRICS",label,json.dumps({"duration_seconds":data["duration_seconds"],
+                  "approximate_cuts":len(data["visual"]["approximate_abrupt_boundaries_seconds"]),
+                  "estimated_median_segment_seconds":data["visual"]["estimated_segment_median_seconds"],
+                  "integrated_mixed_lufs":data["mixed_audio"].get("integrated_lufs"),
+                  "true_peak_dbfs":data["mixed_audio"].get("true_peak_dbfs"),
+                  "transcript_source":data["transcript"].get("source"),
+                  "transcript_available":data["transcript"].get("available")}),flush=True)
+          PY
+      - name: Upload analysis only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinegold-reference-evidence
+          path: cinegold-analysis/
+          retention-days: 2
+          if-no-files-found: ignore
+      - name: Remove private cookies
+        if: always()
+        run: rm -f "$RUNNER_TEMP/youtube-cookies.txt"
