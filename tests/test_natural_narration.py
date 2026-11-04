@@ -170,3 +170,47 @@ def test_exceptionally_long_sentence_prefers_existing_clause_boundaries():
     clause = " ".join(["one"]*50)+","
     text = clause+" "+" ".join(["two"]*50)+"."
     assert phrases([text]) == [clause, " ".join(["two"]*50)+"."]
+
+
+def test_episode_edit_includes_opening_and_closing_in_context_and_removes_repetition():
+    writer = Writer()
+    writer.ask = Mock(return_value={"remove": ["0:0:1", "1:0:1", "2:0:0"]})
+    sections = [
+        {"kind": "intro", "paragraphs": ["Three tense thrillers for your next movie night. These thrillers are tense."], "delivery": ["hype"]},
+        {"kind": "film", "film": 0, "paragraphs": ["Number 1: Example. Tension fills every scene. A spy must rescue her brother."], "delivery": ["normal"]},
+        {"kind": "outro", "paragraphs": ["These movies are tense. Which would you watch? Like and subscribe."], "delivery": ["calm"]},
+    ]
+    result = writer.episode_edit("Top thrillers", "Casual", sections)
+    prompt = writer.ask.call_args.args[0]
+    assert '"kind": "intro"' in prompt and '"kind": "outro"' in prompt
+    assert result[0]["paragraphs"] == ["Three tense thrillers for your next movie night."]
+    assert result[1]["paragraphs"] == ["Number 1: Example. A spy must rescue her brother."]
+    assert result[2]["paragraphs"] == ["Which would you watch? Like and subscribe."]
+    assert result[0]["delivery"] == ["hype"] and result[2]["delivery"] == ["calm"]
+    assert sections[0]["paragraphs"][0].endswith("These thrillers are tense.")
+
+
+def test_episode_edit_keeps_whole_intro_if_requested_to_delete_it_and_preserves_outro_cta():
+    writer = Writer()
+    writer.ask = Mock(return_value={"remove": ["0:0:0", "0:0:1", "1:0:0", "1:0:1", "2:0:0", "2:0:1"]})
+    sections = [
+        {"kind": "intro", "paragraphs": ["Watch these thrillers. They all pack a punch."]},
+        {"kind": "film", "film": 0, "paragraphs": ["Number 1: Example. A spy goes undercover."]},
+        {"kind": "outro", "paragraphs": ["Which would you watch? Like and subscribe."]},
+    ]
+    result = writer.episode_edit("Top thrillers", "", sections)
+    assert result[0]["paragraphs"] == sections[0]["paragraphs"]
+    assert result[1]["paragraphs"] == sections[1]["paragraphs"]
+    assert result[2]["paragraphs"] == sections[2]["paragraphs"]
+
+
+def test_episode_edit_leaves_non_editorial_sections_untouched_and_fails_open():
+    writer = Writer()
+    writer.ask = Mock(side_effect=ValueError("model unavailable"))
+    sections = [
+        {"kind": "intro", "paragraphs": ["One. Two."]},
+        {"kind": "film", "film": 0, "paragraphs": ["Number 1: Example. Three. Four."]},
+        {"kind": "outro", "paragraphs": ["Five. Six."]},
+        {"kind": "subscribe", "paragraphs": ["Do not touch."]},
+    ]
+    assert writer.episode_edit("Top", "", sections) == sections
