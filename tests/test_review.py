@@ -87,3 +87,44 @@ def test_repeat_review_describes_the_limit_of_a_zero_result(tmp_path, monkeypatc
     assert summary["repeat_detection"]["available"] is True
     assert "No matching sampled frames" in page
     assert "can miss shorter or visually different repeats" in page
+
+
+
+def test_thumbnail_vision_recovers_once_then_stops_after_two_unavailable(tmp_path, monkeypatch):
+    from movie_pipeline import scenes
+    from movie_pipeline.review import thumbnail_scores
+
+    for number in range(1, 6):
+        Image.new("RGB", (64, 36), (number * 20, 20, 20)).save(tmp_path / f"thumbnail-{number:02}.jpg")
+    monkeypatch.setattr(scenes, "enabled", lambda: True)
+    good = {"genre_fit": 7, "score": 8, "logo": False}
+    outcomes = iter([None, good, None, None])
+    calls = []
+    def rate(*args):
+        calls.append(True)
+        return next(outcomes)
+    monkeypatch.setattr(scenes, "rate_thumbnail", rate)
+    rows = thumbnail_scores(tmp_path, "horror")
+    assert len(calls) == 4
+    assert [row["vision"] for row in rows] == [None, good, None, None, None]
+    assert all(isinstance(row["phone_contrast"], float) for row in rows)
+
+
+def test_optional_thumbnail_vision_exception_keeps_scoring_and_can_recover(tmp_path, monkeypatch):
+    from movie_pipeline import scenes
+    from movie_pipeline.review import thumbnail_scores
+
+    for number in (1, 2):
+        Image.new("RGB", (64, 36), (90, number * 20, 20)).save(tmp_path / f"thumbnail-{number:02}.jpg")
+    monkeypatch.setattr(scenes, "enabled", lambda: True)
+    good = {"genre_fit": 7, "score": 8, "logo": False}
+    calls = []
+    def rate(*args):
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError("offline")
+        return good
+    monkeypatch.setattr(scenes, "rate_thumbnail", rate)
+    rows = thumbnail_scores(tmp_path, "horror")
+    assert len(rows) == 2 and [row["vision"] for row in rows] == [None, good]
+    assert all(isinstance(row["phone_contrast"], float) for row in rows)

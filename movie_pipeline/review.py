@@ -142,10 +142,23 @@ def thumbnail_scores(output: Path, genre: str) -> list[dict]:
         match = re.fullmatch(r"thumbnail-(\d+)\.jpg", path.name)
         if match and path.is_file():
             numbered.append((int(match.group(1)), path.name, path))
+    vision_enabled = scenes.enabled()
+    consecutive_unavailable = 0
     for _, _, path in sorted(numbered):
         with Image.open(path) as image:
             image = image.convert("RGB")
-            verdict = scenes.rate_thumbnail(image, profile.get("label", ""), profile.get("hint", "")) if scenes.enabled() else None
+            verdict = None
+            if vision_enabled:
+                try:
+                    verdict = scenes.rate_thumbnail(image, profile.get("label", ""), profile.get("hint", ""))
+                except Exception as exc:
+                    # This rating is advisory. Keep the phone-size check and
+                    # allow a transient failure; never fail the video package.
+                    print(f"Optional thumbnail vision rating failed ({type(exc).__name__}).", flush=True)
+                consecutive_unavailable = consecutive_unavailable + 1 if verdict is None else 0
+                if consecutive_unavailable >= 2:
+                    vision_enabled = False
+                    print("Thumbnail vision rating unavailable twice; keeping phone-contrast checks.", flush=True)
             rows.append({"file": path.name, "image": image.copy(), "phone_contrast": round(phone_check(image), 1),
                          "vision": verdict})
     return rows
