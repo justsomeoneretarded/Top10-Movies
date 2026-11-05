@@ -774,7 +774,7 @@ class ShotSelector:
                                      if start < entry["end"] and end > entry["start"]), default=0)
                     score = float(relevance[index]) - used*.04
                     score += min(available,maximum_shot)*.035-min(shot["motion"],60)/600
-                    if about_person and hold_ready and flags[index]:
+                    if about_person and hold_ready and flags[index] and min(end, float(shot["end"]))-max(start, float(shot["start"])) >= .2:
                         score += .22
                     score -= self.reuse_penalty(path,start,min(remaining,available,maximum_shot))
                     score -= self.visual_reuse_penalty(path,start,min(remaining,available,maximum_shot))
@@ -801,10 +801,12 @@ class ShotSelector:
             _tier,_score,_order,index,start,end,reused = max(candidates,key=lambda row: row[:3])
             shot = shots[index]
             available = max(.1,end-start)
-            portrait = about_person and hold_ready and flags[index] and remaining >= 3
+            hold_low, hold_high = max(start, float(shot["start"])), min(end, float(shot["end"]))
+            can_hold = hold_high - hold_low >= .2
+            portrait = about_person and hold_ready and flags[index] and remaining >= 3 and can_hold
             detail = (hold_ready and not portrait and moving_beats > HOLD_COOLDOWN_BEATS
                       and moving_seconds >= HOLD_COOLDOWN_SECONDS + 4
-                      and shot["motion"] <= 18 and remaining >= 3)
+                      and shot["motion"] <= 18 and remaining >= 3 and can_hold)
             still = portrait or detail
             if still and 7 < remaining < 8.5:
                 portrait = detail = still = False
@@ -822,7 +824,7 @@ class ShotSelector:
                 freeze += extra
                 length += extra
             freeze = min(freeze,max(0,length-.1))
-            chosen_start = (start+end)/2 if still else start
+            chosen_start = (hold_low+hold_high)/2 if still else start
             cut = {"start":chosen_start,"duration":length,"freeze":freeze,"still":bool(still),
                    "visual_reason":"portrait-hold" if portrait else ("detail-hold" if detail else
                         ("spaced-source-reuse" if reused else "fresh-script-match"))}

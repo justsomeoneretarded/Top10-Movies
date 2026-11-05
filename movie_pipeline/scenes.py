@@ -57,6 +57,9 @@ def load(trailer: Path, count: int) -> dict | None:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
+    if (not isinstance(data, dict) or not isinstance(data.get("descriptions"), list)
+            or not isinstance(data.get("embeddings"), list)):
+        return None
     if (data.get("version") != VERSION or data.get("model") != VISION_MODEL
             or data.get("embed_model") != EMBED_MODEL
             or len(data.get("descriptions", [])) != count or len(data.get("embeddings", [])) != count):

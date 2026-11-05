@@ -236,3 +236,30 @@ def test_vision_uses_final_answer_and_checks_model_cache(tmp_path):
     scenes.cache_path(path).write_text(json.dumps({"version": scenes.VERSION, "model": "old-thinking",
         "embed_model": scenes.EMBED_MODEL, "descriptions": ["A car"], "embeddings": [[1.]]}))
     assert scenes.load(path, 1) is None
+
+
+@pytest.mark.parametrize("bad", [[], None, {"version": scenes.VERSION, "model": scenes.VISION_MODEL,
+    "embed_model": scenes.EMBED_MODEL, "descriptions": None, "embeddings": []}])
+def test_malformed_vision_cache_is_optional(tmp_path, bad):
+    path = tmp_path/"film.mp4"
+    scenes.cache_path(path).write_text(json.dumps(bad))
+    assert scenes.load(path, 1) is None
+
+
+def test_corrupt_preselected_cues_fall_back(monkeypatch, tmp_path):
+    source, lookup, films, calls = map_fixture(monkeypatch, tmp_path)
+    plan = scene_plan.prepare_scene_map([[source]], lookup, films, tmp_path/"plan", lambda: object())
+    for clip in plan["films"]["0"]:
+        clip["cues"] = [{"start": "bad", "text": "broken"}]
+    assert scene_plan.validated_priorities(plan, 0, [source], lookup, films[0]) == []
+
+
+def test_portrait_hold_stays_in_its_indexed_frame_window():
+    selector, path = bare(), Path("film.mp4")
+    rows = tagged()
+    selector._scene_ranges = {str(path): rows}
+    selector.faces = {str(path): [True, False, False]}
+    selector.people = {str(path): ["Example Actor"]}
+    cuts = selector.choose(path, rows, "Example Actor plays the agent.", 5, False)
+    assert cuts[0]["still"]
+    assert 0 <= cuts[0]["start"] <= 12

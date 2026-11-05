@@ -77,9 +77,23 @@ def validated_priorities(scene_map, film_index, pool, shot_lookup, film, *, dead
             identifier = key("scene-plan", VERSION, _film_key(film), digest, row["start"], row["duration"])
             if row.get("source_sha256") != digest or row.get("id") != identifier:
                 continue
-            if not isinstance(row.get("cues"), list):
+            cues = row.get("cues")
+            if not isinstance(cues, list) or row.get("muted") is not False or row.get("native_verified") is not True:
+                continue
+            valid_cues = True
+            for cue in cues:
+                if not isinstance(cue, dict) or not isinstance(cue.get("text"), str):
+                    valid_cues = False
+                    break
+                begin, end = float(cue["start"]), float(cue["end"])
+                if (not all(math.isfinite(v) for v in (begin, end)) or begin < float(row["start"])
+                        or not begin < end <= float(row["start"]) + float(row["duration"]) + .05):
+                    valid_cues = False
+                    break
+            if not valid_cues:
                 continue
             clip = deepcopy(row)
+            clip["start"], clip["duration"] = float(row["start"]), float(row["duration"])
             clip["film_index"] = film_index
             clip["extent"] = max(float(shot["end"]) for shot in shot_lookup[source])
             result.append(clip)
