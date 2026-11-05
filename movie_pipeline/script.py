@@ -743,6 +743,9 @@ class Writer:
         """Critique episode-wide flow, then rewrite only a bounded set of weak reviews."""
         from .packaging import refresh_availability
         result = refresh_availability({"sections": deepcopy(sections), "package": {}}, films)["sections"]
+        for original, cleaned in zip(sections, result):
+            if "availability_text" not in original:
+                cleaned.pop("availability_text", None)
         context = [{"section": i, "kind": section.get("kind"),
                     "text": " ".join(section.get("paragraphs", []))[:1800]}
                    for i, section in enumerate(result) if section.get("kind") in {"intro", "film", "outro"}]
