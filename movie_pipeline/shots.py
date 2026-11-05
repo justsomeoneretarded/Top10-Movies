@@ -592,6 +592,30 @@ class ShotSelector:
             remaining = pieces
         return remaining
 
+    def break_continuation(self):
+        """Record a played insert or hold without changing consumed source intervals."""
+        self._history_clock = int(getattr(self, "_history_clock", 0)) + 1
+
+    def continuation_orders(self, path: Path, start: float, seconds: float) -> set[int]:
+        """Permit untouched continuation of one indexed shot, preserving duplicate checks."""
+        if seconds <= 0 or not all(math.isfinite(float(x)) for x in (start, seconds)):
+            return set()
+        clock = int(getattr(self, "_history_clock", 0))
+        intervals = self._interval_history().get(str(path), [])
+        latest = next((entry for entry in intervals
+                       if entry["order"] == clock and entry.get("kind") == "narration"), None)
+        if latest is None or not 0 <= start - latest["end"] <= .35:
+            return set()
+        if self.freshness(path, start, seconds) < .999:
+            return set()
+        for shot in getattr(self, "_scene_ranges", {}).get(str(path), []):
+            if (shot["start"] <= latest["start"] and latest["end"] <= shot["end"]
+                    and shot["start"] <= start and start + seconds <= shot["end"] + 1e-6):
+                return {entry["order"] for entry in intervals
+                        if entry.get("kind") == "narration" and shot["start"] <= entry["start"]
+                        and entry["end"] <= min(shot["end"], start)}
+        return set()
+
     def visual_freshness(self, path: Path, start: float, seconds: float) -> float:
         ranges = getattr(self,"_scene_ranges",{}).get(str(path),[])
         hashes = getattr(self,"_scene_hashes",{}).get(str(path),[])
@@ -600,7 +624,10 @@ class ShotSelector:
         history = getattr(self,"_visual_history",[])
         if not relevant:
             return 1.0
-        return sum(not any((value^old).bit_count() <= 6 for old,_order,_path in history) for value in relevant)/len(relevant)
+        continued = self.continuation_orders(path, start, seconds)
+        return sum(not any((value^old).bit_count() <= 6
+                           and not (str(old_path) == str(path) and order in continued)
+                           for old,order,old_path in history) for value in relevant)/len(relevant)
 
     def freshness(self, path: Path, start: float, seconds: float) -> float:
         if seconds <= 0:
@@ -638,8 +665,11 @@ class ShotSelector:
         costs = []
         from .editorial_policy import source_identity
         film = getattr(self, "source_films", {}).get(str(path), source_identity(path))
+        continued = self.continuation_orders(path, start, seconds)
         for value in relevant:
             for old,order,source in getattr(self,"_visual_history",[]):
+                if str(source) == str(path) and order in continued:
+                    continue
                 if (value^old).bit_count() <= 6:
                     age = max(0,clock-order)
                     # The same image under a different film's review is never acceptable.
@@ -705,7 +735,8 @@ class ShotSelector:
                     unseen = bool(fragments)
                     virgin = self.freshness(path,raw_start,raw_end-raw_start) >= .999
                     visual_fresh = self.visual_freshness(path,start,available) >= .999
-                    tier = 2 if virgin and visual_fresh else (1 if unseen and not virgin else 0)
+                    continuing = bool(self.continuation_orders(path, start, min(remaining, available, maximum_shot)))
+                    tier = 2 if (virgin or continuing) and visual_fresh else (1 if unseen and not virgin else 0)
                     if not unseen:
                         # Once exhausted, rotate the least recently used window
                         # before considering semantic preference again.
@@ -717,7 +748,7 @@ class ShotSelector:
                         score += .22
                     score -= self.reuse_penalty(path,start,min(remaining,available,maximum_shot))
                     score -= self.visual_reuse_penalty(path,start,min(remaining,available,maximum_shot))
-                    if index == last_index:
+                    if index == last_index and not continuing:
                         score -= .35
                     # Story order: picking up right where the previous excerpt of this trailer ended
                     # plays the trailer's own sequence of scenes, which reads as one coherent segment.

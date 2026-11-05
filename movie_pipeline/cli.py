@@ -780,6 +780,11 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     portraits_used = set()
     offset = 0.0
     film_position = 0  # entries shown so far, for rotating the rank reveal
+    def break_source_continuation():
+        breaker = getattr(selector, "break_continuation", None)
+        if callable(breaker):
+            breaker()
+
     from .branding import render_ident
     ident_path = work / "part-000.mp4"
     ident_seconds = render_ident(ident_path, work / "brand-ident")
@@ -812,6 +817,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         offset += seconds
         note_visual_beat(selector, seconds, still=bool(shot.get("still")))
     for section_index, section in enumerate(script["sections"]):
+        break_source_continuation()
         film_index = section["film"]
         film = films[film_index]
         trailer = trailers[film_index]
@@ -955,6 +961,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                              "film": section["kind"].title()+" montage" if montage is not None else film["title"], "films": sorted({films[cut.get("film_index", film_index)]["title"] for cut in chosen}), "text": text, "shots": chosen})
             parts.append(path)
             offset += seconds
+            if any(cut.get("still") or cut.get("image") or cut.get("freeze", 0) for cut in chosen):
+                break_source_continuation()
             native_clip = native_insertions.get(section_index, {}).get(paragraph_index)
             if native_clip:
                 native_path = work / f"part-{len(parts):03}.mp4"
@@ -975,6 +983,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                     parts.append(native_path)
                     used_video_sources.add(native_clip["source"])
                     offset += seconds
+                    break_source_continuation()
             elif not native_plan:
                 body_index = paragraph_index - (1 if is_film else 0)
                 impact = impacts.get(section_index) if body_index == 0 else None
@@ -992,6 +1001,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                         parts.append(path)
                         used_video_sources.add(str(trailer))
                         offset += seconds
+                        break_source_continuation()
                 active_beat = (beat if body_index+1 == midpoint else
                                extra_beats.get(section_index) if body_index+1 == max(midpoint+1, body_count-1) else None)
                 if active_beat:
@@ -1014,6 +1024,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                                      "separated": separated is not None})
                     parts.append(path)
                     offset += seconds
+                    break_source_continuation()
         card = ending_cards.get(film_index) if is_film else None
         if is_film:
             # Lower left, where the rank/title box sat: the small countdown tracker appears once that
