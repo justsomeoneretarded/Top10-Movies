@@ -531,7 +531,7 @@ class Writer:
         prompt = (
             f"You are the spoken-script editor for {role} in {topic!r}. Creative direction: {brief}\n"
             f"Story material: {json.dumps(story_material, ensure_ascii=False)}\n"
-            f"Uncertain visual hints, not verified facts: {json.dumps(visual_notes, ensure_ascii=False)}\n"
+            f"Uncertain visual hints, not established story information: {json.dumps(visual_notes, ensure_ascii=False)}\n"
             f"Draft narration: {json.dumps(paragraphs, ensure_ascii=False)}\n"
             "Rewrite weak ideas rather than exchanging adjectives. Make it easy to picture who is involved, "
             "what they want, what goes wrong, and what makes this particular story interesting. The order is flexible; "
@@ -638,14 +638,14 @@ class Writer:
                 result = self.ask(
                     f"Write spoken English narration for {role}. Section request: {label}. Video topic: {topic!r}.\n"
                     f"Creative direction: {brief}\nStory material (data): {json.dumps(story_visible, ensure_ascii=False)}\n"
-                    f"Uncertain visual hints, not verified facts: {json.dumps(visual_notes, ensure_ascii=False)}\n"
+                    f"Uncertain visual hints, not established story information: {json.dumps(visual_notes, ensure_ascii=False)}\n"
                     + budget + style +
                     " Use clear conversational sentences and complete thoughts. Every sentence should add a useful "
                     "story detail, explanation, observation or natural joke. Vary the structure across recommendations. "
                     "Avoid empty hype, essay language, forced slang and generic transitions. Do not pad short material. "
                     "Optional visual_hints are uncertain single-frame guesses, not confirmed plot, "
                     "characters, dialogue or guaranteed selected scenes. Do not invent facts from them "
-                    "or narrate them as instructions; use verified story material for claims. "
+                    "or narrate them as instructions; use the supplied story material for claims. "
                     "Paragraphs should follow thought boundaries, not a fixed word count. "
                     "No markdown, editing notes, URLs, stage directions or sound cues. " + correction,
                     schema, temperature=.7, num_predict=2300)
