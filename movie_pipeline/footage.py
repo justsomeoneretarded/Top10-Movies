@@ -216,7 +216,7 @@ def _download_route(film: dict, root: Path, path: Path, height: int, common: dic
                 continue
             seen.add(url)
             try:
-                with yt_dlp.YoutubeDL(common) as ydl:
+                with download_access.youtube_dl(yt_dlp, common) as ydl:
                     info = ydl.extract_info(url, download=False)
                 if info and candidate_ok(info, film, curated):
                     ranked.append((advertised_quality(info, height), len(ranked), url, curated, info))
@@ -233,7 +233,7 @@ def _download_route(film: dict, root: Path, path: Path, height: int, common: dic
         if blocked or len(seen) >= MAX_CANDIDATES or max((r[0] for r in ranked), default=0) >= height:
             break
         try:
-            with yt_dlp.YoutubeDL({**common, "extract_flat": True}) as ydl:
+            with download_access.youtube_dl(yt_dlp, {**common, "extract_flat": True}) as ydl:
                 result = ydl.extract_info(f"ytsearch4:{query}", download=False)
             discovered = [(f"https://www.youtube.com/watch?v={entry['id']}", False)
                           for entry in (result or {}).get("entries", []) if entry and re.fullmatch(r"[\w-]{11}", entry.get("id", ""))]
@@ -261,7 +261,7 @@ def _download_route(film: dict, root: Path, path: Path, height: int, common: dic
                        "postprocessors": [{"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}],
                        "outtmpl": str(attempt.with_suffix(".%(ext)s")), "overwrites": True,
                        "max_filesize": MAX_TRAILER_BYTES}
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with download_access.youtube_dl(yt_dlp, options) as ydl:
                 ydl.download([url])
             if not attempt.exists() or not 25 <= duration(attempt) <= 360:
                 raise PipelineError("Downloaded trailer failed file/duration checks.")

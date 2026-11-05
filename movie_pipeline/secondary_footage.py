@@ -198,7 +198,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
             seen.add(identifier)
             url = f'https://www.youtube.com/watch?v={identifier}'
             try:
-                with yt_dlp.YoutubeDL(common) as ydl:
+                with download_access.youtube_dl(yt_dlp, common) as ydl:
                     info = ydl.extract_info(url,download=False)
                 if info and secondary_candidate_ok(info,film,curated):
                     quality = _quality(info,minimum_size,cap)
@@ -224,7 +224,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
         if blocked or len(seen)-excluded_count >= MAX_METADATA:
             break
         try:
-            with yt_dlp.YoutubeDL({**common,'extract_flat':True}) as ydl:
+            with download_access.youtube_dl(yt_dlp, {**common,'extract_flat':True}) as ydl:
                 result = ydl.extract_info(f"ytsearch4:{query}", download=False)
             inspect([(entry.get('id',''),False) for entry in (result or {}).get('entries',[]) if entry][:2])
         except (yt_dlp.utils.DownloadError,PipelineError,OSError,ValueError):
@@ -243,7 +243,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
                        'format_sort':['res','vcodec:h264'],'merge_output_format':'mp4',
                        'postprocessors':[{'key':'FFmpegVideoRemuxer','preferedformat':'mp4'}],
                        'outtmpl':str(attempt.with_suffix('.%(ext)s')),'overwrites':True,'max_filesize':MAX_TRAILER_BYTES}
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with download_access.youtube_dl(yt_dlp, options) as ydl:
                 ydl.download([url])
             if not attempt.exists() or not 20 <= duration(attempt) <= 360 or attempt.stat().st_size > MAX_TRAILER_BYTES:
                 continue

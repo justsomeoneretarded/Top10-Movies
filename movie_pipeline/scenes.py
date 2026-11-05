@@ -14,6 +14,7 @@ from collections import Counter
 import io
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -22,7 +23,7 @@ import requests
 
 from .core import PipelineError, save_json
 
-VISION_MODEL = os.getenv("SCENE_MODEL", "qwen3-vl:2b")
+VISION_MODEL = os.getenv("SCENE_MODEL", "qwen3-vl:2b-instruct")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "all-minilm")
 VERSION = 2
 _DEADLINE = None
@@ -56,7 +57,12 @@ def load(trailer: Path, count: int) -> dict | None:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    if data.get("version") != VERSION or len(data.get("descriptions", [])) != count or len(data.get("embeddings", [])) != count:
+    if (not isinstance(data, dict) or not isinstance(data.get("descriptions"), list)
+            or not isinstance(data.get("embeddings"), list)):
+        return None
+    if (data.get("version") != VERSION or data.get("model") != VISION_MODEL
+            or data.get("embed_model") != EMBED_MODEL
+            or len(data.get("descriptions", [])) != count or len(data.get("embeddings", [])) != count):
         return None
     return data
 
@@ -89,6 +95,18 @@ def _vision_timeout(*, deadline=None) -> float:
     return timeout
 
 
+def _answer_text(payload) -> str:
+    """Use only final response text; reasoning is never a visual description."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("response"), str):
+        return ""
+    value = payload["response"].strip()
+    if re.search(r"</think\s*>", value, re.I):
+        value = re.split(r"</think\s*>", value, flags=re.I)[-1]
+    if re.search(r"<think(?:\s|>)", value, re.I):
+        return ""
+    return value.strip()
+
+
 def _describe(image) -> str:
     global _VISION_READY
     small = image.convert("RGB").copy()
@@ -98,9 +116,12 @@ def _describe(image) -> str:
     response = requests.post(_url() + "/api/generate", json={
         "model": VISION_MODEL, "prompt": PROMPT, "images": [base64.b64encode(buffer.getvalue()).decode()],
         "stream": False, "think": False, "keep_alive": "10m",
-        "options": {"temperature": 0.2, "num_predict": 40, "num_ctx": 2048}}, timeout=_vision_timeout(deadline=_DEADLINE))
+        "options": {"temperature": 0.2, "num_predict": 80, "num_ctx": 2048}}, timeout=_vision_timeout(deadline=_DEADLINE))
     response.raise_for_status()
-    text = " ".join(str(response.json().get("response", "")).replace("\n", " ").split())
+    payload = response.json()
+    text = " ".join(_answer_text(payload).replace("\n", " ").split())
+    if not text and isinstance(payload, dict) and (payload.get("done_reason") == "length" or payload.get("thinking")):
+        print("Vision returned no final answer before its output budget; retaining image matching.", flush=True)
     text = text.strip(" \"'")[:160]
     if text:
         _VISION_READY = True
@@ -206,7 +227,7 @@ def rate_thumbnail(image, genre: str = "", genre_hint: str = "") -> dict | None:
             "format": schema, "stream": False, "think": False, "keep_alive": "10m",
             "options": {"temperature": 0.1, "num_predict": 100, "num_ctx": 2048}}, timeout=_vision_timeout())
         response.raise_for_status()
-        data = json.loads(response.json().get("response", "{}"))
+        data = json.loads(_answer_text(response.json()) or "{}")
         # An empty or malformed verdict is not evidence that a frame has no
         # logo or a low score. Keep the existing image-based fallback instead.
         numeric = ("emotion_intensity", "action_or_spectacle", "genre_fit", "thumbnail_score")

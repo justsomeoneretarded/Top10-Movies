@@ -6,5 +6,6 @@
   "narrator": "Warguy",
   "tts_model": "original",
   "duration_minutes": "Auto",
-  "try_4k": true
+  "try_4k": true,
+  "validation_revision": "0cbfefc2948efda1c2b606776032bb9f9c868116"
 }
