@@ -531,11 +531,14 @@ class Writer:
             "required": ["paragraphs"], "additionalProperties": False}
         material = narration_material(facts)
         visual_notes = material.get("visual_hints", [])
-        story_material = {name: value for name, value in material.items() if name != "visual_hints"}
+        available_moments = material.get("available_scene_moments", [])
+        story_material = {name: value for name, value in material.items()
+                          if name not in {"visual_hints", "available_scene_moments"}}
         prompt = (
             f"You are the spoken-script editor for {role} in {topic!r}. Creative direction: {brief}\n"
             f"Story material: {json.dumps(story_material, ensure_ascii=False)}\n"
             f"Uncertain visual hints, not established story information: {json.dumps(visual_notes, ensure_ascii=False)}\n"
+            f"Available source moments, with uncertain descriptions/transcripts: {json.dumps(available_moments, ensure_ascii=False)}\n"
             f"Draft narration: {json.dumps(paragraphs, ensure_ascii=False)}\n"
             f"Episode editorial note: {editorial_note}\n"
             f"Other sections for flow, never a source of this title's plot: {json.dumps(episode_context or [], ensure_ascii=False)}\n"
@@ -556,6 +559,10 @@ class Writer:
             "Visual hints, when supplied, are uncertain single-frame descriptions, not confirmed plot, "
             "people, dialogue, or a promise that a scene will appear. Never use them as factual "
             "evidence or narrate them as directions; rely on the story material for claims. "
+            "Available source moments are actual selected windows, but automated descriptions and transcripts "
+            "can be wrong. Use the story material to give only useful setup for a relevant scene, then let "
+            "original scene sound carry the moment. Do not read IDs, timings, transcripts or edit directions aloud, "
+            "or promise a specific scene will play. "
             "Keep this section's role; do not turn one review into a whole countdown. "
             + ("Keep the short opening 'Number N: Title' announcement intact. " if rank else "")
             + ("Finish with like and subscribe and a pointer to other recommendations. " if closing else "")
@@ -637,7 +644,9 @@ class Writer:
         role = ("a standalone opening" if opening else "a standalone final outro" if closing else
                 f"a SINGLE REVIEW of {facts.get('title', label)!r}, rank {facts.get('rank', '')}")
         visual_notes = visible.get("visual_hints", [])
-        story_visible = {name: value for name, value in visible.items() if name != "visual_hints"}
+        available_moments = visible.get("available_scene_moments", [])
+        story_visible = {name: value for name, value in visible.items()
+                         if name not in {"visual_hints", "available_scene_moments"}}
         correction, best = "", None
         for attempt in range(3):
             try:
@@ -645,6 +654,7 @@ class Writer:
                     f"Write spoken English narration for {role}. Section request: {label}. Video topic: {topic!r}.\n"
                     f"Creative direction: {brief}\nStory material (data): {json.dumps(story_visible, ensure_ascii=False)}\n"
                     f"Uncertain visual hints, not established story information: {json.dumps(visual_notes, ensure_ascii=False)}\n"
+                    f"Available source moments, with uncertain descriptions/transcripts: {json.dumps(available_moments, ensure_ascii=False)}\n"
                     + budget + style +
                     " Use clear conversational sentences and complete thoughts. Every sentence should add a useful "
                     "story detail, explanation, observation or natural joke. Vary the structure across recommendations. "
@@ -652,6 +662,10 @@ class Writer:
                     "Optional visual_hints are uncertain single-frame guesses, not confirmed plot, "
                     "characters, dialogue or guaranteed selected scenes. Do not invent facts from them "
                     "or narrate them as instructions; use the supplied story material for claims. "
+                    "Available source moments are real selected windows, while their descriptions and transcripts "
+                    "are uncertain. Use supplied story material for useful setup, then leave complete paragraph "
+                    "boundaries where scene sound can breathe. Do not read clip IDs, timings, dialogue excerpts "
+                    "or edit directions aloud, or promise a specific scene. "
                     "Paragraphs should follow thought boundaries, not a fixed word count. "
                     "No markdown, editing notes, URLs, stage directions or sound cues. " + correction,
                     schema, temperature=.7, num_predict=2300)
@@ -793,6 +807,8 @@ class Writer:
             handled.add(index)
             facts = narration_material(film_facts(films[film_index]))
             facts["rank"] = film_index + 1
+            if section.get("available_scene_moments"):
+                facts["available_scene_moments"] = section["available_scene_moments"]
             facts["other_titles"] = [film["title"] for j, film in enumerate(films) if j != film_index]
             neighbours = [row for row in context if row["section"] != index
                           and abs(row["section"] - index) <= 1]
@@ -922,7 +938,8 @@ class Writer:
 
     def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0, target_seconds: float = 540, trailer_seconds: float = 0,
               only: set[str] | None = None, automatic: bool = False,
-              visual_hints: list[list[str]] | None = None) -> dict:
+              visual_hints: list[list[str]] | None = None,
+              scene_context: list[list[dict]] | None = None) -> dict:
         """Write the whole script, or (with ``only``) just some sections to warm the cache in parallel jobs.
 
         Section names for ``only``: "intro", "outro" and "film-<index>" (0 is number one).
@@ -949,6 +966,8 @@ class Writer:
             facts = narration_material(film_facts(films[index]))
             if visual_hints and index < len(visual_hints) and visual_hints[index]:
                 facts["visual_hints"] = visual_hints[index]
+            if scene_context and index < len(scene_context) and scene_context[index]:
+                facts["available_scene_moments"] = scene_context[index]
             facts["rank"] = index + 1
             facts["other_titles"] = [film["title"] for i, film in enumerate(films) if i != index]
             if plan.get("entries", {}).get(str(index + 1)):
@@ -974,6 +993,9 @@ class Writer:
                 paragraphs.append(available)
                 delivery = [*delivery, "normal"]
             sections.append({"kind": "film", "film": index, "paragraphs": paragraphs, "availability_text": available, "delivery": delivery, "automatic_runtime": automatic})
+            if facts.get("available_scene_moments"):
+                sections[-1]["available_scene_moments"] = facts["available_scene_moments"]
+                sections[-1]["planned_scene_ids"] = [row["id"] for row in facts["available_scene_moments"]]
         if only is not None:
             if "outro" in only:
                 outro_facts = {"topic": title, "titles": [film["title"] for film in films],

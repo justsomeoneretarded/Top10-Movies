@@ -56,7 +56,8 @@ def _cuts_per_minute(shots, start, end):
     """Estimate internal cut density from detected boundaries, not a quality verdict."""
     if end <= start:
         return 0.0
-    return 60.0 * sum(1 for shot in shots if start < float(shot["start"]) < end) / (end - start)
+    return 60.0 * sum(1 for shot in shots if start < float(shot["start"]) < end
+                      and not shot.get("continues_previous", False)) / (end - start)
 
 
 def candidates(selector,pool,shot_lookup,film):
@@ -216,7 +217,7 @@ def _match_inserts(selector, clips, positions, paragraphs, shot_lookup):
 def _reserve(selector,clip):
     getattr(selector,"reserve",lambda *_:None)(Path(clip["source"]),clip["start"],clip["duration"],"native-scene")
 
-def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recognizer,work):
+def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recognizer,work,scene_map=None):
     """Return opening, natural rank previews, and optional review insertions.
 
     Image matching is required for this optional planner. The established preview
@@ -227,11 +228,29 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
     from .core import duration
     work.mkdir(parents=True,exist_ok=True)
     options={i:candidates(selector,pool,shot_lookup,films[i]) for i,pool in enumerate(pools)}
+    from .scene_plan import validated_priorities
+    preferred, source_hashes = {}, {}
+    for section in sections:
+        index = section.get("film")
+        ids = section.get("planned_scene_ids", [])
+        if section.get("kind") != "film" or type(index) is not int or not isinstance(ids, list):
+            continue
+        accepted_ids = {value for value in ids if isinstance(value, str)}
+        if not accepted_ids or not 0 <= index < len(films):
+            continue
+        preferred[index] = [{**clip, "preselected": True} for clip in
+                            validated_priorities(scene_map, index, pools[index], shot_lookup, films[index],
+                                                 hash_cache=source_hashes) if clip["id"] in accepted_ids]
+
+    def planned_overlap(clip, index):
+        return any(clip["source"] == old["source"] and _overlap(clip, old)
+                   for old in preferred.get(index, []))
+
     used=[]
     opening=[]
     # Extend the opening only when actual semantic action evidence exists.
     energetic=sorted([{**clip,"film_index":i} for i,rows in options.items() for clip in rows
-                      if clip["action_strength"]>.025 and clip["motion"]>4],
+                      if clip["action_strength"]>.025 and clip["motion"]>4 and not planned_overlap(clip, i)],
                      key=lambda c:-(c["action_strength"]+c["score"]))
     for candidate in energetic:
         if len(opening)>=2 or sum(c["duration"] for c in opening)>=12:
@@ -245,7 +264,7 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
         if clip and _usable(selector,clip,shot_lookup) and sum(c["duration"] for c in opening)+clip["duration"]<=18:
             opening.append(clip);used.append(clip);_reserve(selector,clip)
     if not opening:
-        all_clips=[{**clip,"film_index":i} for i,rows in options.items() for clip in rows]
+        all_clips=[{**clip,"film_index":i} for i,rows in options.items() for clip in rows if not planned_overlap(clip, i)]
         if all_clips:
             best=max(all_clips,key=lambda c:c["score"])
             # Quiet lists get a brief silent picture, not chopped movie dialogue.
@@ -263,7 +282,7 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
         wanted=min(5,1+int(sum(paragraph_seconds)//30),len(paragraph_seconds)+1)
         chosen=[]
         examined=0
-        for row in options.get(index,[]):
+        for row in [*preferred.get(index, []), *options.get(index, [])]:
             if len(chosen)>=wanted or examined>=max(6,wanted*2):
                 break
             candidate={**row,"film_index":index}
@@ -273,7 +292,7 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
                 continue
             examined+=1
             try:
-                clip=_enrich(candidate,dialogue,recognizer,work)
+                clip = dict(candidate) if candidate.get("preselected") else _enrich(candidate,dialogue,recognizer,work)
             except (OSError,ValueError,RuntimeError):
                 clip=None
             if clip is None or not _usable(selector,clip,shot_lookup):
@@ -293,5 +312,7 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
                                          section["paragraphs"], shot_lookup)
                 inserts[section_index] = dict(zip(paragraph_positions, matched))
     return {"opening":opening,"previews":previews,"inserts":inserts,
-            "report":{"opening_seconds":sum(c["duration"] for c in opening),
+            "report":{"planned_scene_count":sum(len(rows) for rows in preferred.values()),
+                      "planned_scenes_used":sum(bool(clip.get("preselected")) for clip in used),
+                      "opening_seconds":sum(c["duration"] for c in opening),
                       "native_moments":sum(c.get("native_verified",False) and not c.get("muted",True) for c in used),"review_counts":{str(i):1+len(inserts.get(i,{})) for i in previews}}}

@@ -11,6 +11,8 @@ to it so each title does not repeat the blocked attempt.
 """
 from __future__ import annotations
 
+import threading
+
 import os
 
 _state = {"prefer_fallback": False}
@@ -47,3 +49,12 @@ def record_route_success(route: str):
 
 def reset():
     _state["prefer_fallback"] = False
+
+
+_youtube_dl_init_lock = threading.RLock()
+
+
+def youtube_dl(module, params: dict):
+    """Serialize lazy global plugin setup while leaving extraction/downloads parallel."""
+    with _youtube_dl_init_lock:
+        return module.YoutubeDL(dict(params))

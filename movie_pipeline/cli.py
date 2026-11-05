@@ -237,7 +237,7 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v15-scene-first-movie-ranks", title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v16-scene-map-movie-ranks", title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -402,6 +402,20 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     notice("Footage", f"Export {width}x{height}; {len(sources)} trailers accepted; route: {download_access.routes()[0]}. {per_title}. "
            f"Elapsed {(time.time()-started)/60:.0f} min.")
 
+    from .scene_plan import prepare_scene_map, projected_context
+    def scene_recognizer():
+        from faster_whisper import WhisperModel
+        return WhisperModel("base.en", device="cpu", compute_type="int8",
+                            cpu_threads=min(os.cpu_count() or 2, 4))
+    print("Selecting actual scene windows before writing the script.", flush=True)
+    try:
+        scene_map = prepare_scene_map(pools, shot_lookup, films, work / "scene-plan", scene_recognizer)
+    except Exception as exc:  # optional scene analysis must preserve ordinary production
+        print(f"Optional pre-writing scene plan unavailable ({type(exc).__name__}); keeping normal selection.", flush=True)
+        scene_map = {"version": 1, "film_count": len(films), "films": {}, "report": {"selected": 0}}
+    scene_context = projected_context(scene_map)
+    print(f"Pre-writing scene plan: {scene_map.get('report', {})}.", flush=True)
+
     from .footage_context import collect_visual_hints
     visual_hints = collect_visual_hints(pools, shot_lookup)
     hinted = sum(bool(hints) for hints in visual_hints)
@@ -416,7 +430,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         script = json.loads(script_path.read_text())
     else:
         script = writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks,
-                              automatic=spec.automatic, visual_hints=visual_hints)
+                              automatic=spec.automatic, visual_hints=visual_hints, scene_context=scene_context)
     script = writer.refresh_editorial(title, brief, films, script, automatic=spec.automatic)
     refresh_availability(script, films)
     from .rank_intro import prepare_rank_intros
@@ -508,7 +522,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         print(f"Refining an unusually {'long' if estimated > spec.target else 'short'} draft; measured {estimated/60:.1f} minutes.", flush=True)
         word_scale *= max(.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
         try:
-            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic, visual_hints=visual_hints)
+            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic, visual_hints=visual_hints, scene_context=scene_context)
             refresh_availability(script, films)
             script = prepare_rank_intros(script, films)
             writer.unload()
@@ -622,10 +636,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 duration(trailers[film_index]), action, maximum=max_beat,
                 excluded=[*excluded_cards[film_index], first])
     reserve = getattr(selector, "reserve", None)
-    if callable(reserve):
-        for i, beat in [*beats.items(), *extra_beats.items()]:
-            if beat:
-                reserve(trailers[script["sections"][i]["film"]], beat["start"], beat["end"]-beat["start"], "trailer-audio")
     # Impact moment: right after each review's hook, the trailer's own scare/impact beat plays with its sound.
     impacts = {}
     for i, section in enumerate(script["sections"]):
@@ -649,8 +659,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             peak, start, end = max(options)
             if peak >= 0.3:
                 impacts[i] = {"start": start, "end": end, "peak": peak}
-                if callable(reserve):
-                    reserve(trailers[film_index], start, end - start, "trailer-audio")
     dialogue = {str(trailer): cues for trailer, cues in zip(trailers, trailer_cues)}
     # Plan natural scenes before reserving fallback previews.
     opening, previews = [], {}
@@ -659,7 +667,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     native_plan = None
     try:
         native_plan = plan_episode(selector, pools, shot_lookup, films, script["sections"], speech,
-                                   dialogue, recognizer, work / "native-scenes")
+                                   dialogue, recognizer, work / "native-scenes", scene_map=scene_map)
     except (PipelineError, OSError, ValueError, RuntimeError) as exc:
         print(f"Optional native-scene plan unavailable ({type(exc).__name__}); using safe previews.", flush=True)
     native_insertions = {}
@@ -671,6 +679,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         beats, extra_beats, impacts = {}, {}, {}
         save_json(work / "native-scenes.json", native_plan)
         notice("Native scenes", f"{native_plan['report']}")
+    elif callable(reserve):
+        for i, beat in [*beats.items(), *extra_beats.items(), *impacts.items()]:
+            if beat:
+                reserve(trailers[script["sections"][i]["film"]], beat["start"], beat["end"]-beat["start"], "trailer-audio")
     if not opening:
         opening = cold_open_plan(selector, pools, shot_lookup, title+". "+brief, action,
                                  dialogue=dialogue, seconds=COLD_OPEN_SECONDS)
@@ -979,7 +991,9 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                                              "end": offset+cue["end"]-native_clip["start"], "text": cue["text"]})
                     timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio",
                                      "film": film["title"], "source_start": native_clip["start"],
-                                     "source": native_clip["source"], "native_verified": True, "separated": False})
+                                     "source": native_clip["source"], "native_verified": True, "separated": False,
+                                     "scene_id": native_clip.get("id"),
+                                     "dialogue_boundaries_verified": native_clip.get("dialogue_boundaries_verified", False)})
                     parts.append(native_path)
                     used_video_sources.add(native_clip["source"])
                     offset += seconds

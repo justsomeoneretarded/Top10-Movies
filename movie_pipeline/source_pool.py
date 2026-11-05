@@ -155,7 +155,9 @@ def choose_from_sources(selector, sources: list[Path], shot_sets: dict[str, list
                     for index, shot in enumerate(shot_sets[str(path)]):
                         if selector.card_kind(path, index) is not None:
                             continue
-                        fresh_spans.extend(high-low for low, high in windows(path, shot["start"], shot["end"])
+                        end_method = getattr(selector, "continuous_end", None)
+                        source_end = end_method(path, shot_sets[str(path)], index) if callable(end_method) else shot["end"]
+                        fresh_spans.extend(high-low for low, high in windows(path, shot["start"], source_end)
                                            if high-low >= min(5, remaining)
                                            and selector.visual_freshness(path, low, high-low) >= .999)
                 except OPTIONAL_ERRORS:
