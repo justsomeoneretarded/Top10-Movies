@@ -263,3 +263,5 @@ def test_portrait_hold_stays_in_its_indexed_frame_window():
     cuts = selector.choose(path, rows, "Example Actor plays the agent.", 5, False)
     assert cuts[0]["still"]
     assert 0 <= cuts[0]["start"] <= 12
+
+    assert selector._source_intervals[str(path)][-1]["end"] <= 12

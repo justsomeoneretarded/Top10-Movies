@@ -838,8 +838,8 @@ class ShotSelector:
             chosen.append(cut)
             # A portrait hold consumes that visual beat; motion reserves just its
             # live source span, leaving the rest of a long scene available later.
-            self.reserve(path,start if still else chosen_start,
-                         available if still else max(.1,min(available,length-freeze)),
+            self.reserve(path,hold_low if still else chosen_start,
+                         max(.1, hold_high-hold_low) if still else max(.1,min(available,length-freeze)),
                          "portrait" if portrait else ("detail-hold" if detail else "narration"))
             self.cut_count += 1
             if not still:
