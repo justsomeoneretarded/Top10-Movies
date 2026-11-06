@@ -237,7 +237,7 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v17-quality-recovery", title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v15-scene-first-movie-ranks", title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -405,12 +405,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     writer = Writer(cache_dir=work / "script-sections")
     print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
-    script = (json.loads(script_path.read_text()) if script_path.exists() else
-              writer.write(title, brief, films, target_seconds=spec.target,
-                           trailer_seconds=expected_breaks, automatic=spec.automatic))
+    script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
     script = writer.refresh_editorial(title, brief, films, script, automatic=spec.automatic)
     refresh_availability(script, films)
-    from .rank_intro import prepare_rank_intros, rank_still_time
+    from .rank_intro import prepare_rank_intros
     script = prepare_rank_intros(script, films)
     if script["package"].get("thumbnail_version") != 2:
         script["package"]["thumbnail_concepts"] = writer.thumbnail_concepts(title, brief, films, script["sections"])
@@ -613,6 +611,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                 duration(trailers[film_index]), action, maximum=max_beat,
                 excluded=[*excluded_cards[film_index], first])
     reserve = getattr(selector, "reserve", None)
+    if callable(reserve):
+        for i, beat in [*beats.items(), *extra_beats.items()]:
+            if beat:
+                reserve(trailers[script["sections"][i]["film"]], beat["start"], beat["end"]-beat["start"], "trailer-audio")
     # Impact moment: right after each review's hook, the trailer's own scare/impact beat plays with its sound.
     impacts = {}
     for i, section in enumerate(script["sections"]):
@@ -636,6 +638,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             peak, start, end = max(options)
             if peak >= 0.3:
                 impacts[i] = {"start": start, "end": end, "peak": peak}
+                if callable(reserve):
+                    reserve(trailers[film_index], start, end - start, "trailer-audio")
     dialogue = {str(trailer): cues for trailer, cues in zip(trailers, trailer_cues)}
     # Plan natural scenes before reserving fallback previews.
     opening, previews = [], {}
@@ -656,10 +660,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         beats, extra_beats, impacts = {}, {}, {}
         save_json(work / "native-scenes.json", native_plan)
         notice("Native scenes", f"{native_plan['report']}")
-    elif callable(reserve):
-        for i, beat in [*beats.items(), *extra_beats.items(), *impacts.items()]:
-            if beat:
-                reserve(trailers[script["sections"][i]["film"]], beat["start"], beat["end"]-beat["start"], "trailer-audio")
     if not opening:
         opening = cold_open_plan(selector, pools, shot_lookup, title+". "+brief, action,
                                  dialogue=dialogue, seconds=COLD_OPEN_SECONDS)
@@ -769,11 +769,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     portraits_used = set()
     offset = 0.0
     film_position = 0  # entries shown so far, for rotating the rank reveal
-    def break_source_continuation():
-        breaker = getattr(selector, "break_continuation", None)
-        if callable(breaker):
-            breaker()
-
     from .branding import render_ident
     ident_path = work / "part-000.mp4"
     ident_seconds = render_ident(ident_path, work / "brand-ident")
@@ -806,7 +801,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         offset += seconds
         note_visual_beat(selector, seconds, still=bool(shot.get("still")))
     for section_index, section in enumerate(script["sections"]):
-        break_source_continuation()
         film_index = section["film"]
         film = films[film_index]
         trailer = trailers[film_index]
@@ -845,8 +839,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             # to insert the preview, and the title is not repeated in the body.
             announcement = section["paragraphs"][0]
             audio = speech[(section_index, 0)]
-            reveal_shot = {"source": str(source),
-                           "start": rank_still_time(selector, source, shot_lookup.get(str(source), []), preview),
+            reveal_shot = {"source": str(source), "start": preview["start"],
                            "duration": duration(audio), "still": True, "freeze": 0,
                            "still_motion": style, "film_index": film_index,
                            "visual_reason": "rank-announcement"}
@@ -951,8 +944,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                              "film": section["kind"].title()+" montage" if montage is not None else film["title"], "films": sorted({films[cut.get("film_index", film_index)]["title"] for cut in chosen}), "text": text, "shots": chosen})
             parts.append(path)
             offset += seconds
-            if any(cut.get("still") or cut.get("image") or cut.get("freeze", 0) for cut in chosen):
-                break_source_continuation()
             native_clip = native_insertions.get(section_index, {}).get(paragraph_index)
             if native_clip:
                 native_path = work / f"part-{len(parts):03}.mp4"
@@ -969,13 +960,10 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                                              "end": offset+cue["end"]-native_clip["start"], "text": cue["text"]})
                     timeline.append({"start": offset, "duration": seconds, "type": "trailer-audio",
                                      "film": film["title"], "source_start": native_clip["start"],
-                                     "source": native_clip["source"], "native_verified": True, "separated": False,
-                                     "scene_id": native_clip.get("id"),
-                                     "dialogue_boundaries_verified": native_clip.get("dialogue_boundaries_verified", False)})
+                                     "source": native_clip["source"], "native_verified": True, "separated": False})
                     parts.append(native_path)
                     used_video_sources.add(native_clip["source"])
                     offset += seconds
-                    break_source_continuation()
             elif not native_plan:
                 body_index = paragraph_index - (1 if is_film else 0)
                 impact = impacts.get(section_index) if body_index == 0 else None
@@ -993,7 +981,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                         parts.append(path)
                         used_video_sources.add(str(trailer))
                         offset += seconds
-                        break_source_continuation()
                 active_beat = (beat if body_index+1 == midpoint else
                                extra_beats.get(section_index) if body_index+1 == max(midpoint+1, body_count-1) else None)
                 if active_beat:
@@ -1016,7 +1003,6 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
                                      "separated": separated is not None})
                     parts.append(path)
                     offset += seconds
-                    break_source_continuation()
         card = ending_cards.get(film_index) if is_film else None
         if is_film:
             # Lower left, where the rank/title box sat: the small countdown tracker appears once that

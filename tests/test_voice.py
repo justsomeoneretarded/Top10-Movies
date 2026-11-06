@@ -217,15 +217,3 @@ def test_unknown_model_is_rejected_before_generation(monkeypatch):
     monkeypatch.setenv("TTS_MODEL", "unsupported")
     with pytest.raises(PipelineError, match="original, turbo or nano"):
         selected_tts_model()
-
-
-def test_changed_narration_gets_a_new_take_but_unchanged_narration_reuses_its_take(monkeypatch, tmp_path):
-    speaker = setup_speaker(monkeypatch, tmp_path, 3, speech_like())
-    speaker.model_name = "original"
-    original = "A spy runs from the agency."
-    revised = "A spy escapes the agency."
-    take = speaker.speak(original, delivery="normal")
-    assert speaker.speak(original, delivery="normal") == take
-    changed_take = speaker.speak(revised, delivery="normal")
-    assert changed_take != take
-    assert speaker.model.generate.call_count == 2

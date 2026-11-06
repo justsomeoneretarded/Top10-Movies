@@ -430,7 +430,7 @@ def _number_spelling(value: int) -> str:
 
 
 def _aligned_tokens(planned: list[str], heard: list[str]) -> tuple[set[int], set[int]]:
-    """Monotone alignment with bounded spelling joins and alphabetic initialisms."""
+    """Monotone word alignment with at most a three-token spelling join/split."""
     def spellings(token):
         if not token.isdigit():
             return {token}
@@ -455,16 +455,6 @@ def _aligned_tokens(planned: list[str], heard: list[str]) -> tuple[set[int], set
             for size in range(1, min(3, len(tokens)-start)+1):
                 forms = {prefix+suffix for prefix in forms for suffix in spellings(tokens[start+size-1])}
                 result[start, size] = forms
-            # A dotted/spaced initialism can be one ASR token (U.N.C.L.E. / UNCLE).
-            # Longer joins are allowed only for runs of individual letters.
-            letters = ""
-            for size in range(1, min(12, len(tokens)-start)+1):
-                token = tokens[start+size-1]
-                if len(token) != 1 or not token.isalpha():
-                    break
-                letters += token
-                if size > 3:
-                    result[start, size] = {letters}
         return result
 
     left, right = spans(planned), spans(heard)
@@ -483,10 +473,7 @@ def _aligned_tokens(planned: list[str], heard: list[str]) -> tuple[set[int], set
                 update(i+1, j, score, (i, j, 0, 0))
             if j < len(heard):
                 update(i, j+1, score, (i, j, 0, 0))
-            steps = [(1, 1), (1, 2), (1, 3), (2, 1), (3, 1)]
-            steps.extend((size, 1) for size in range(4, 13) if (i, size) in left)
-            steps.extend((1, size) for size in range(4, 13) if (j, size) in right)
-            for a, b in steps:
+            for a, b in ((1, 1), (1, 2), (1, 3), (2, 1), (3, 1)):
                 if i+a <= len(planned) and j+b <= len(heard) and not left[i, a].isdisjoint(right[j, b]):
                     update(i+a, j+b, (score[0]+a, score[1]+b), (i, j, a, b))
     expected_matches, heard_matches = set(), set()
