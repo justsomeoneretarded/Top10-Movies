@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -42,8 +43,25 @@ def _url() -> str:
     return os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 
 
-def _pull(model: str):
-    requests.post(_url() + "/api/pull", json={"model": model, "stream": False}, timeout=180).raise_for_status()
+def _pull(model: str, *, timeout: float = 180):
+    requests.post(_url() + "/api/pull", json={"model": model, "stream": False}, timeout=timeout).raise_for_status()
+
+
+def _ensure_thumbnail_model():
+    """Warm caption caches do not imply that this runner has their model."""
+    if _VISION_READY:
+        return
+    response = requests.post(_url() + "/api/show", json={"model": VISION_MODEL}, timeout=5)
+    if getattr(response, "status_code", 200) == 404:
+        # This is optional work: preserve room for the render and existing caches.
+        models = Path(os.getenv("OLLAMA_MODELS", str(Path.home() / ".ollama" / "models")))
+        while not models.exists() and models != models.parent:
+            models = models.parent
+        if shutil.disk_usage(models).free < 4_000_000_000:
+            raise PipelineError("Insufficient reserve for optional thumbnail model")
+        _pull(VISION_MODEL, timeout=90)
+    else:
+        response.raise_for_status()
 
 
 def cache_path(trailer: Path) -> Path:
@@ -222,6 +240,7 @@ def rate_thumbnail(image, genre: str = "", genre_hint: str = "") -> dict | None:
         prompt += (f" The video is a {genre} countdown. genre_fit: how instantly a viewer scrolling past would know this "
                    f"is a {genre} film from this frame alone ({genre_hint}); calm, smiling or neutral everyday frames score low.")
     try:
+        _ensure_thumbnail_model()
         response = requests.post(_url() + "/api/generate", json={
             "model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(buffer.getvalue()).decode()],
             "format": schema, "stream": False, "think": False, "keep_alive": "10m",
@@ -242,8 +261,10 @@ def rate_thumbnail(image, genre: str = "", genre_hint: str = "") -> dict | None:
                 "genre_fit": max(0, min(10, int(data.get("genre_fit", 5)))),
                 "logo": bool(data.get("logo_or_text")),
                 "score": max(0, min(10, int(data.get("thumbnail_score", 0))))}
-    except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
-        print(f"Optional thumbnail vision unavailable ({type(exc).__name__}); "
+    except (requests.RequestException, PipelineError, OSError, ValueError, TypeError, KeyError) as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        detail = f", HTTP {status}" if isinstance(status, int) else ""
+        print(f"Optional thumbnail vision unavailable ({type(exc).__name__}{detail}); "
               "retaining image-based ranking.", flush=True)
         return None
 

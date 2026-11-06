@@ -74,57 +74,10 @@ def episode():
     ]
 
 
-def test_episode_critique_rewrites_only_flagged_review_and_reuses_critique(tmp_path, monkeypatch):
-    writer = Writer(tmp_path)
-    calls, edits = [], []
-    def ask(*args, **kwargs):
-        calls.append(args[0])
-        return {"edits": [{"section": 0, "reason": "Explain the pursuit directly."}]}
-    def edit(*args, **kwargs):
-        edits.append(kwargs)
-        return ["Number 2: Second.", "After an attack, an agent escapes with the man he was guarding."], ["normal", "dramatic"]
-    monkeypatch.setattr(writer, "ask", ask)
-    monkeypatch.setattr(writer, "edit", edit)
-    films = [{"title": "First", "overview": "A detective searches for her brother."},
-             {"title": "Second", "overview": "An agent flees a safe house."}]
-    original = episode()
-    result = writer.polish_episode("Spy stories", "", films, original)
-    writer.polish_episode("Spy stories", "", films, original)
-    assert original == episode()
-    assert result[0]["paragraphs"] != original[0]["paragraphs"]
-    assert result[1] == original[1]
-    assert len(calls) == 1
-    assert len(edits) == 2
-    assert edits[0]["editorial_note"] == "Explain the pursuit directly."
-
-
-def test_invalid_critique_and_unchanged_rewrite_keep_narration(monkeypatch):
+def test_writer_keeps_section_edit_and_deletion_pass_without_extra_rewrites():
     writer = Writer()
-    original = episode()
-    films = [{"title": "First"}, {"title": "Second"}]
-    monkeypatch.setattr(writer, "ask", lambda *a, **kw: {"edits": [
-        {"section": -1, "reason": "invalid"}, {"section": True, "reason": "invalid"},
-        {"section": 0, "reason": ""}]})
-    assert writer.polish_episode("Topic", "", films, original) == original
-    monkeypatch.setattr(writer, "ask", lambda *a, **kw: {"edits": [{"section": 0, "reason": "Try a clearer opening."}]})
-    monkeypatch.setattr(writer, "edit", lambda *a, **kw: (deepcopy(original[0]["paragraphs"]), ["hype", "hype"]))
-    assert writer.polish_episode("Topic", "", films, original) == original
-
-
-def test_provider_line_is_removed_before_episode_rewrite(monkeypatch):
-    writer = Writer()
-    original = episode()
-    original[0]["availability_text"] = "You can find it on Prime Video."
-    original[0]["paragraphs"].append(original[0]["availability_text"])
-    films = [{"title": "First"}, {"title": "Second"}]
-    prompts = []
-    def ask(prompt, *args, **kwargs):
-        prompts.append(prompt)
-        return {"edits": []}
-    monkeypatch.setattr(writer, "ask", ask)
-    result = writer.polish_episode("Topic", "", films, original)
-    assert "Prime Video" not in prompts[0]
-    assert all("Prime Video" not in p for section in result for p in section["paragraphs"])
+    assert callable(writer.edit) and callable(writer.episode_edit)
+    assert not hasattr(writer, "polish_episode")
 
 
 def test_played_insert_breaks_continuation_without_forgetting_consumed_footage():
@@ -136,3 +89,30 @@ def test_played_insert_breaks_continuation_without_forgetting_consumed_footage()
     assert not selector.continuation_orders(path, 5.18, 5)
     assert selector._source_intervals == history
     assert selector.freshness(path, 0, 5) == 0
+
+
+def test_full_write_uses_baseline_edit_pass_without_experimental_polish(monkeypatch):
+    from unittest.mock import Mock
+    writer = Writer()
+    films = [{"title": "First", "year": 2026, "overview": "A detective searches for her brother."},
+             {"title": "Second", "year": 2025, "overview": "An agent escapes a safe house."}]
+    writer.plan = lambda *args: {}
+    writer.narration = lambda topic, brief, label, facts, words: [
+        facts.get("overview", "Two stories worth your time.")]
+    writer.edit = lambda *args, **kwargs: (args[4], ["normal"] * len(args[4]))
+    writer.bridges = lambda *args: {}
+    writer.thumbnail_concepts = lambda *args: []
+    writer.polish_episode = Mock(side_effect=AssertionError("extra rewriting is disabled"))
+    writer.episode_edit = Mock(side_effect=lambda topic, brief, sections: sections)
+    writer.ask = lambda *args, **kwargs: {
+        "titles": ["Two Spy Movies Worth Watching", "2 Great Spy Movies to Watch Tonight"],
+        "hook": "Two spy movies.", "description": "Two tense stories.",
+        "thumbnail_texts": ["TWO GREAT PICKS", "SPY MOVIES", "WATCH TONIGHT"],
+        "tags": ["spy movies"], "subscribe": {"theme": "default", "text": "Like and subscribe."}}
+    result = writer.write("Two Spy Movies Worth Watching", "", films, automatic=True)
+    writer.polish_episode.assert_not_called()
+    writer.episode_edit.assert_called_once()
+    reviews = [section for section in result["sections"] if section["kind"] == "film"]
+    assert len(reviews) == 2
+    assert "agent escapes" in " ".join(reviews[0]["paragraphs"]).lower()
+    assert all("planned_scene_ids" not in section for section in result["sections"])
