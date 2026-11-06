@@ -226,6 +226,7 @@ def test_optional_cached_primary_tries_fresh_fallback_after_direct_transport_fai
     assert events[0][1] is None
     assert events[-1][0:2] == ("download", proxy)
     assert downloaded == [IDS[1]]
+    assert json.loads(result.with_suffix(".json").read_text())["network_route"] == "fallback"
     assert download_access.routes()[0] == "fallback"
     assert not list(tmp_path.glob("*candidate*"))
 
@@ -241,3 +242,19 @@ def test_optional_routes_share_attempt_budgets_and_keep_quality_guards(monkeypat
     assert 0 < len(downloaded) <= MAX_DOWNLOADS
     assert len(list(tmp_path.glob("*.mp4"))) == 1
     assert not list(tmp_path.glob("*candidate*"))
+
+
+def test_fallback_skips_content_rejections_but_can_try_next_distinct_source(monkeypatch, tmp_path):
+    third = "ddddddddddd"
+    primary, downloaded, inspected = fake_downloads(
+        monkeypatch, tmp_path, catalog={key: info() for key in [*IDS[1:], third]})
+    film = {**FILM, "trailers": [*FILM["trailers"], {"key": third}]}
+    monkeypatch.setenv("YTDLP_FALLBACK_PROXY", "socks5h://127.0.0.1:40000")
+    monkeypatch.setattr("movie_pipeline.secondary_footage.scene_novelty",
+        lambda original, candidate: {"distinct": candidate.read_text() == third})
+    result = download_secondary(film, tmp_path, primary, (1920, 1080))
+    assert result is not None
+    assert downloaded == [IDS[1], IDS[2], third]
+    assert result.read_text() == third
+    # Rejected content must not consume fallback metadata capacity a second time.
+    assert inspected.count(IDS[1]) == inspected.count(IDS[2]) == 1

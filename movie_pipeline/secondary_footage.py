@@ -185,7 +185,7 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
     # A cached primary does not establish that its old network route still works.
     # Resolve each route afresh: signed media URLs must belong to that route.
     routes = download_access.routes()
-    budget = {"metadata": MAX_METADATA, "downloads": MAX_DOWNLOADS}
+    budget = {"metadata": MAX_METADATA, "downloads": MAX_DOWNLOADS, "rejected_sources": set()}
     for index, route in enumerate(routes):
         remaining = len(routes) - index
         metadata_limit = math.ceil(budget["metadata"] / remaining)
@@ -202,6 +202,9 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
             metadata_limit, download_limit)
         if result:
             return result
+        if index + 1 < len(routes):
+            print(f"Optional footage {slot}: {route} route yielded no accepted source; "
+                  "trying the next configured route.", flush=True)
     return None
 
 
@@ -218,7 +221,8 @@ def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
                               common, route, budget, metadata_limit, download_limit):
     import yt_dlp
     from .resource_budget import reserve_source, release_source
-    seen = {_primary_id(source), *(_primary_id(url) for url in accepted_sources)}
+    seen = {_primary_id(source), *(_primary_id(url) for url in accepted_sources),
+            *budget["rejected_sources"]}
     inspected = 0
     ranked = []
     blocked = False
@@ -291,6 +295,7 @@ def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
             video = next((stream for stream in metadata.get('streams',[]) if stream.get('codec_type') == 'video'),{})
             width,height = video.get('width',0),video.get('height',0)
             if width < minimum_size[0] or height < minimum_size[1]:
+                budget["rejected_sources"].add(_primary_id(url))
                 continue
             if existing:
                 # The third trailer must add scenes beyond the union of both
@@ -300,10 +305,14 @@ def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
             else:
                 novelty = scene_novelty(primary,attempt)
             if not novelty or not novelty['distinct']:
+                # A different route cannot add imagery to the same video.
+                # Remember content rejections; transport failures remain retryable.
+                if novelty and novelty.get('distinct') is False:
+                    budget['rejected_sources'].add(_primary_id(url))
                 continue
             save_json(attempt.with_suffix('.json'), {'source':url,'primary_source':source,'title':info.get('title'),
                       'channel':info.get('channel'),'curated':curated,'fan_edit':bool(FAN.search(info.get('title',''))),
-                      'source_width':width,'source_height':height,'secondary_version':1,'novelty':novelty,'existing_sources':accepted_sources,'slot':slot})
+                      'source_width':width,'source_height':height,'secondary_version':1,'novelty':novelty,'existing_sources':accepted_sources,'slot':slot,'network_route':route})
             attempt.replace(target)
             attempt.with_suffix('.json').replace(target.with_suffix('.json'))
             retained=True
