@@ -181,11 +181,11 @@ def analyse(path: Path, cache: Path) -> list[dict]:
     combined: the trailer's scare/impact beats) and ``text_card`` for rating, release or
     studio cards found by OCR, which never reach the edit.
     """
-    cache = cache.with_name(cache.stem + ".calm-v7.json")
+    cache = cache.with_name(cache.stem + ".calm-v6.json")
     length = duration(path)
     # Cross-run cache (restored by the workflow): the same video file, recognised by its name,
     # size and length, is never analysed twice.
-    shared = Path(os.getenv("ANALYSIS_CACHE", "work/analysis-cache")) / f"{path.stem}-{path.stat().st_size}-{length:.2f}.calm-v7.json"
+    shared = Path(os.getenv("ANALYSIS_CACHE", "work/analysis-cache")) / f"{path.stem}-{path.stat().st_size}-{length:.2f}.calm-v6.json"
     if cache.exists():
         shots = json.loads(cache.read_text())
         if not shared.exists():
@@ -244,7 +244,7 @@ def analyse(path: Path, cache: Path) -> list[dict]:
         # Trailer fades to black (and near-black title gaps) must never reach the edit.
         return sample[2] < 14 or (sample[2] < 24 and sample[3] < 7)
 
-    for detected_shot, (start, end) in enumerate(pairwise(boundaries)):
+    for start, end in pairwise(boundaries):
         # Long uncut shots are subdivided to provide useful choices.
         for point in np.arange(start, end - 1.2, 12.0):
             stop = min(float(point + 12.0), end)
@@ -266,10 +266,7 @@ def analyse(path: Path, cache: Path) -> list[dict]:
                 begin = float(point) if run[0] is metrics[0] else run[0][0]
                 finish = min(limit - 0.25, stop) if limit < stop else stop
                 if finish - begin >= 1.2:
-                    shots.append({"start": begin, "end": finish, "motion": float(np.mean([s[1] for s in run])),
-                                  "detected_shot": detected_shot,
-                                  "continues_previous": bool(shots and shots[-1].get("detected_shot") == detected_shot
-                                      and abs(float(shots[-1]["end"])-begin) <= 1e-6)})
+                    shots.append({"start": begin, "end": finish, "motion": float(np.mean([s[1] for s in run]))})
     if not shots:
         raise PipelineError(f"No usable shots detected in {path.name}.")
     envelope = audio_envelope(path)
@@ -528,10 +525,8 @@ class ShotSelector:
                 from .scenes import embed
                 sentence = embed([text])[0]
                 values = self.scene_embeddings[str(path)] @ sentence
-                known = (np.linalg.norm(self.scene_embeddings[str(path)], axis=1) > .01) & np.isfinite(values)
-                # One known description, or identical scores for every known frame,
-                # cannot rank shots. Adding a flat signal would only dilute SigLIP.
-                if np.count_nonzero(known) >= 2 and np.ptp(values[known]) > 1e-8:
+                known = np.linalg.norm(self.scene_embeddings[str(path)], axis=1) > .01
+                if known.any():
                     values = np.where(known, values, float(values[known].mean()))
                     signals.append((0.4, values))
             except Exception:  # noqa: BLE001 -- image matching alone is fine
@@ -595,57 +590,6 @@ class ShotSelector:
             remaining = pieces
         return remaining
 
-    def continuous_bounds(self, path: Path, shots: list[dict], index: int) -> tuple[float, float]:
-        """Reconnect artificial subdivisions, retaining indexed rows and real boundaries."""
-        def blocked(i):
-            return bool(shots[i].get("text_card")) or self.card_kind(path, i) is not None
-        def linked(left, right):
-            a, b = shots[left], shots[right]
-            return (not blocked(left) and not blocked(right)
-                    and a.get("detected_shot") is not None
-                    and a.get("detected_shot") == b.get("detected_shot")
-                    and b.get("continues_previous") is True
-                    and abs(float(a["end"]) - float(b["start"])) <= 1e-6)
-        left = right = index
-        while left > 0 and linked(left-1, left):
-            left -= 1
-        while right+1 < len(shots) and linked(right, right+1):
-            right += 1
-        return float(shots[left]["start"]), float(shots[right]["end"])
-
-    def continuous_end(self, path: Path, shots: list[dict], index: int) -> float:
-        """Expose connected source footage; existing delivery limits still control pace."""
-        _low, high = self.continuous_bounds(path, shots, index)
-        return min(high, float(shots[index]["start"]) + 22.0)
-
-    def break_continuation(self):
-        """Record a played insert or hold without changing consumed source intervals."""
-        self._history_clock = int(getattr(self, "_history_clock", 0)) + 1
-
-    def continuation_orders(self, path: Path, start: float, seconds: float) -> set[int]:
-        """Permit untouched continuation of one indexed shot, preserving duplicate checks."""
-        if seconds <= 0 or not all(math.isfinite(float(x)) for x in (start, seconds)):
-            return set()
-        clock = int(getattr(self, "_history_clock", 0))
-        intervals = self._interval_history().get(str(path), [])
-        latest = next((entry for entry in intervals
-                       if entry["order"] == clock and entry.get("kind") == "narration"), None)
-        if latest is None or not 0 <= start - latest["end"] <= .35:
-            return set()
-        if self.freshness(path, start, seconds) < .999:
-            return set()
-        ranges = getattr(self, "_scene_ranges", {}).get(str(path), [])
-        for index, shot in enumerate(ranges):
-            if shot.get("text_card") or self.card_kind(path, index) is not None:
-                continue
-            low, high = self.continuous_bounds(path, ranges, index)
-            if (low <= latest["start"] and latest["end"] <= high
-                    and low <= start and start + seconds <= high + 1e-6):
-                return {entry["order"] for entry in intervals
-                        if entry.get("kind") == "narration" and low <= entry["start"]
-                        and entry["end"] <= min(high, start)}
-        return set()
-
     def visual_freshness(self, path: Path, start: float, seconds: float) -> float:
         ranges = getattr(self,"_scene_ranges",{}).get(str(path),[])
         hashes = getattr(self,"_scene_hashes",{}).get(str(path),[])
@@ -654,10 +598,7 @@ class ShotSelector:
         history = getattr(self,"_visual_history",[])
         if not relevant:
             return 1.0
-        continued = self.continuation_orders(path, start, seconds)
-        return sum(not any((value^old).bit_count() <= 6
-                           and not (str(old_path) == str(path) and order in continued)
-                           for old,order,old_path in history) for value in relevant)/len(relevant)
+        return sum(not any((value^old).bit_count() <= 6 for old,_order,_path in history) for value in relevant)/len(relevant)
 
     def freshness(self, path: Path, start: float, seconds: float) -> float:
         if seconds <= 0:
@@ -695,11 +636,8 @@ class ShotSelector:
         costs = []
         from .editorial_policy import source_identity
         film = getattr(self, "source_films", {}).get(str(path), source_identity(path))
-        continued = self.continuation_orders(path, start, seconds)
         for value in relevant:
             for old,order,source in getattr(self,"_visual_history",[]):
-                if str(source) == str(path) and order in continued:
-                    continue
                 if (value^old).bit_count() <= 6:
                     age = max(0,clock-order)
                     # The same image under a different film's review is never acceptable.
@@ -755,7 +693,7 @@ class ShotSelector:
                 if index not in allowed:
                     continue
                 used = self.uses.get((str(path), index), 0)
-                raw_start, raw_end = float(shot["start"]), self.continuous_end(path, shots, index)
+                raw_start, raw_end = float(shot["start"]), float(shot["end"])
                 fragments = [(low,high) for low,high in self.unused_windows(path,raw_start,raw_end)
                              if high-low >= min(5,remaining)]
                 # Exhaustion is allowed. Revisit the least-recently seen interval rather
@@ -765,8 +703,7 @@ class ShotSelector:
                     unseen = bool(fragments)
                     virgin = self.freshness(path,raw_start,raw_end-raw_start) >= .999
                     visual_fresh = self.visual_freshness(path,start,available) >= .999
-                    continuing = bool(self.continuation_orders(path, start, min(remaining, available, maximum_shot)))
-                    tier = 2 if (virgin or continuing) and visual_fresh else (1 if unseen and not virgin else 0)
+                    tier = 2 if virgin and visual_fresh else (1 if unseen and not virgin else 0)
                     if not unseen:
                         # Once exhausted, rotate the least recently used window
                         # before considering semantic preference again.
@@ -774,11 +711,11 @@ class ShotSelector:
                                      if start < entry["end"] and end > entry["start"]), default=0)
                     score = float(relevance[index]) - used*.04
                     score += min(available,maximum_shot)*.035-min(shot["motion"],60)/600
-                    if about_person and hold_ready and flags[index] and min(end, float(shot["end"]))-max(start, float(shot["start"])) >= .2:
+                    if about_person and hold_ready and flags[index]:
                         score += .22
                     score -= self.reuse_penalty(path,start,min(remaining,available,maximum_shot))
                     score -= self.visual_reuse_penalty(path,start,min(remaining,available,maximum_shot))
-                    if index == last_index and not continuing:
+                    if index == last_index:
                         score -= .35
                     # Story order: picking up right where the previous excerpt of this trailer ended
                     # plays the trailer's own sequence of scenes, which reads as one coherent segment.
@@ -801,12 +738,10 @@ class ShotSelector:
             _tier,_score,_order,index,start,end,reused = max(candidates,key=lambda row: row[:3])
             shot = shots[index]
             available = max(.1,end-start)
-            hold_low, hold_high = max(start, float(shot["start"])), min(end, float(shot["end"]))
-            can_hold = hold_high - hold_low >= .2
-            portrait = about_person and hold_ready and flags[index] and remaining >= 3 and can_hold
+            portrait = about_person and hold_ready and flags[index] and remaining >= 3
             detail = (hold_ready and not portrait and moving_beats > HOLD_COOLDOWN_BEATS
                       and moving_seconds >= HOLD_COOLDOWN_SECONDS + 4
-                      and shot["motion"] <= 18 and remaining >= 3 and can_hold)
+                      and shot["motion"] <= 18 and remaining >= 3)
             still = portrait or detail
             if still and 7 < remaining < 8.5:
                 portrait = detail = still = False
@@ -824,7 +759,7 @@ class ShotSelector:
                 freeze += extra
                 length += extra
             freeze = min(freeze,max(0,length-.1))
-            chosen_start = (hold_low+hold_high)/2 if still else start
+            chosen_start = (start+end)/2 if still else start
             cut = {"start":chosen_start,"duration":length,"freeze":freeze,"still":bool(still),
                    "visual_reason":"portrait-hold" if portrait else ("detail-hold" if detail else
                         ("spaced-source-reuse" if reused else "fresh-script-match"))}
@@ -838,8 +773,8 @@ class ShotSelector:
             chosen.append(cut)
             # A portrait hold consumes that visual beat; motion reserves just its
             # live source span, leaving the rest of a long scene available later.
-            self.reserve(path,hold_low if still else chosen_start,
-                         max(.1, hold_high-hold_low) if still else max(.1,min(available,length-freeze)),
+            self.reserve(path,start if still else chosen_start,
+                         available if still else max(.1,min(available,length-freeze)),
                          "portrait" if portrait else ("detail-hold" if detail else "narration"))
             self.cut_count += 1
             if not still:

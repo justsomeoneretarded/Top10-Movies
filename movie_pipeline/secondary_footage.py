@@ -182,62 +182,23 @@ def _download_secondary(film: dict, root: Path, primary: Path, minimum_size: tup
     _clean_candidate(target)
     require_disk(root)
     cap = export_size()[1]
-    # A cached primary does not establish that its old network route still works.
-    # Resolve each route afresh: signed media URLs must belong to that route.
-    routes = download_access.routes()
-    budget = {"metadata": MAX_METADATA, "downloads": MAX_DOWNLOADS, "rejected_sources": set()}
-    for index, route in enumerate(routes):
-        remaining = len(routes) - index
-        metadata_limit = math.ceil(budget["metadata"] / remaining)
-        download_limit = math.ceil(budget["downloads"] / remaining)
-        if not metadata_limit or not download_limit:
-            break
-        common = download_access.options(
-            {'quiet': True, 'no_warnings': True, 'noplaylist': True,
-             'socket_timeout': 12, 'retries': 1, 'fragment_retries': 1,
-             'js_runtimes': {'node': {}}}, route)
-        result = _download_secondary_route(
-            film, root, primary, minimum_size, existing, slot, target, suffix,
-            source, accepted_sources, cap, common, route, budget,
-            metadata_limit, download_limit)
-        if result:
-            return result
-        if index + 1 < len(routes):
-            print(f"Optional footage {slot}: {route} route yielded no accepted source; "
-                  "trying the next configured route.", flush=True)
-    return None
-
-
-def _route_blocked(exc: Exception) -> bool:
-    """Move to another configured route for transport failure or a bot challenge."""
-    message = str(exc).lower()
-    return _bot_check(exc) or any(part in message for part in (
-        "network is unreachable", "no route to host", "network unreachable",
-        "temporary failure in name resolution", "name or service not known"))
-
-
-def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
-                              target, suffix, source, accepted_sources, cap,
-                              common, route, budget, metadata_limit, download_limit):
-    import yt_dlp
-    from .resource_budget import reserve_source, release_source
-    seen = {_primary_id(source), *(_primary_id(url) for url in accepted_sources),
-            *budget["rejected_sources"]}
-    inspected = 0
+    # Optional extra footage uses whichever route already worked for primary trailers.
+    common = download_access.options({'quiet':True,'no_warnings':True,'noplaylist':True,'socket_timeout':12,'retries':1,
+                                      'fragment_retries':1,'js_runtimes':{'node':{}}}, download_access.routes()[0])
+    seen = {_primary_id(source), *(_primary_id(url) for url in accepted_sources)}
+    excluded_count = len(seen)
     ranked = []
     blocked = False
 
     def inspect(entries):
-        nonlocal blocked, inspected
+        nonlocal blocked
         for identifier,curated in entries:
-            if identifier in seen or inspected >= metadata_limit or not re.fullmatch(r'[\w-]{11}', identifier):
+            if identifier in seen or len(seen)-excluded_count >= MAX_METADATA or not re.fullmatch(r'[\w-]{11}', identifier):
                 continue
             seen.add(identifier)
-            inspected += 1
-            budget['metadata'] -= 1
             url = f'https://www.youtube.com/watch?v={identifier}'
             try:
-                with download_access.youtube_dl(yt_dlp, common) as ydl:
+                with yt_dlp.YoutubeDL(common) as ydl:
                     info = ydl.extract_info(url,download=False)
                 if info and secondary_candidate_ok(info,film,curated):
                     quality = _quality(info,minimum_size,cap)
@@ -245,7 +206,7 @@ def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
                         ranked.append((quality,len(ranked),url,curated,info))
             except (yt_dlp.utils.DownloadError,PipelineError,OSError,ValueError) as exc:
                 # Primary footage already exists. A secondary bot check is never fatal.
-                if _route_blocked(exc):
+                if _bot_check(exc):
                     blocked = True
                     break
                 continue
@@ -253,17 +214,17 @@ def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
     # Official TMDB trailers, teasers and clips (trusted: the studio's own uploads) come before any search.
     # Clips first: a single studio scene is far more likely to add new footage than another trailer cut.
     curated = [*film.get('clips', []), *film.get('trailers', [])]
-    inspect([(video.get('key',''),True) for video in curated[:min(4,metadata_limit)] if video.get('site','YouTube') == 'YouTube'])
+    inspect([(video.get('key',''),True) for video in curated[:min(4,MAX_METADATA)] if video.get('site','YouTube') == 'YouTube'])
     # Reserve actual metadata capacity for fan edits when curated discovery has few options.
     # Then searches: scenes that fit the list's genre (chases and fights for action, funny scenes for
     # comedy), then other trailers. Searched results need not use verified uploaders but must name the
     # right title, year and cast (secondary_candidate_ok).
     from .editorial_policy import search_queries
     for query in search_queries(film):
-        if blocked or inspected >= metadata_limit:
+        if blocked or len(seen)-excluded_count >= MAX_METADATA:
             break
         try:
-            with download_access.youtube_dl(yt_dlp, {**common,'extract_flat':True}) as ydl:
+            with yt_dlp.YoutubeDL({**common,'extract_flat':True}) as ydl:
                 result = ydl.extract_info(f"ytsearch4:{query}", download=False)
             inspect([(entry.get('id',''),False) for entry in (result or {}).get('entries',[]) if entry][:2])
         except (yt_dlp.utils.DownloadError,PipelineError,OSError,ValueError):
@@ -271,23 +232,18 @@ def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
     # Prefer a useful single scene, then quality; uploader status is not a gate.
     ranked.sort(key=lambda row:(not (set(normalized(str(row[4].get('title',''))).split()) & {"clip","clips","scene","scenes"}),
                                 -row[0], row[1]))
-    attempted = 0
-    for _quality_value,order,url,curated,info in ranked:
-        if attempted >= download_limit:
-            break
+    for _quality_value,order,url,curated,info in ranked[:MAX_DOWNLOADS]:
         attempt = root / f'{primary.stem}-{suffix}-candidate-{order:02}.mp4'
         _clean_candidate(attempt)
         if not reserve_source(root,url,target):
             continue
-        attempted += 1
-        budget['downloads'] -= 1
         retained=False
         try:
             options = {**common,'format':f'bv[height<={cap}]+ba/b[height<={cap}]',
                        'format_sort':['res','vcodec:h264'],'merge_output_format':'mp4',
                        'postprocessors':[{'key':'FFmpegVideoRemuxer','preferedformat':'mp4'}],
                        'outtmpl':str(attempt.with_suffix('.%(ext)s')),'overwrites':True,'max_filesize':MAX_TRAILER_BYTES}
-            with download_access.youtube_dl(yt_dlp, options) as ydl:
+            with yt_dlp.YoutubeDL(options) as ydl:
                 ydl.download([url])
             if not attempt.exists() or not 20 <= duration(attempt) <= 360 or attempt.stat().st_size > MAX_TRAILER_BYTES:
                 continue
@@ -295,7 +251,6 @@ def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
             video = next((stream for stream in metadata.get('streams',[]) if stream.get('codec_type') == 'video'),{})
             width,height = video.get('width',0),video.get('height',0)
             if width < minimum_size[0] or height < minimum_size[1]:
-                budget["rejected_sources"].add(_primary_id(url))
                 continue
             if existing:
                 # The third trailer must add scenes beyond the union of both
@@ -305,22 +260,17 @@ def _download_secondary_route(film, root, primary, minimum_size, existing, slot,
             else:
                 novelty = scene_novelty(primary,attempt)
             if not novelty or not novelty['distinct']:
-                # A different route cannot add imagery to the same video.
-                # Remember content rejections; transport failures remain retryable.
-                if novelty and novelty.get('distinct') is False:
-                    budget['rejected_sources'].add(_primary_id(url))
                 continue
             save_json(attempt.with_suffix('.json'), {'source':url,'primary_source':source,'title':info.get('title'),
                       'channel':info.get('channel'),'curated':curated,'fan_edit':bool(FAN.search(info.get('title',''))),
-                      'source_width':width,'source_height':height,'secondary_version':1,'novelty':novelty,'existing_sources':accepted_sources,'slot':slot,'network_route':route})
+                      'source_width':width,'source_height':height,'secondary_version':1,'novelty':novelty,'existing_sources':accepted_sources,'slot':slot})
             attempt.replace(target)
             attempt.with_suffix('.json').replace(target.with_suffix('.json'))
             retained=True
-            download_access.record_route_success(route)
             print(f"Added trailer {slot} for {film['title']} with different sampled imagery.",flush=True)
             return target
         except (yt_dlp.utils.DownloadError,PipelineError,OSError,ValueError) as exc:
-            if _route_blocked(exc):
+            if _bot_check(exc):
                 break
         finally:
             if not retained:

@@ -135,30 +135,10 @@ def thumbnail_scores(output: Path, genre: str) -> list[dict]:
     from .thumbnail_studio import GENRE_PROFILES, phone_check
     profile = GENRE_PROFILES.get(genre, {})
     rows = []
-    # Only score numbered deliverables, including thumbnail-10 and beyond.
-    # Sort numerically so non-zero-padded names do not appear out of order.
-    numbered = []
-    for path in output.glob("thumbnail-*.jpg"):
-        match = re.fullmatch(r"thumbnail-(\d+)\.jpg", path.name)
-        if match and path.is_file():
-            numbered.append((int(match.group(1)), path.name, path))
-    vision_enabled = scenes.enabled()
-    consecutive_unavailable = 0
-    for _, _, path in sorted(numbered):
+    for path in sorted(output.glob("thumbnail-0*.jpg")):
         with Image.open(path) as image:
             image = image.convert("RGB")
-            verdict = None
-            if vision_enabled:
-                try:
-                    verdict = scenes.rate_thumbnail(image, profile.get("label", ""), profile.get("hint", ""))
-                except Exception as exc:
-                    # This rating is advisory. Keep the phone-size check and
-                    # allow a transient failure; never fail the video package.
-                    print(f"Optional thumbnail vision rating failed ({type(exc).__name__}).", flush=True)
-                consecutive_unavailable = consecutive_unavailable + 1 if verdict is None else 0
-                if consecutive_unavailable >= 2:
-                    vision_enabled = False
-                    print("Thumbnail vision rating unavailable twice; keeping phone-contrast checks.", flush=True)
+            verdict = scenes.rate_thumbnail(image, profile.get("label", ""), profile.get("hint", "")) if scenes.enabled() else None
             rows.append({"file": path.name, "image": image.copy(), "phone_contrast": round(phone_check(image), 1),
                          "vision": verdict})
     return rows
@@ -175,23 +155,13 @@ def build_review(output: Path, cues: list[dict], chapters: list[dict], genre: st
     frames = _frames(video, 2.0)
     blacks = [(a, b) for a, b in black_frames(video) if a < length - ending_seconds]
     repeats = repeated_shots(frames, length - ending_seconds, ignore=montage)
-    # A zero count is meaningful only if the coarse scan had at least one
-    # comparable pair. Frames from the montage and ending are excluded, as
-    # in repeated_shots; uniform/black frames do not have a usable hash.
-    eligible_times = [when for when, image in frames
-                      if when < length - ending_seconds
-                      and not any(low <= when <= high for low, high in montage or [])
-                      and _dhash(image) is not None]
-    repeat_check_available = bool(eligible_times and max(eligible_times) - min(eligible_times) >= 25.0)
     profile = loudness_profile(video)
     spikes = loudness_spikes(profile)
     drift = silent_captions(cues, profile)
     thumbs = thumbnail_scores(output, genre)
     summary = {"seconds": round(length, 1), "black_frames": len(blacks), "repeated_shots": len(repeats),
                "loudness_spikes": len(spikes), "captions_on_silence": len(drift),
-               "thumbnails": [{k: v for k, v in row.items() if k != "image"} for row in thumbs],
-               "repeat_detection": {"available": repeat_check_available, "sample_interval_seconds": 2.0,
-                                    "minimum_gap_seconds": 25.0, "usable_samples": len(eligible_times)}}
+               "thumbnails": [{k: v for k, v in row.items() if k != "image"} for row in thumbs]}
 
     def status(count: int, warn: int = 1) -> str:
         return "ok" if count < warn else "check"
@@ -202,9 +172,7 @@ def build_review(output: Path, cues: list[dict], chapters: list[dict], genre: st
         ("Films shown with stills (no trailer could be downloaded)", status(len(stills_films)),
          ", ".join(html.escape(name) for name in stills_films) or "none"),
         ("Black frames", status(len(blacks)), ", ".join(f"{_time(a)}–{_time(b)}" for a, b in blacks[:12]) or "none"),
-        ("Possible repeated shots (sampled)", status(len(repeats)) if repeat_check_available else "check",
-         ", ".join(f"{_time(a)} and {_time(b)}" for a, b in repeats[:12])
-         or ("No matching sampled frames" if repeat_check_available else "Not enough comparable frames")),
+        ("Same shot shown twice inside the reviews", status(len(repeats)), ", ".join(f"{_time(a)} and {_time(b)}" for a, b in repeats[:12]) or "none"),
         ("Loudness spikes", status(len(spikes), 3), ", ".join(_time(t) for t in spikes[:15]) or "none"),
         ("Captions over silence (drift)", status(len(drift), 3),
          "; ".join(f"{_time(float(c['start']))} “{html.escape(str(c['text'])[:50])}”" for c in drift[:8]) or "none"),
@@ -231,14 +199,11 @@ img.sheet{{width:100%;border-radius:8px}}ul{{columns:2;padding-left:18px}}
 </style></head><body>
 <h1>Video review</h1><p class="sub">{_time(length)} · genre {html.escape(genre)} · checks are automatic and advisory</p>
 <h2>Checks</h2><table>{rows}</table>
-<p class="sub">Repeat check samples one frame every two seconds and compares frames at least 25 seconds apart.
-Any supplied montage intervals and the ending are excluded. It can miss shorter or visually different repeats.</p>
 <h2>Thumbnails</h2><div class="thumbs">{thumb_cards}</div>
 <h2>Chapters</h2><ul>{chapter_list}</ul>
 <h2>Contact sheet</h2><img class="sheet" src="{_data_uri(contact_sheet(frames))}" alt="Frames across the whole video">
 </body></html>"""
     (output / "review.html").write_text(page, encoding="utf-8")
-    repeat_summary = f"{summary['repeated_shots']} possible sampled repeats" if repeat_check_available else "repeat scan unavailable"
-    print(f"Review report: {summary['black_frames']} black, {repeat_summary}, "
+    print(f"Review report: {summary['black_frames']} black, {summary['repeated_shots']} repeated, "
           f"{summary['loudness_spikes']} spikes, {summary['captions_on_silence']} drifting captions.", flush=True)
     return summary
