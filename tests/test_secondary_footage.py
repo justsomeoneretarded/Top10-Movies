@@ -185,3 +185,59 @@ def test_official_scene_clips_are_accepted_without_the_word_trailer():
     novel = [0xEEEEEEEEEEEEEEEE, 0xCCCCCCCCCCCCCCCC, 0xAAAAAAAAAAAAAAAA]
     assert novelty_from_hashes(primary, novel)["distinct"] is True
     assert novelty_from_hashes(primary, [primary[0], *novel[:2]])["distinct"] is False
+
+
+@pytest.fixture(autouse=True)
+def reset_secondary_routes():
+    from movie_pipeline import download_access
+    download_access.reset()
+    yield
+    download_access.reset()
+
+
+@pytest.mark.parametrize("failure_stage", ["metadata", "download"])
+def test_optional_cached_primary_tries_fresh_fallback_after_direct_transport_failure(
+        monkeypatch, tmp_path, failure_stage):
+    import yt_dlp
+    from movie_pipeline import download_access
+    primary, downloaded, inspected = fake_downloads(monkeypatch, tmp_path)
+    base = yt_dlp.YoutubeDL
+    events = []
+    proxy = "socks5h://127.0.0.1:40000"
+    monkeypatch.setenv("YTDLP_FALLBACK_PROXY", proxy)
+    class Routed(base):
+        def extract_info(self, url, **kwargs):
+            if not url.startswith("ytsearch"):
+                events.append(("metadata", self.options.get("proxy"), url))
+                if failure_stage == "metadata" and not self.options.get("proxy"):
+                    raise yt_dlp.utils.DownloadError("Network is unreachable")
+            return super().extract_info(url, **kwargs)
+        def download(self, urls):
+            events.append(("download", self.options.get("proxy"), urls[0]))
+            if not self.options.get("proxy"):
+                Path(self.options["outtmpl"].replace("%(ext)s", "mp4")).with_suffix(".part").write_text("partial")
+                raise yt_dlp.utils.DownloadError("Network is unreachable")
+            # Metadata must be resolved again on the successful route.
+            assert ("metadata", proxy, urls[0]) in events
+            return super().download(urls)
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Routed)
+    result = download_secondary(FILM, tmp_path, primary, (1920, 1080))
+    assert result is not None and primary.read_text() == "primary"
+    assert events[0][1] is None
+    assert events[-1][0:2] == ("download", proxy)
+    assert downloaded == [IDS[1]]
+    assert download_access.routes()[0] == "fallback"
+    assert not list(tmp_path.glob("*candidate*"))
+
+
+def test_optional_routes_share_attempt_budgets_and_keep_quality_guards(monkeypatch, tmp_path):
+    from movie_pipeline.secondary_footage import MAX_METADATA, MAX_DOWNLOADS
+    catalog = {f"{n:011d}": info() for n in range(20)}
+    primary, downloaded, inspected = fake_downloads(
+        monkeypatch, tmp_path, catalog=catalog, novel=False)
+    monkeypatch.setenv("YTDLP_FALLBACK_PROXY", "socks5h://127.0.0.1:40000")
+    assert download_secondary(FILM, tmp_path, primary, (1920, 1080)) is None
+    assert 0 < len(inspected) <= MAX_METADATA
+    assert 0 < len(downloaded) <= MAX_DOWNLOADS
+    assert len(list(tmp_path.glob("*.mp4"))) == 1
+    assert not list(tmp_path.glob("*candidate*"))

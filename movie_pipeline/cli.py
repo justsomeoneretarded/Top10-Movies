@@ -237,7 +237,7 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v16-scene-map-movie-ranks", title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v17-quality-recovery", title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -402,38 +402,15 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     notice("Footage", f"Export {width}x{height}; {len(sources)} trailers accepted; route: {download_access.routes()[0]}. {per_title}. "
            f"Elapsed {(time.time()-started)/60:.0f} min.")
 
-    from .scene_plan import prepare_scene_map, projected_context
-    def scene_recognizer():
-        from faster_whisper import WhisperModel
-        return WhisperModel("base.en", device="cpu", compute_type="int8",
-                            cpu_threads=min(os.cpu_count() or 2, 4))
-    print("Selecting actual scene windows before writing the script.", flush=True)
-    try:
-        scene_map = prepare_scene_map(pools, shot_lookup, films, work / "scene-plan", scene_recognizer)
-    except Exception as exc:  # optional scene analysis must preserve ordinary production
-        print(f"Optional pre-writing scene plan unavailable ({type(exc).__name__}); keeping normal selection.", flush=True)
-        scene_map = {"version": 1, "film_count": len(films), "films": {}, "report": {"selected": 0}}
-    scene_context = projected_context(scene_map)
-    print(f"Pre-writing scene plan: {scene_map.get('report', {})}.", flush=True)
-
-    from .footage_context import collect_visual_hints
-    visual_hints = collect_visual_hints(pools, shot_lookup)
-    hinted = sum(bool(hints) for hints in visual_hints)
-    print(f"Optional footage context available for {hinted} of {len(films)} titles.", flush=True)
-
     writer = Writer(cache_dir=work / "script-sections")
     print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
-    if script_path.exists():
-        if hinted:
-            print("Resuming the saved script unchanged; new footage hints apply to fresh scripts.", flush=True)
-        script = json.loads(script_path.read_text())
-    else:
-        script = writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks,
-                              automatic=spec.automatic, visual_hints=visual_hints, scene_context=scene_context)
+    script = (json.loads(script_path.read_text()) if script_path.exists() else
+              writer.write(title, brief, films, target_seconds=spec.target,
+                           trailer_seconds=expected_breaks, automatic=spec.automatic))
     script = writer.refresh_editorial(title, brief, films, script, automatic=spec.automatic)
     refresh_availability(script, films)
-    from .rank_intro import prepare_rank_intros
+    from .rank_intro import prepare_rank_intros, rank_still_time
     script = prepare_rank_intros(script, films)
     if script["package"].get("thumbnail_version") != 2:
         script["package"]["thumbnail_concepts"] = writer.thumbnail_concepts(title, brief, films, script["sections"])
@@ -522,7 +499,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         print(f"Refining an unusually {'long' if estimated > spec.target else 'short'} draft; measured {estimated/60:.1f} minutes.", flush=True)
         word_scale *= max(.2, min(5.0, max(1, spec.target-expected_breaks-11)/max(1, spoken_seconds)))
         try:
-            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic, visual_hints=visual_hints, scene_context=scene_context)
+            script = writer.write(title, brief, films, word_scale=word_scale, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
             refresh_availability(script, films)
             script = prepare_rank_intros(script, films)
             writer.unload()
@@ -667,7 +644,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     native_plan = None
     try:
         native_plan = plan_episode(selector, pools, shot_lookup, films, script["sections"], speech,
-                                   dialogue, recognizer, work / "native-scenes", scene_map=scene_map)
+                                   dialogue, recognizer, work / "native-scenes")
     except (PipelineError, OSError, ValueError, RuntimeError) as exc:
         print(f"Optional native-scene plan unavailable ({type(exc).__name__}); using safe previews.", flush=True)
     native_insertions = {}
@@ -868,7 +845,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
             # to insert the preview, and the title is not repeated in the body.
             announcement = section["paragraphs"][0]
             audio = speech[(section_index, 0)]
-            reveal_shot = {"source": str(source), "start": preview["start"],
+            reveal_shot = {"source": str(source),
+                           "start": rank_still_time(selector, source, shot_lookup.get(str(source), []), preview),
                            "duration": duration(audio), "still": True, "freeze": 0,
                            "still_motion": style, "film_index": film_index,
                            "visual_reason": "rank-announcement"}

@@ -77,3 +77,39 @@ def prepare_rank_intros(script: dict, films: list[dict]) -> dict:
         section["delivery"] = ["hype", *delivery]
         section["rank_intro_version"] = RANK_INTRO_VERSION
     return prepared
+
+
+def rank_still_time(selector, source, shots: list[dict], preview: dict) -> float:
+    """Prefer a clean analysed frame for the rank card, preserving the preview.
+
+    Only this verified footage source is searched. Face/card evidence belongs to
+    the indexed midpoint, not an arbitrary frame elsewhere in a linked window.
+    With no usable analysis, retain the established preview-start fallback.
+    """
+    start = float(preview["start"])
+    end = start + float(preview["duration"])
+    faces = getattr(selector, "faces", {}).get(str(source), [])
+    texts = getattr(selector, "card_texts", {}).get(str(source), [])
+    card_kind = getattr(selector, "card_kind", None)
+    choices = []
+    for index, shot in enumerate(shots):
+        try:
+            left, right = float(shot["start"]), float(shot["end"])
+            if not (0 <= left < right):
+                continue
+            if shot.get("text_card") or (callable(card_kind) and card_kind(source, index)):
+                continue
+            if index < len(texts) and str(texts[index] or "").strip():
+                continue
+            middle = (left + right) / 2
+            inside = start <= middle < end
+            face = index < len(faces) and bool(faces[index])
+            # Do not jump elsewhere on weak evidence; a clean face is useful
+            # even if its shot is outside the native preview.
+            if not inside and not face:
+                continue
+            priority = 0 if inside and face else 1 if face else 2
+            choices.append((priority, abs(middle - (start + end) / 2), middle))
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
+    return min(choices)[2] if choices else start

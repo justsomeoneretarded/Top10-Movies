@@ -24,7 +24,7 @@ def test_cut_density_counts_boundaries_and_remains_soft():
     calm = next(x for x in result if x["source"] == "calm.mp4")
     fast = next(x for x in result if x["source"] == "fast.mp4" and x["duration"] == 9)
     assert fast["cuts_per_minute"] == pytest.approx(120 / 9)
-    assert calm["score"] > fast["score"]
+    assert calm["score"] == pytest.approx(fast["score"])
     assert fast in result
     assert _cuts_per_minute(shots["fast.mp4"], 5, 5) == 0
 
@@ -83,7 +83,7 @@ def test_visual_hints_are_bounded_deduplicated_and_isolated_per_title(monkeypatc
     assert hints == [["a car chase", "rainy street", "x" * 120], ["quiet library"], []]
 
 
-def test_visual_hints_change_only_the_relevant_narration_cache(tmp_path, monkeypatch):
+def test_visual_hints_cannot_change_research_only_narration_cache(tmp_path, monkeypatch):
     from movie_pipeline.script import Writer
 
     writer = Writer(tmp_path)
@@ -98,5 +98,5 @@ def test_visual_hints_change_only_the_relevant_narration_cache(tmp_path, monkeyp
     assert writer.narration("Spy movies", "", "rank 1: Film", facts, None) == first
     writer.narration("Spy movies", "", "rank 1: Film", hints, None)
     writer.narration("Spy movies", "", "rank 1: Film", hints, None)
-    assert len(calls) == 2
-    assert "uncertain single-frame guesses" in calls[1]
+    assert len(calls) == 1
+    assert all("dark street" not in prompt for prompt in calls)
