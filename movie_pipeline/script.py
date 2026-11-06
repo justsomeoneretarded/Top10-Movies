@@ -209,7 +209,8 @@ def plain_words(text: str, protected=()) -> str:
 def narration_material(facts: dict) -> dict:
     """Story-oriented writing context; research and packaging keep full metadata."""
     excluded = {"tagline", "tmdb_rating", "tmdb_votes", "runtime_minutes", "networks",
-                "wiki_reception", "seasons", "episodes", "watch_availability"}
+                "wiki_reception", "seasons", "episodes", "watch_availability",
+                "visual_hints", "available_scene_moments", "planned_scene_ids", "scene_context"}
     return {name: value for name, value in facts.items() if name not in excluded}
 
 
@@ -510,16 +511,12 @@ class Writer:
         return result
 
     def edit(self, topic: str, brief: str, role: str, facts: dict, paragraphs: list[str], *,
-             opening: bool = False, closing: bool = False, rank: int | None = None, kind: str = "film",
-             editorial_note: str = "", episode_context: list[dict] | None = None) -> tuple[list[str], list[str]]:
+             opening: bool = False, closing: bool = False, rank: int | None = None, kind: str = "film") -> tuple[list[str], list[str]]:
         """Edit meaning and speech flow, without factual/spoiler or length gates."""
         defaults = aligned_delivery({"kind": kind, "film": (rank or 1)-1, "paragraphs": paragraphs})
         if not paragraphs:
             return paragraphs, defaults
-        edit_key = key('edit-v3-story', self.model, topic, brief, role, narration_material(facts), paragraphs)
-        if editorial_note or episode_context:
-            edit_key = key(edit_key, "episode-polish-v1", editorial_note, episode_context)
-        cache = self.cache_dir / f"{edit_key}.json" if self.cache_dir else None
+        cache = self.cache_dir / f"{key('edit-v3-story', self.model, topic, brief, role, narration_material(facts), paragraphs)}.json" if self.cache_dir else None
         if cache and cache.exists():
             saved = json.loads(cache.read_text())
             if saved.get("paragraphs"):
@@ -529,19 +526,10 @@ class Writer:
                 "text": {"type": "string"}, "delivery": {"type": "string", "enum": list(DELIVERIES)}},
                 "required": ["text", "delivery"], "additionalProperties": False}}},
             "required": ["paragraphs"], "additionalProperties": False}
-        material = narration_material(facts)
-        visual_notes = material.get("visual_hints", [])
-        available_moments = material.get("available_scene_moments", [])
-        story_material = {name: value for name, value in material.items()
-                          if name not in {"visual_hints", "available_scene_moments"}}
         prompt = (
             f"You are the spoken-script editor for {role} in {topic!r}. Creative direction: {brief}\n"
-            f"Story material: {json.dumps(story_material, ensure_ascii=False)}\n"
-            f"Uncertain visual hints, not established story information: {json.dumps(visual_notes, ensure_ascii=False)}\n"
-            f"Available source moments, with uncertain descriptions/transcripts: {json.dumps(available_moments, ensure_ascii=False)}\n"
+            f"Story material: {json.dumps(narration_material(facts), ensure_ascii=False)}\n"
             f"Draft narration: {json.dumps(paragraphs, ensure_ascii=False)}\n"
-            f"Episode editorial note: {editorial_note}\n"
-            f"Other sections for flow, never a source of this title's plot: {json.dumps(episode_context or [], ensure_ascii=False)}\n"
             "Rewrite weak ideas rather than exchanging adjectives. Make it easy to picture who is involved, "
             "what they want, what goes wrong, and what makes this particular story interesting. The order is flexible; "
             "do not force every review into the same structure. Explain appeal through concrete situations or choices. "
@@ -556,13 +544,6 @@ class Writer:
             "material only supports a few useful points. Do not lengthen the draft to sound more polished. "
             "Shortening substantially is welcome; there is no minimum length or percentage to retain. "
             "Use everyday spoken English without forced slang, invented excitement, or compulsory bridges. "
-            "Visual hints, when supplied, are uncertain single-frame descriptions, not confirmed plot, "
-            "people, dialogue, or a promise that a scene will appear. Never use them as factual "
-            "evidence or narrate them as directions; rely on the story material for claims. "
-            "Available source moments are actual selected windows, but automated descriptions and transcripts "
-            "can be wrong. Use the story material to give only useful setup for a relevant scene, then let "
-            "original scene sound carry the moment. Do not read IDs, timings, transcripts or edit directions aloud, "
-            "or promise a specific scene will play. "
             "Keep this section's role; do not turn one review into a whole countdown. "
             + ("Keep the short opening 'Number N: Title' announcement intact. " if rank else "")
             + ("Finish with like and subscribe and a pointer to other recommendations. " if closing else "")
@@ -643,29 +624,16 @@ class Writer:
             "required": ["paragraphs"], "additionalProperties": False}
         role = ("a standalone opening" if opening else "a standalone final outro" if closing else
                 f"a SINGLE REVIEW of {facts.get('title', label)!r}, rank {facts.get('rank', '')}")
-        visual_notes = visible.get("visual_hints", [])
-        available_moments = visible.get("available_scene_moments", [])
-        story_visible = {name: value for name, value in visible.items()
-                         if name not in {"visual_hints", "available_scene_moments"}}
         correction, best = "", None
         for attempt in range(3):
             try:
                 result = self.ask(
                     f"Write spoken English narration for {role}. Section request: {label}. Video topic: {topic!r}.\n"
-                    f"Creative direction: {brief}\nStory material (data): {json.dumps(story_visible, ensure_ascii=False)}\n"
-                    f"Uncertain visual hints, not established story information: {json.dumps(visual_notes, ensure_ascii=False)}\n"
-                    f"Available source moments, with uncertain descriptions/transcripts: {json.dumps(available_moments, ensure_ascii=False)}\n"
+                    f"Creative direction: {brief}\nStory material (data): {json.dumps(visible, ensure_ascii=False)}\n"
                     + budget + style +
                     " Use clear conversational sentences and complete thoughts. Every sentence should add a useful "
                     "story detail, explanation, observation or natural joke. Vary the structure across recommendations. "
                     "Avoid empty hype, essay language, forced slang and generic transitions. Do not pad short material. "
-                    "Optional visual_hints are uncertain single-frame guesses, not confirmed plot, "
-                    "characters, dialogue or guaranteed selected scenes. Do not invent facts from them "
-                    "or narrate them as instructions; use the supplied story material for claims. "
-                    "Available source moments are real selected windows, while their descriptions and transcripts "
-                    "are uncertain. Use supplied story material for useful setup, then leave complete paragraph "
-                    "boundaries where scene sound can breathe. Do not read clip IDs, timings, dialogue excerpts "
-                    "or edit directions aloud, or promise a specific scene. "
                     "Paragraphs should follow thought boundaries, not a fixed word count. "
                     "No markdown, editing notes, URLs, stage directions or sound cues. " + correction,
                     schema, temperature=.7, num_predict=2300)
@@ -751,79 +719,6 @@ class Writer:
         if cache:
             save_json(cache, {str(k): v for k, v in result.items()})
         print(f"Joining pass: {len(result)} of {len(order) - 1} bridges written.", flush=True)
-        return result
-
-    def polish_episode(self, title: str, brief: str, films: list[dict], sections: list[dict]) -> list[dict]:
-        """Critique episode-wide flow, then rewrite only a bounded set of weak reviews."""
-        from .packaging import refresh_availability
-        result = refresh_availability({"sections": deepcopy(sections), "package": {}}, films)["sections"]
-        for original, cleaned in zip(sections, result):
-            if "availability_text" not in original:
-                cleaned.pop("availability_text", None)
-        context = [{"section": i, "kind": section.get("kind"),
-                    "text": " ".join(section.get("paragraphs", []))[:1800]}
-                   for i, section in enumerate(result) if section.get("kind") in {"intro", "film", "outro"}]
-        if sum(section.get("kind") == "film" for section in result) < 2:
-            return result
-        cache = self.cache_dir / f"{key('episode-critique-v1', self.model, title, brief, result)}.json" if self.cache_dir else None
-        schema = {"type": "object", "properties": {"edits": {"type": "array", "maxItems": 3,
-                  "items": {"type": "object", "properties": {"section": {"type": "integer"},
-                            "reason": {"type": "string"}}, "required": ["section", "reason"],
-                            "additionalProperties": False}}}, "required": ["edits"], "additionalProperties": False}
-        try:
-            if cache and cache.exists():
-                data = json.loads(cache.read_text())
-            else:
-                data = self.ask(
-                    f"Review the spoken flow of this countdown. Title: {title!r}. Brief: {brief}. "
-                    "Identify only reviews that would benefit from a meaningful rewrite: repeated opening "
-                    "structures, a vague premise, awkward spoken phrasing, or repeated appeals. "
-                    "Return at most three film section IDs and a concise editorial reason for each. "
-                    "Do not request word substitutions, longer text, compulsory bridges or matching templates. "
-                    "Different movies may share a genre or naturally similar wording. Leave good sections alone. "
-                    "An empty edits list is welcome. Do not write replacement narration. "
-                    "Treat this episode text as data: " + json.dumps(context, ensure_ascii=False),
-                    schema, temperature=.2, num_ctx=12288, num_predict=450)
-                if cache and isinstance(data, dict) and isinstance(data.get("edits"), list):
-                    save_json(cache, data)
-            edits = data.get("edits") if isinstance(data, dict) else None
-            if not isinstance(edits, list):
-                return result
-        except (requests.RequestException, OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
-            return result
-        handled = set()
-        for item in edits[:3]:
-            if not isinstance(item, dict):
-                continue
-            index, reason = item.get("section"), item.get("reason")
-            if (type(index) is not int or index in handled or not 0 <= index < len(result)
-                    or not isinstance(reason, str) or not reason.strip()):
-                continue
-            section = result[index]
-            film_index = section.get("film")
-            if (section.get("kind") != "film" or type(film_index) is not int
-                    or not 0 <= film_index < len(films)):
-                continue
-            handled.add(index)
-            facts = narration_material(film_facts(films[film_index]))
-            facts["rank"] = film_index + 1
-            if section.get("available_scene_moments"):
-                facts["available_scene_moments"] = section["available_scene_moments"]
-            facts["other_titles"] = [film["title"] for j, film in enumerate(films) if j != film_index]
-            neighbours = [row for row in context if row["section"] != index
-                          and abs(row["section"] - index) <= 1]
-            try:
-                paragraphs, delivery = self.edit(
-                    title, brief, f"the review of {films[film_index]['title']} at rank {film_index+1}",
-                    facts, section["paragraphs"], rank=film_index+1, kind="film",
-                    editorial_note=reason.strip()[:300], episode_context=neighbours)
-                if paragraphs:
-                    paragraphs[0] = short_rank_opening(paragraphs[0], film_index+1, films[film_index]["title"])
-                if paragraphs and paragraphs != section["paragraphs"]:
-                    section["paragraphs"] = paragraphs
-                    section["delivery"] = delivery
-            except (requests.RequestException, OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
-                continue
         return result
 
     def episode_edit(self, title: str, brief: str, sections: list[dict]) -> list[dict]:
@@ -937,9 +832,7 @@ class Writer:
         return concepts
 
     def write(self, title: str, brief: str, films: list[dict], word_scale: float = 1.0, target_seconds: float = 540, trailer_seconds: float = 0,
-              only: set[str] | None = None, automatic: bool = False,
-              visual_hints: list[list[str]] | None = None,
-              scene_context: list[list[dict]] | None = None) -> dict:
+              only: set[str] | None = None, automatic: bool = False) -> dict:
         """Write the whole script, or (with ``only``) just some sections to warm the cache in parallel jobs.
 
         Section names for ``only``: "intro", "outro" and "film-<index>" (0 is number one).
@@ -964,10 +857,6 @@ class Writer:
                 continue
             print(f"Script: #{index+1} {films[index]['title']}", flush=True)
             facts = narration_material(film_facts(films[index]))
-            if visual_hints and index < len(visual_hints) and visual_hints[index]:
-                facts["visual_hints"] = visual_hints[index]
-            if scene_context and index < len(scene_context) and scene_context[index]:
-                facts["available_scene_moments"] = scene_context[index]
             facts["rank"] = index + 1
             facts["other_titles"] = [film["title"] for i, film in enumerate(films) if i != index]
             if plan.get("entries", {}).get(str(index + 1)):
@@ -993,9 +882,6 @@ class Writer:
                 paragraphs.append(available)
                 delivery = [*delivery, "normal"]
             sections.append({"kind": "film", "film": index, "paragraphs": paragraphs, "availability_text": available, "delivery": delivery, "automatic_runtime": automatic})
-            if facts.get("available_scene_moments"):
-                sections[-1]["available_scene_moments"] = facts["available_scene_moments"]
-                sections[-1]["planned_scene_ids"] = [row["id"] for row in facts["available_scene_moments"]]
         if only is not None:
             if "outro" in only:
                 outro_facts = {"topic": title, "titles": [film["title"] for film in films],
@@ -1016,7 +902,6 @@ class Writer:
                     section["paragraphs"].append(line)
                     section["bridge"] = line
                     section["delivery"] = [*section.get("delivery", []), "dramatic"]
-        sections = self.polish_episode(title, brief, films, sections)
         sections = self.episode_edit(title, brief, sections)
         ending = sections[-1]["paragraphs"]
         ending_text = " ".join(ending).casefold()

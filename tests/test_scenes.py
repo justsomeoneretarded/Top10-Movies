@@ -253,3 +253,48 @@ def test_valid_thumbnail_vision_verdict_is_kept(monkeypatch):
     result = scenes.rate_thumbnail(Image.new("RGB", (64, 64)))
     assert result["large_face"] is True and result["logo"] is False and result["score"] == 9
     assert scenes._VISION_READY is True
+
+
+def test_thumbnail_installs_missing_instruct_model_before_rating(monkeypatch, tmp_path):
+    calls = []
+    verdict = {"large_face": True, "emotion_intensity": 8, "action_or_spectacle": 5,
+               "genre_fit": 7, "logo_or_text": False, "thumbnail_score": 9}
+    def post(url, json=None, timeout=None):
+        calls.append((url.rsplit("/", 1)[-1], json, timeout))
+        response = FakeResponse({"response": __import__("json").dumps(verdict)})
+        response.status_code = 404 if url.endswith("/api/show") else 200
+        return response
+    monkeypatch.setattr(scenes.requests, "post", post)
+    monkeypatch.setattr(scenes.shutil, "disk_usage", lambda path: SimpleNamespace(free=5_000_000_000))
+    assert scenes.rate_thumbnail(Image.new("RGB", (64, 64)))["score"] == 9
+    assert [entry[0] for entry in calls] == ["show", "pull", "generate"]
+    assert calls[1][1] == {"model": scenes.VISION_MODEL, "stream": False}
+    assert calls[1][2] == 90
+    calls.clear()
+    scenes.rate_thumbnail(Image.new("RGB", (64, 64)))
+    assert [entry[0] for entry in calls] == ["generate"]
+
+
+def test_missing_optional_thumbnail_model_preserves_render_disk(monkeypatch, capsys):
+    calls = []
+    def post(url, **kwargs):
+        calls.append(url.rsplit("/", 1)[-1])
+        response = FakeResponse({})
+        response.status_code = 404
+        return response
+    monkeypatch.setattr(scenes.requests, "post", post)
+    monkeypatch.setattr(scenes.shutil, "disk_usage", lambda path: SimpleNamespace(free=2_000_000_000))
+    assert scenes.rate_thumbnail(Image.new("RGB", (64, 64))) is None
+    assert calls == ["show"]
+    assert "image-based ranking" in capsys.readouterr().out
+
+
+def test_thumbnail_http_error_reports_status_without_private_url(monkeypatch, capsys):
+    import requests
+    def post(*args, **kwargs):
+        response = SimpleNamespace(status_code=503)
+        raise requests.HTTPError("https://private.example/token", response=response)
+    monkeypatch.setattr(scenes.requests, "post", post)
+    assert scenes.rate_thumbnail(Image.new("RGB", (64, 64))) is None
+    log = capsys.readouterr().out
+    assert "HTTP 503" in log and "private.example" not in log

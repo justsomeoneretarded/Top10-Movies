@@ -133,38 +133,41 @@ def test_scene_map_rejects_wrong_film_promos_and_bad_context(monkeypatch, tmp_pa
     assert scene_plan.projected_context({"film_count": 1, "films": []}) == []
 
 
-def test_final_scene_selection_honors_preselected_ids(monkeypatch, tmp_path):
-    source, lookup, films, calls = map_fixture(monkeypatch, tmp_path)
-    plan = scene_plan.prepare_scene_map([[source]], lookup, films, tmp_path/"plan", lambda: object())
-    selected = plan["films"]["0"][0]
+def test_preselected_ids_cannot_override_ranking_opening_or_insert_order(monkeypatch, tmp_path):
+    source = tmp_path / "film.mp4"
+    rows = [{"source": str(source), "start": n*20., "duration": 6.,
+             "action_strength": .1 if n == 0 else 0., "motion": 10., "score": 1.-n*.1}
+            for n in range(4)]
+    lookup = {str(source): [{"start": row["start"], "end": row["start"]+6.} for row in rows]}
     class Selector:
-        def identity_relevance(self, path, query):
-            return np.full(2, .1)
-    monkeypatch.setattr(moments, "_enrich", lambda *args: None)
-    monkeypatch.setattr("movie_pipeline.core.duration", lambda path: 10)
-    result = moments.plan_episode(Selector(), [[source]], lookup, films,
-        [{"kind": "film", "film": 0, "paragraphs": ["A specific story."], "planned_scene_ids": [selected["id"]]}],
-        {(0, 0): Path("speech.wav")}, {}, None, tmp_path/"final", scene_map=plan)
-    assert result["previews"][0]["id"] == selected["id"]
-    assert result["report"]["planned_scenes_used"] == 1
+        def identity_relevance(self, *args):
+            return np.ones(4)
+        def reserve(self, *args):
+            pass
+    monkeypatch.setattr(moments, "candidates", lambda *args: deepcopy(rows))
+    monkeypatch.setattr(moments, "_enrich", lambda candidate, *args:
+                        {**candidate, "native_verified": True, "muted": False, "cues": []})
+    monkeypatch.setattr(moments, "_usable", lambda *args: True)
+    monkeypatch.setattr(moments, "_match_inserts", lambda *args:
+                        pytest.fail("frame/text permutation must not reorder selected scenes"))
+    monkeypatch.setattr("movie_pipeline.core.duration", lambda path: 40)
+    sections = [{"kind": "film", "film": 0, "paragraphs": ["First thought.", "Second thought."],
+                 "planned_scene_ids": ["force-last"]}]
+    result = moments.plan_episode(Selector(), [[source]], lookup, [{"title": "Example"}],
+        sections, {(0, 0): Path("a.wav"), (0, 1): Path("b.wav")},
+        {}, None, tmp_path / "final",
+        scene_map={"films": {"0": [{"id": "force-last", **rows[-1]}]}})
+    assert result["opening"][0]["start"] == 0.
+    assert result["previews"][0]["start"] == 20.
+    assert [clip["start"] for clip in result["inserts"][0].values()] == [40., 60.]
 
 
-def test_scene_context_affects_writing_without_speaking_ids(monkeypatch):
-    writer = Writer()
-    captured = []
-    writer.plan = lambda *args: {}
-    def narration(topic, brief, label, facts, target):
-        captured.append(deepcopy(facts))
-        return ["Number 1: Example. An agent must get home."]
-    writer.narration = narration
-    writer.edit = lambda *args, **kwargs: (args[4], ["normal"])
-    context = [[{"id": "clip-secret-id", "description": "A chase", "duration": 6., "dialogue_excerpt": "Run."}]]
-    films = [{"title": "Example", "year": 2026}]
-    script = writer.write("Movies", "", films, only={"film-0"}, scene_context=context)
-    prepared = prepare_rank_intros(script, films)
-    assert captured[0]["available_scene_moments"] == context[0]
-    assert prepared["sections"][0]["planned_scene_ids"] == ["clip-secret-id"]
-    assert "clip-secret-id" not in " ".join(prepared["sections"][0]["paragraphs"])
+def test_scene_guesses_are_excluded_from_spoken_research_material():
+    from movie_pipeline.script import narration_material
+    facts = {"title": "Example", "overview": "An agent must get home.",
+             "visual_hints": ["wrong guess"], "available_scene_moments": [{"dialogue": "wrong"}],
+             "planned_scene_ids": ["secret"], "scene_context": {"bad": "guess"}}
+    assert narration_material(facts) == {"title": "Example", "overview": "An agent must get home."}
 
 
 def test_downloader_setup_serialized_but_extraction_stays_parallel():

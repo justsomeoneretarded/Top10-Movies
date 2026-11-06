@@ -450,7 +450,7 @@ def test_produce_keeps_cta_between_reviews_and_retimes_metadata(monkeypatch, tmp
         monkeypatch.setattr("movie_pipeline.dialogue.isolate_dialogue", lambda *args, **kwargs: None)
     if extra_mode == "native-scenes":
         def native_plan(selector,pools,lookup,films,sections,speech,dialogue,recognizer,work,scene_map=None):
-            assert isinstance(scene_map, dict) and scene_map['film_count'] == len(films)
+            assert scene_map is None  # speculative pre-writing scene constraints are disabled
             def clip(source,start,seconds,film_index):
                 return {"source":str(source),"start":start,"duration":seconds,
                         "film_index":film_index,"muted":False,"native_verified":True,
