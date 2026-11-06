@@ -25,32 +25,6 @@ def _available(selector, sources: list[Path], shot_sets: dict[str, list[dict]]) 
     return available
 
 
-def _continuation_score(selector, path, shots, text, seconds):
-    """Score only an unused remainder of the immediately preceding indexed shot."""
-    check = getattr(selector, "continuation_orders", None)
-    windows = getattr(selector, "unused_windows", None)
-    if not callable(check) or not callable(windows):
-        return None
-    try:
-        values = None
-        for index, shot in enumerate(shots):
-            if selector.card_kind(path, index) is not None:
-                continue
-            for low, high in windows(path, shot["start"], shot["end"]):
-                if high - low + 1e-6 < seconds or not check(path, low, seconds):
-                    continue
-                if selector.visual_freshness(path, low, seconds) < .999:
-                    continue
-                if values is None:
-                    values = selector.relevance(path, text)
-                score = float(values[index])
-                if math.isfinite(score):
-                    return score + .08
-    except OPTIONAL_ERRORS:
-        pass
-    return None
-
-
 def _rank_sources(selector, sources: list[Path], shot_sets: dict[str, list[dict]], text: str,
                   action: bool, *, uses: dict | None = None, last: str | None = None,
                   minimum_fresh: float = 1.5) -> list[Path]:
@@ -65,17 +39,13 @@ def _rank_sources(selector, sources: list[Path], shot_sets: dict[str, list[dict]
                 continue
             # Matching is optional; the primary remains usable even when similarity fails.
             score = 0.0
-        continuation = (_continuation_score(selector, path, shot_sets[str(path)], text, minimum_fresh)
-                        if uses is not None and str(path) == last else None)
-        if continuation is not None:
-            score = max(score, continuation)
-        elif uses is not None:
+        if uses is not None:
             score -= uses.get(str(path), 0)*.03
             if str(path) == last:
                 score -= .03
         try:
             fresh = float(selector.fresh_seconds(path,shot_sets[str(path)]))
-            fresh_tier = int(continuation is not None or math.isfinite(fresh) and fresh >= minimum_fresh)
+            fresh_tier = int(math.isfinite(fresh) and fresh >= minimum_fresh)
         except OPTIONAL_ERRORS:
             fresh_tier = 1
         ranked.append((fresh_tier,score,index,path))
@@ -155,9 +125,7 @@ def choose_from_sources(selector, sources: list[Path], shot_sets: dict[str, list
                     for index, shot in enumerate(shot_sets[str(path)]):
                         if selector.card_kind(path, index) is not None:
                             continue
-                        end_method = getattr(selector, "continuous_end", None)
-                        source_end = end_method(path, shot_sets[str(path)], index) if callable(end_method) else shot["end"]
-                        fresh_spans.extend(high-low for low, high in windows(path, shot["start"], source_end)
+                        fresh_spans.extend(high-low for low, high in windows(path, shot["start"], shot["end"])
                                            if high-low >= min(5, remaining)
                                            and selector.visual_freshness(path, low, high-low) >= .999)
                 except OPTIONAL_ERRORS:

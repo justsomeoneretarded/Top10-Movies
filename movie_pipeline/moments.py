@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import math
 import re
-from itertools import permutations
 from pathlib import Path
 import numpy as np
 from .core import ffmpeg, key, save_json, probe
@@ -42,7 +41,6 @@ def complete_window(candidate: dict, cues: list[dict], extent: tuple[float,float
         return None
     return {**candidate,"start":max(low,start),"duration":end-max(low,start),
             "muted":False,"native_verified":True,
-            "dialogue_boundaries_verified":bool(relevant),
             "cues":[dict(c) for c in relevant]}
 
 def _scores(selector,source,query,count):
@@ -51,14 +49,6 @@ def _scores(selector,source,query,count):
         return values if len(values)==count else np.full(count,.25)
     except (AttributeError,RuntimeError,ValueError,KeyError,TypeError):
         return np.full(count,.25)
-
-def _cuts_per_minute(shots, start, end):
-    """Estimate internal cut density from detected boundaries, not a quality verdict."""
-    if end <= start:
-        return 0.0
-    return 60.0 * sum(1 for shot in shots if start < float(shot["start"]) < end
-                      and not shot.get("continues_previous", False)) / (end - start)
-
 
 def candidates(selector,pool,shot_lookup,film):
     result=[]
@@ -100,9 +90,8 @@ def candidates(selector,pool,shot_lookup,film):
                     continue
                 strength=float(np.mean(energetic[indices]-quiet[indices]))
                 score=float(np.mean(meaningful[indices]+relevant[indices]))+.10*fresh+.06*min(length/10,1)
-                cut_rate = _cuts_per_minute(shots, start, end)
                 result.append({"source":str(source),"start":start,"duration":length,
-                               "score":score,"cuts_per_minute":cut_rate,"action_strength":strength,
+                               "score":score,"action_strength":strength,
                                "motion":float(np.mean([shots[j].get("motion",0) for j in indices])),
                                "film_index":None,"scene_index":i,"scene_end":end,
                                "extent":max(float(x["end"]) for x in shots),
@@ -153,69 +142,12 @@ def _usable(selector,clip,shot_lookup):
         if shot["start"]<clip["start"]+clip["duration"] and shot["end"]>clip["start"]:
             if getattr(selector,"card_kind",lambda *_:None)(source,i) is not None:
                 return False
-    # Dialogue expansion can cross additional boundaries; report the final window.
-    clip["cuts_per_minute"] = _cuts_per_minute(
-        shot_lookup.get(str(source), []), clip["start"], clip["start"] + clip["duration"])
     return True
-
-def _match_inserts(selector, clips, positions, paragraphs, shot_lookup):
-    """Prefer a stronger clip/paragraph pairing; preserve order without clear evidence."""
-    if len(clips) < 2 or len(clips) != len(positions) or len(clips) > 4:
-        return clips
-    cache = {}
-    matrix = []
-    try:
-        for pos in positions:
-            text = " ".join(str(paragraphs[pos]).split()[:70])
-            if not text:
-                return clips
-            row = []
-            for clip in clips:
-                source = str(clip["source"])
-                shots = shot_lookup.get(source, [])
-                indices = [i for i, shot in enumerate(shots)
-                           if shot["start"] < clip["start"] + clip["duration"]
-                           and shot["end"] > clip["start"]]
-                if not indices:
-                    return clips
-                cache_key = (source, pos)
-                if cache_key not in cache:
-                    cache[cache_key] = np.asarray(selector.identity_relevance(Path(source), text), dtype=float)
-                scores = cache[cache_key]
-                if scores.ndim != 1 or len(scores) != len(shots) or not np.isfinite(scores[indices]).all():
-                    return clips
-                row.append(float(np.mean(scores[indices])))
-            if max(row) - min(row) < 1e-6:
-                return clips
-            matrix.append(row)
-    except (AttributeError, TypeError, KeyError, ValueError, IndexError, RuntimeError, OSError):
-        return clips
-    baseline = tuple(range(len(clips)))
-    def total(order):
-        return sum(matrix[i][j] for i, j in enumerate(order))
-    def keeps_nearby_sequence(order):
-        # Preserve the selected order of nearby clips from the same source:
-        # swapping them can put a payoff before its setup.
-        for left in range(len(clips)):
-            for right in range(left + 1, len(clips)):
-                a, b = clips[left], clips[right]
-                if a["source"] != b["source"]:
-                    continue
-                gap = max(0.0, max(a["start"], b["start"])
-                          - min(a["start"] + a["duration"], b["start"] + b["duration"]))
-                if gap <= 10.0 and order.index(left) > order.index(right):
-                    return False
-        return True
-    best = max((order for order in permutations(baseline) if keeps_nearby_sequence(order)), key=total)
-    if total(best) <= total(baseline) + .01 * len(clips):
-        return clips
-    return [clips[i] for i in best]
-
 
 def _reserve(selector,clip):
     getattr(selector,"reserve",lambda *_:None)(Path(clip["source"]),clip["start"],clip["duration"],"native-scene")
 
-def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recognizer,work,scene_map=None):
+def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recognizer,work):
     """Return opening, natural rank previews, and optional review insertions.
 
     Image matching is required for this optional planner. The established preview
@@ -287,8 +219,7 @@ def plan_episode(selector,pools,shot_lookup,films,sections,speech,dialogue,recog
                 # Spread pauses across complete paragraphs, including a useful scene
                 # after the final review sentence when appropriate.
                 positions=np.linspace(0,len(body_positions)-1,len(remaining),dtype=int)
-                paragraph_positions = [body_positions[int(p)] for p in positions]
-                inserts[section_index] = dict(zip(paragraph_positions, remaining))
+                inserts[section_index]={body_positions[int(p)]:clip for p,clip in zip(positions,remaining)}
     return {"opening":opening,"previews":previews,"inserts":inserts,
             "report":{"opening_seconds":sum(c["duration"] for c in opening),
                       "native_moments":sum(c.get("native_verified",False) and not c.get("muted",True) for c in used),"review_counts":{str(i):1+len(inserts.get(i,{})) for i in previews}}}
