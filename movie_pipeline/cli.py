@@ -237,7 +237,7 @@ def setup_run(title: str, brief: str, movies: str, work: Path, output: Path, sta
     reference = voice_reference(narrator, Path(os.getenv("VOICE_DIR", "assets/voices")))
     # Include the resolver policy and writing model so stale identities/scripts are not reused.
     script_model = os.getenv("SCRIPT_MODEL", "gemma4:12b")
-    run_key = key("pipeline-v15-scene-first-movie-ranks", title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
+    run_key = key("pipeline-v15-scene-first-movie-ranks", os.getenv("NARRATION_SPEED", "1.2"), title, brief, movies, content_type, narrator, script_model, vars(spec), selected_tts_model(), key(reference.read_bytes().hex()))
     work = work / run_key
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -405,7 +405,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     writer = Writer(cache_dir=work / "script-sections")
     print(f"Script model: {writer.model}", flush=True)
     script_path = work / "script.json"
-    script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
+    script = json.loads(script_path.read_text()) if script_path.exists() else writer.write(title, brief, films, word_scale=_speed_words(), target_seconds=spec.target, trailer_seconds=expected_breaks, automatic=spec.automatic)
     script = writer.refresh_editorial(title, brief, films, script, automatic=spec.automatic)
     refresh_availability(script, films)
     from .rank_intro import prepare_rank_intros
@@ -533,7 +533,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     music_theme = theme_for(title, brief)
     voice_speed = narration_rate(music_theme)
     from .script import aligned_delivery
-    from .sound_design import delivery_speed
+    from .sound_design import delivery_speed, narration_speed
     from .voice import paced_take
     paced = {}
     delivery_report = {}
@@ -541,8 +541,8 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
         section = script["sections"][coordinate[0]]
         label = aligned_delivery(section)[coordinate[1]]
         # Hooks and reveals move a little faster; tense or emotional lines breathe.
-        paragraph_speed = delivery_speed(voice_speed, label,
-            words=len(section["paragraphs"][coordinate[1]].split()), seconds=duration(audio))
+        paragraph_speed = round(delivery_speed(voice_speed, label,
+            words=len(section["paragraphs"][coordinate[1]].split()), seconds=duration(audio)) * narration_speed(), 3)
         delivery_report[label] = delivery_report.get(label, 0) + 1
         if (audio, paragraph_speed) not in paced:
             paced[(audio, paragraph_speed)] = paced_take(audio, paragraph_speed)
@@ -552,7 +552,7 @@ def produce(title: str, brief: str, movies: str, work: Path, output: Path):
     print(f"Narration delivery: {delivery_report}.", flush=True)
     notice("Narration", f"Delivery labels {delivery_report}; {sum(duration(a) for a in set(speech.values()))/60:.1f} min of speech. "
            f"Elapsed {(time.time()-started)/60:.0f} min.")
-    cta_speed = delivery_speed(voice_speed, "normal", words=len(cta_text.split()), seconds=duration(cta_audio))
+    cta_speed = round(delivery_speed(voice_speed, "normal", words=len(cta_text.split()), seconds=duration(cta_audio)) * narration_speed(), 3)
     if cta_speed != 1:
         cta_audio = paced_take(cta_audio, cta_speed)
         cta_cues = [{**cue, "start": cue["start"]/cta_speed,
@@ -1232,7 +1232,7 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
         return parts
     if stage == "script":
         writer = Writer(cache_dir=ctx.work / "script-sections")
-        result = writer.write(title, brief, films, target_seconds=ctx.spec.target, trailer_seconds=ctx.expected_breaks, only={part}, automatic=ctx.spec.automatic)
+        result = writer.write(title, brief, films, word_scale=_speed_words(), target_seconds=ctx.spec.target, trailer_seconds=ctx.expected_breaks, only={part}, automatic=ctx.spec.automatic)
         writer.unload()
         print(f"Warmed script section {part}.", flush=True)
         voiced = warm_voice(result.get("sections", []), ctx)
@@ -1252,6 +1252,12 @@ def warm(stage: str, part: str, title: str, brief: str, movies: str, work: Path,
               f"optional extras deferred to the global download rounds.", flush=True)
         return {"trailer": str(trailer), "extra": str(extra) if extra else ""}
     raise PipelineError(f"Unknown stage {stage!r}.")
+
+
+def _speed_words() -> float:
+    """Faster narration gets proportionally more words, so the requested length still fills."""
+    from .sound_design import narration_speed
+    return narration_speed()
 
 
 def main():
