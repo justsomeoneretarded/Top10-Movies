@@ -11,6 +11,14 @@ import time
 
 
 def guarded_checks() -> None:
+    from scripts.runner_guard import detect_limits, restrict_limits, scope_command, workload_environment
+    try:
+        limits = restrict_limits(detect_limits(), 192, 0)
+        probe = subprocess.run(scope_command(["/usr/bin/true"], "movie-guard-ci-diagnostic.scope", limits),
+                               env=workload_environment(limits), capture_output=True, text=True, timeout=30)
+        print("SAFE_SCOPE_PROBE " + json.dumps({"exit_code": probe.returncode, "stderr": probe.stderr[-1200:]}), flush=True)
+    except Exception as exc:
+        print("SAFE_SCOPE_PROBE " + json.dumps({"error_class": type(exc).__name__}), flush=True)
     root = Path("work/runner-smoke")
     root.mkdir(parents=True, exist_ok=True)
     cases = [
@@ -31,6 +39,8 @@ def guarded_checks() -> None:
             capture_output=True, text=True, timeout=60, env=environment,
         )
         events = [json.loads(line) for line in (folder / "resources.jsonl").read_text().splitlines()]
+        if result.returncode == 78:
+            print("GUARD_SETUP_DIAGNOSTIC " + json.dumps(events[-1]), flush=True)
         if expected is None:
             if result.returncode in (0, 78):
                 raise RuntimeError("Memory-pressure check did not exercise the protected workload")
