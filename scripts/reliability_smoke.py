@@ -23,6 +23,7 @@ def guarded_checks() -> None:
     root.mkdir(parents=True, exist_ok=True)
     cases = [
         ("normal", [sys.executable, __file__, "child-check", str(os.getuid())], 0),
+        ("literal-arguments", [sys.executable, "-c", "import sys; assert sys.argv[1] == '$GUARD_LITERAL'", "$GUARD_LITERAL"], 0),
         ("failure", [sys.executable, "-c", "raise SystemExit(23)"], 23),
         ("memory-pressure", [sys.executable, "-c",
                              "items=[]\nwhile True: items.append(bytearray(16*1024*1024))"], None),
@@ -93,6 +94,12 @@ def child_check(expected_uid: str) -> None:
     cgroup = Path("/proc/self/cgroup").read_text()
     if "movie-production-" not in cgroup:
         raise RuntimeError("Workload is outside the protected scope")
+    relative = next(line.split(":", 2)[2] for line in cgroup.splitlines() if line.startswith("0::"))
+    if (Path("/sys/fs/cgroup") / relative.lstrip("/") / "memory.oom.group").read_text().strip() != "1":
+        raise RuntimeError("The protected scope does not stop the full workload on OOM")
+    own = Path("/sys/fs/cgroup") / relative.lstrip("/")
+    if (own / "memory.max").read_text().strip() != str(192 * 1024 * 1024) or (own / "memory.swap.max").read_text().strip() != "0":
+        raise RuntimeError("The kernel did not apply the requested memory limits")
     if not Path("scripts/runner_guard.py").is_file():
         raise RuntimeError("Scope changed the working directory")
 
