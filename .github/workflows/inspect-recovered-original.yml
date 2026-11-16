@@ -1,0 +1,61 @@
+name: Inspect recovered original output
+on:
+  push:
+    branches: [diagnostics/recovered-run-43820591427]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: '43820591427'
+          name: movie-video-5
+          path: package
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: '43820591427'
+          name: runner-diagnostics-5-1
+          path: resources
+      - name: Inspect manifests and numeric resource reports
+        shell: python
+        run: |
+          import json
+          import re
+          from html import unescape
+          from pathlib import Path
+          print('PACKAGE_FILES',json.dumps([{'name':p.name,'bytes':p.stat().st_size} for p in sorted(Path('package').rglob('*')) if p.is_file()]))
+          for name in ['run-manifest.json','quality-summary.json']:
+              for p in Path('package').rglob(name):
+                  if p.stat().st_size<2_000_000:
+                      print('REPORT',name,json.dumps(json.loads(p.read_text()),ensure_ascii=False))
+          for p in Path('package').rglob('review.html'):
+              rows=re.findall(r'<tr\b[^>]*>.*?</tr>',p.read_text(),re.S|re.I)
+              for row in rows:
+                  if any(term in row.lower() for term in ['black frames','repeated shots','loudness','captions']):
+                      print('ADVISORY',unescape(re.sub(r'<[^>]+>',' ',row))[:3000])
+          for p in Path('resources').rglob('resources.jsonl'):
+              events=[]
+              for line in p.read_text().splitlines():
+                  try: events.append(json.loads(line))
+                  except ValueError: pass
+              def values(getter):
+                  result=[]
+                  for e in events:
+                      try:
+                          n=getter(e)
+                          if isinstance(n,(int,float)): result.append(n)
+                      except (KeyError,TypeError): pass
+                  return result
+              report={'events':len(events),'first':events[0] if events else None,'last':events[-1] if events else None,
+                      'non_sample_events':[e for e in events if e.get('event')!='sample'],
+                      'peak_memory_bytes':max(values(lambda e:e['cgroup']['memory.peak']),default=None),
+                      'peak_swap_bytes':max(values(lambda e:e['cgroup']['memory.swap.current']),default=None),
+                      'minimum_host_available_bytes':min(values(lambda e:e['memory']['MemAvailable']),default=None),
+                      'minimum_workspace_free_bytes':min(values(lambda e:e['disk']['workspace']['free_bytes']),default=None)}
+              print('RESOURCE_SUMMARY',json.dumps(report))
