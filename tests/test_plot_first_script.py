@@ -176,6 +176,7 @@ def test_useful_short_plot_is_not_padded_to_an_arbitrary_target():
 
 @pytest.mark.parametrize("sentence", [
     "Created by Umbrella, the virus spreads through the hospital.",
+    "Directed by John, Ada leaves through the service tunnel.",
     "Written by John to lure her back, the note sends Ada to a trap.",
     "The director searches the set while her crew vanish.",
     "Written by a killer, the note sends her to the old hospital.",
