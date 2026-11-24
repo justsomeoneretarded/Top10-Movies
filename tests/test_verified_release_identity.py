@@ -125,7 +125,7 @@ def _film():
 
 def _evidence(year, *, identifier=1339713):
     return {"year": year, "source": f"https://api.themoviedb.org/3/movie/{identifier}/release_dates",
-            "kind": "festival", "identity": f"movie/{identifier}"}
+            "kind": "festival", "identity": f"movie/{identifier}", "date": f"{year}-09-06"}
 
 
 def test_only_same_production_evidence_adds_release_years():
@@ -231,4 +231,29 @@ def test_public_release_evidence_cannot_cross_page_identity(case):
         evidence["source"] = "https://en.wikipedia.org/wiki/Obsession_(other_film)"
     else:
         evidence["identity"] = "https://en.wikipedia.org/wiki/Obsession_(other_film)"
+    assert verified_release_years(film) == {2026}
+
+
+def test_tmdb_release_year_without_a_dated_event_is_not_proof():
+    evidence = _evidence(2026)
+    evidence.pop("date")
+    assert verified_release_years({**_film(), "release_year_evidence": [evidence]}) == {2025}
+
+
+def test_tmdb_release_event_date_must_match_its_claimed_year():
+    evidence = {**_evidence(2026), "date": "2024-09-06"}
+    assert verified_release_years({**_film(), "release_year_evidence": [evidence]}) == {2025}
+
+
+@pytest.mark.parametrize("quote", [
+    "The lead actor was born in 2024 and later starred in the film.",
+    "Production began in 2024 with location filming in Canada.",
+    "The second season premiered in 2024 with a new cast.",
+])
+def test_public_incidental_dates_cannot_add_a_release_year(quote):
+    film = _public_film()
+    url = film["source"]
+    film["research_evidence"].append({"text": quote, "sources": [url]})
+    film["release_year_evidence"] = [{"year": 2024, "source": url, "identity": url,
+                                     "kind": "public_release", "quote": quote}]
     assert verified_release_years(film) == {2026}
