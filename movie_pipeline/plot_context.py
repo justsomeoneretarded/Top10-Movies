@@ -42,13 +42,21 @@ _STORY_CONTINUATION = re.compile(
 
 def _story_sentence(sentence: str) -> str:
     text = sentence.strip()
-    credit = _CREDIT_HEAD.match(text) or _STARRING_HEAD.match(text)
+    credit = _CREDIT_HEAD.match(text)
+    starring = _STARRING_HEAD.match(text)
     catalogue = _CATALOGUE.match(text)
-    # A lowercase object is often story-world prose: "Written by a killer,
-    # the note leads her into a trap." It is not a filmmaker credit.
-    if credit and (not text[credit.end():] or not text[credit.end():][0].isupper()):
-        credit = None
-    if not credit and not catalogue:
+    # Role-and-problem prose can contain the only useful premise in a source:
+    # "The series stars ... as a doctor fighting to keep an ER running."
+    # Keep ambiguous mixed prose for the meaning-led writing pass.
+    if (starring or catalogue) and re.search(r"\\bas\\s+(?:a|an|the)\\b", text, re.I):
+        return text
+    explicit_credit = bool(re.match(
+        r"^(?:the|this) (?:film|movie|show|series) (?:is|was) ", text, re.I))
+    production_clause = bool(re.search(
+        r",\\s*(?:the|this) (?:film|movie|show|series|story)\\b", text, re.I))
+    if not catalogue and not starring and not (credit and (explicit_credit or production_clause)):
+        # A bare passive is ambiguous: "Created by a corporation, the virus
+        # spreads" and "Written by John to lure her back, the note ..." are plot.
         return text
     continuation = _STORY_CONTINUATION.search(text)
     if continuation:
