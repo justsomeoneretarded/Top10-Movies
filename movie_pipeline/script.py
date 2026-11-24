@@ -44,13 +44,13 @@ FACT_FIELDS = ("title", "year", "kind", "status", "release_date", "genres", "dir
 def film_facts(film: dict) -> dict:
     """The verified material a writer may use for one title: TMDB plus optional Wikipedia notes."""
     facts = {name: film[name] for name in FACT_FIELDS if film.get(name) not in (None, "", [])}
+    characters = character_names(film)
+    if characters:
+        facts["characters"] = characters
     roles = [f"{c['name']} as {c['character']}" if c.get("character") else c["name"]
              for c in film.get("cast_profiles", []) if isinstance(c, dict) and c.get("name")]
     if roles or film.get("cast"):
         facts["cast"] = roles or film.get("cast", [])
-    characters = character_names(film)
-    if characters:
-        facts["characters"] = characters
     return facts
 
 
@@ -221,10 +221,18 @@ def _plot_fallback(facts: dict, rank: int | None = None) -> list[str]:
     """Keep the supplied premise if optional writing is unavailable; never add credits."""
     visible = narration_material(facts)
     title = str(visible.get("title") or "").strip()
-    premise = next((visible[name].strip() for name in (
+    def first_text(value):
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, (list, dict)):
+            items = value.values() if isinstance(value, dict) else value
+            return next((text for item in items if (text := first_text(item))), "")
+        return ""
+    premise = next((text for name in (
         "overview", "premise", "plot", "plot_summary", "synopsis", "storyline",
-        "wiki_plot", "wiki_synopsis", "research_plot", "story", "wiki_summary")
-        if isinstance(visible.get(name), str) and visible[name].strip()), "")
+        "wiki_plot", "wiki_synopsis", "research_plot", "story", "wiki_summary",
+        "summary", "research_notes", "grounded_notes")
+        if (text := first_text(visible.get(name)))), "")
     opening = f"Number {rank or facts.get('rank', 1)}: {title}." if title else ""
     return [text for text in (opening, premise) if text]
 
