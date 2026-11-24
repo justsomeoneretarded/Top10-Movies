@@ -238,3 +238,17 @@ def test_an_old_cast_list_brief_does_not_override_the_plot_review_instructions()
     prompt = writer.ask.call_args.args[0]
     assert "keeping production rollcalls out of the review" in prompt
     assert all(name not in prompt for name in ("Jane Director", "Alex Creator", "Terry Actor"))
+
+
+@pytest.mark.parametrize("source", [
+    {"summary": "Ada searches the basement for her brother."},
+    {"research_notes": ["Created by Jane Director.", "Ada searches the basement for her brother."]},
+    {"grounded_notes": {"plot": "Ada searches the basement for her brother.", "cast": ["Terry Actor"]}},
+])
+def test_offline_fallback_can_use_plot_notes_without_an_overview(source):
+    writer = Writer()
+    writer.ask = Mock(side_effect=ValueError("temporarily unavailable"))
+    film = {"title": "Example", "year": 2025, **source}
+    result = writer.narration("Top thrillers", "", "rank 1", film_facts(film), 200)
+    assert result == ["Number 1: Example.", "Ada searches the basement for her brother."]
+    assert writer.ask.call_count == 3
