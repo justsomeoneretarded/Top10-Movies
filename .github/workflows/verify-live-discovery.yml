@@ -22,3 +22,5 @@ jobs:
           GEMINI_FREE_ONLY: 'true'
           TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
         run: python -m scripts.verify_live_discovery
+
+# Validate integrated revision 6710eeb6adcb5a8780d90c78b2a112dc62862a76
