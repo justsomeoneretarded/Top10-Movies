@@ -230,3 +230,26 @@ def test_metadata_rejections_report_no_download_attempts_or_invented_bot_failure
     assert "download" in diagnostics.lower() and "0" in diagnostics
     assert "bot" not in str(raised.value).lower()
     assert "youtube access restrictions" not in str(raised.value).lower()
+
+
+def test_primary_metadata_budget_reaches_later_year_free_and_genre_query_families(monkeypatch, tmp_path):
+    queries = ["dated trailer", "year-free trailer", "generic scene", "year-free scene",
+               "scary scene", "suspense scene", "premise scene"]
+    first_ids = dict(zip(queries, IDS[:7]))
+    monkeypatch.setattr(editorial_policy, "search_queries", lambda film, **kwargs: queries)
+    downloads, inspected, searches = _fake_downloads(
+        monkeypatch, reject=True, search_results=lambda query: [first_ids[query], *IDS[7:10]])
+    with pytest.raises(PipelineError):
+        footage.download(FILM, tmp_path)
+    assert downloads == []
+    assert set(first_ids.values()).issubset(inspected)
+    assert set(queries).issubset(searches)
+    assert len(inspected) <= footage.MAX_CANDIDATES * 2
+    assert all(inspected.count(identifier) <= 2 for identifier in set(inspected))
+
+
+@pytest.mark.parametrize("accept", [footage.candidate_ok, secondary_candidate_ok])
+@pytest.mark.parametrize("length", [12, 361, float("nan"), float("inf"), True, "120"])
+def test_duration_and_live_checks_still_apply_to_curated_footage(accept, length):
+    assert not accept(video(duration=length), FILM, curated=True)
+    assert not accept(video(is_live=True), FILM, curated=True)
