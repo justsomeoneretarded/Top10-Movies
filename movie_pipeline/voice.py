@@ -429,11 +429,29 @@ def _number_spelling(value: int) -> str:
     return str(value)
 
 
+def sound_key(token: str) -> str:
+    """A rough pronunciation key: 'Dredd'/'dread' give 'drd', 'Carrie'/'carry' give 'kr',
+    'Bandidos'/'Banditos' match. Empty for short words."""
+    word = re.sub(r"[^a-z]", "", token.lower())
+    if len(word) < 4:
+        return ""
+    for pattern, replacement in (("ph", "f"), ("ck", "k"), ("gh", "g"), ("q", "k"), ("c", "k"), ("z", "s"), ("x", "ks")):
+        word = word.replace(pattern, replacement)
+    key = word[0] + re.sub(r"[aeiouyhw]", "", word[1:])
+    # Voiced and unvoiced pairs are easily confused by speech recognition (Bandidos/Banditos).
+    key = key.translate(str.maketrans("dbgvs", "tpkfs"))
+    key = re.sub(r"(.)\1+", r"\1", key)
+    # Longer words may have a two-letter key (Carrie/carry); short ones need three (no 'core').
+    return key if len(key) >= 3 or (len(word) >= 5 and len(key) >= 2) else ""
+
+
 def _aligned_tokens(planned: list[str], heard: list[str]) -> tuple[set[int], set[int]]:
     """Monotone word alignment with at most a three-token spelling join/split."""
     def spellings(token):
         if not token.isdigit():
-            return {token}
+            # Keep exact spelling and add the same sound-alike form used by the sibling pipelines.
+            key = sound_key(token)
+            return {token, "~" + key} if key else {token}
         value = int(token)
         forms = {_number_spelling(value)}
         if 1000 <= value <= 2099:
