@@ -1,12 +1,12 @@
 {
-  "title": "For the Ladies: 10 Romance Shows Like The Summer I Turned Pretty",
-  "description": "countdown for the ladies: 10 romance series for anyone who fell for The Summer I Turned Pretty, from #10 up to #1. Open with a  hook: if you are still not over Team Conrad or Team Jeremiah, these ten shows will give you the same butterflies, and number one is the one that started it all. Then go straight in. (1) the leads and the characters they play, and the streamer; (2) the setup in two or three concrete sentences: who she is, who he is (or who they are), the love triangle or obstacle, and what is at stake; (3) why it gives you butterflies: the slow burn, the swoon moment, the chemistry, the drama. Mention the vibe (summer romance, period drama, small town, college, enemies to lovers, first love) so viewers can pick their favourite, and how many seasons are out. Use the most romantic moments from the trailers for the hooks: almost-kisses, kisses, lingering looks, the big dramatic moment. Warm, fun, a little dramatic, like talking to your best friend. No spoilers about who ends up with whom. Outro: ask viewers which couple they are rooting for, and invite them to subscribe for more lists for the ladies.",
-  "movies": "Off Campus (2026); Heartstopper (2022); Outlander (2014); Virgin River (2019); Nobody Wants This (2024); Maxton Hall - The World Between Us (2024); XO, Kitty (2023); My Life with the Walter Boys (2023); Wayne (2019); Never Have I Ever (2020)",
+  "title": "5 Heist Shows : You'll ROOT for the ROBBERS",
+  "description": "A fast-paced countdown of five heist and robbery series from 2022 onwards, from #5 up to #1. Open with a punchy 2-sentence hook: master thieves, impossible vaults and plans with ten moving parts, these five shows are built to be binged in one weekend. Then go straight in. About 40 seconds per show: (1) the lead actor and their character, and the streamer; (2) the setup in two or three concrete sentences: the crew, the target and who is hunting them; (3) the hook that makes it bingeable, without spoilers. For Lupin, focus on Part 3 (2023) and Season 4 (2026): Assane in prison, framed by a copycat, forced to break out. Mention that Kaleidoscope can be watched in any order, that Berlin is the prequel spin-off of Money Heist, that Bandidos is Mexican (Spanish with subtitles), and that 12 12 12 is brand new on Apple TV.",
+  "movies": "Lupin (2021); Berlin (2023); Kaleidoscope (2023); 12 12 12 (2026); Bandidos (2024)",
   "content_type": "Shows",
-  "narrator": "Female",
+  "narrator": "Warguy",
   "tts_model": "original",
   "duration_minutes": "Auto",
   "try_4k": true,
-  "validation_source_run": 43749389250,
-  "validation_reason": "runner-reliability-2026-11-16"
+  "narration_speed": "1.2",
+  "request_id": "speech-fix-45573770165-20261125"
 }
