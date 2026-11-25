@@ -430,8 +430,10 @@ def _number_spelling(value: int) -> str:
 
 
 def sound_key(token: str) -> str:
-    """A rough pronunciation key: 'Dredd'/'dread' give 'drd', 'Carrie'/'carry' give 'kr',
-    'Bandidos'/'Banditos' match. Empty for short words."""
+    """Shared sound-alike key for Dredd/dread, Carrie/carry and Bandidos/Banditos.
+
+    Empty for short words or keys that would be too ambiguous.
+    """
     word = re.sub(r"[^a-z]", "", token.lower())
     if len(word) < 4:
         return ""

@@ -401,3 +401,23 @@ def test_reconstruction_failure_has_recovery_error_and_cleans_listing(tmp_path, 
 
     assert not list(service.work.glob("*.concat.txt"))
     assert service.events[-1]["stage"] == "thought-assembly"
+
+
+def test_sound_alike_title_reuses_verified_audio_without_another_voice_take(audio, tmp_path, monkeypatch):
+    monkeypatch.setattr(recovery.voice, "custom_pronunciations", lambda: {})
+    expected = "Number 5: Bandidos."
+    heard = "Number five, Banditos."
+    model = Recognizer(heard)
+    fallback = Mock()
+    service, speaker = make_recovery(tmp_path, model, fallback_factory=fallback)
+    before = audio.read_bytes()
+
+    result, cues = service.recover(expected, audio, label="rank announcement", allow_split=False)
+
+    assert result == audio
+    assert audio.read_bytes() == before
+    assert " ".join(cue["text"] for cue in cues) == heard
+    assert len(model.calls) == 1
+    assert service.events[-1]["accepted"]
+    speaker.assert_not_called()
+    fallback.assert_not_called()
